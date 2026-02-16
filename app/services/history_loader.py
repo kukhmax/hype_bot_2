@@ -3,7 +3,6 @@ from typing import List, Dict, Any
 
 from app.services.hyperliquid_api import HyperliquidAPI
 from app.services.candles import RedisCandleStore
-from app.services.subscription_service import SubscriptionService
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +70,7 @@ class HistoryLoader:
 
     @staticmethod
     async def preload_all_from_subscriptions(n: int = 200) -> int:
+        from app.services.subscription_service import SubscriptionService
         users = await SubscriptionService.get_all_users()
         pairs = set()
         for uid in users:

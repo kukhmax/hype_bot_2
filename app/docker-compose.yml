@@ -1,10 +1,10 @@
-version: "3.9"
-
 services:
 
   redis:
     image: redis:7-alpine
     restart: always
+    volumes:
+      - redis-data:/data
 
   bot:
     build: .
@@ -13,3 +13,11 @@ services:
       - .env
     depends_on:
       - redis
+    environment:
+      - LOG_DIR=/opt/app/logs
+      - LOG_FILE=bot.log
+    volumes:
+      - ./logs:/opt/app/logs
+
+volumes:
+  redis-data:
