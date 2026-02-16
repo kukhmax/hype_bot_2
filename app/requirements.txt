@@ -1,0 +1,7 @@
+aiogram
+websockets
+aiohttp
+numpy
+pandas
+redis
+python-dotenv
