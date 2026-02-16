@@ -18,6 +18,7 @@ from app.services.subscription_service import SubscriptionService
 from app.services.notifier import Notifier
 from app.services.candles import CandlePipeline, RedisCandleStore
 from app.services.signal_lock import SignalLock
+from app.services.history_loader import HistoryLoader
 
 logger = setup_logger()
 
@@ -28,12 +29,25 @@ class MarketWS:
     def __init__(self):
         self.ws = None
         self.pipeline = CandlePipeline()
+        self.preloaded = False
+        self._raw_debug_count = 0
 
     async def connect(self):
         """Бесконечный цикл подключения и прослушивания сообщений с авто-переподключением."""
         while True:
             try:
                 logger.info("Connecting to Hyperliquid WS...")
+                if not self.preloaded:
+                    try:
+                        loaded = await HistoryLoader.preload_all_from_subscriptions(n=200)
+                        logger.info("История загружена, свечей добавлено: %s", loaded)
+                        try:
+                            await self.evaluate_all_after_history()
+                        except Exception as e:
+                            logger.error("Ошибка первого расчёта после истории: %s", e)
+                    except Exception as e:
+                        logger.error("Ошибка предзагрузки истории: %s", e)
+                    self.preloaded = True
                 async with websockets.connect(HYPERLIQUID_WS, ping_interval=20) as ws:
                     self.ws = ws
                     await self.subscribe_all_pairs()
@@ -55,18 +69,46 @@ class MarketWS:
     async def listen(self):
         """Читает сообщения WS и передаёт в обработчик."""
         async for message in self.ws:
+            if self._raw_debug_count < 5:
+                logger.debug("WS raw: %s", message[:500])
+                self._raw_debug_count += 1
             data = json.loads(message)
             await self.process_message(data)
 
     async def process_message(self, data):
         """Обрабатывает тик: строит свечи, рассчитывает сигналы, рассылает уведомления."""
-        pair = data.get("coin") or (data.get("data") or {}).get("coin")
-        price = data.get("mid") or (data.get("data") or {}).get("mid")
-        if pair is None or price is None:
+        payload = data.get("data") or {}
+        if isinstance(payload, dict) and "mids" in payload:
+            mids = payload.get("mids") or {}
+            users = await SubscriptionService.get_all_users()
+            tracked = set()
+            for uid in users:
+                subs = await SubscriptionService.get_user_subscriptions(uid)
+                for s in subs:
+                    sp = str(s["pair"]).upper()
+                    tracked.add(sp)
+                    if sp.endswith("USDC"):
+                        tracked.add(sp[:-4])
+
+            for pair, price in mids.items():
+                coin = str(pair).upper()
+                if coin not in tracked:
+                    continue
+                try:
+                    await self._handle_mid(coin, float(price))
+                except Exception as e:
+                    logger.error("Ошибка обработки mid %s: %s", pair, e)
             return
 
+        pair = data.get("coin") or payload.get("coin")
+        price = data.get("mid") or payload.get("mid")
+        if pair is None or price is None:
+            return
+        await self._handle_mid(pair, float(price))
+
+    async def _handle_mid(self, pair: str, price: float):
         ts_ms = int(time.time() * 1000)
-        logger.debug("WS tick %s @ %.6f", pair, float(price))
+        logger.debug("WS tick %s @ %.6f", pair, price)
 
         users = await SubscriptionService.get_all_users()
         tfs = set()
@@ -75,7 +117,9 @@ class MarketWS:
             subs = await SubscriptionService.get_user_subscriptions(uid)
             user_subs[uid] = subs
             for s in subs:
-                if s["pair"] == pair:
+                sp = str(s["pair"]).upper()
+                coin = str(pair).upper()
+                if sp == coin or sp == f"{coin}USDC":
                     try:
                         tfs.add(int(str(s["timeframe"]).replace("m", "")))
                     except Exception:
@@ -84,11 +128,13 @@ class MarketWS:
         if not tfs:
             return
 
-        await self.pipeline.on_tick(pair, ts_ms, float(price), sorted(tfs))
+        await self.pipeline.on_tick(pair, ts_ms, price, sorted(tfs))
 
         for uid, subs in user_subs.items():
             for s in subs:
-                if s["pair"] != pair:
+                sp = str(s["pair"]).upper()
+                coin = str(pair).upper()
+                if not (sp == coin or sp == f"{coin}USDC"):
                     continue
                 try:
                     tf = int(str(s["timeframe"]).replace("m", ""))
@@ -112,6 +158,40 @@ class MarketWS:
                 await Notifier.send_signal(
                     user_id=uid,
                     pair=pair,
+                    signal=signal,
+                    risk=s["risk"]
+                )
+
+    async def evaluate_all_after_history(self):
+        """Однократный расчёт сигналов сразу после загрузки истории."""
+        users = await SubscriptionService.get_all_users()
+        for uid in users:
+            subs = await SubscriptionService.get_user_subscriptions(uid)
+            for s in subs:
+                try:
+                    tf = int(str(s["timeframe"]).replace("m", ""))
+                    sp = str(s["pair"]).upper()
+                    coin = sp[:-4] if sp.endswith("USDC") else sp
+                except Exception:
+                    continue
+
+                df = await RedisCandleStore.to_df(coin, tf, n=200)
+                if df is None or len(df) < 30:
+                    logger.debug("Недостаточно истории для первичного расчёта: %s %sm", coin, tf)
+                    continue
+                signal = SignalEngine.decide_from_candles(df, s["adx"], s["atr"])
+                logger.info("Первый расчёт после истории: pair=%s tf=%sm -> %s", coin, tf, signal or "нет сигнала")
+                if not signal:
+                    continue
+
+                ttl = tf * 60
+                acquired = await SignalLock.acquire(uid, coin, tf, ttl_seconds=ttl)
+                if not acquired:
+                    logger.debug("Первичный сигнал подавлен дедупом: user=%s pair=%s tf=%sm", uid, coin, tf)
+                    continue
+                await Notifier.send_signal(
+                    user_id=uid,
+                    pair=coin,
                     signal=signal,
                     risk=s["risk"]
                 )

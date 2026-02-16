@@ -2,6 +2,7 @@
 
 import logging
 import aiohttp
+import json
 from app.config import HYPERLIQUID_REST
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,11 @@ class HyperliquidAPI:
         logger.info("REST get_candles %s %s", pair, interval)
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload) as resp:
-                data = await resp.json()
+                if resp.status != 200:
+                    text = await resp.text()
+                    logger.error("REST error %s: %s", resp.status, text[:500])
+                    return None
+                text = await resp.text()
+                data = json.loads(text)
                 logger.debug("get_candles resp: %s", data)
                 return data
