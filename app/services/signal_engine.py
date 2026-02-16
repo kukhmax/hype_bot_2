@@ -1,10 +1,22 @@
+"""Движок сигналов на основе ADX/ATR.
+
+Содержит расчёт вспомогательных индикаторов и принятие торгового решения
+по последней свече (LONG/SHORT/None).
+"""
+
+import logging
 import pandas as pd
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
 class SignalEngine:
+    """Вычисление ADX/ATR и принятие решения."""
 
     @staticmethod
     def calculate_adx(df, period=14):
+        """Добавляет в DataFrame столбцы tr, atr, +di, -di, dx, adx."""
+        logger.debug("Расчёт ADX/ATR period=%s", period)
         df["tr"] = np.maximum(
             df["high"] - df["low"],
             np.maximum(
@@ -38,6 +50,7 @@ class SignalEngine:
 
     @staticmethod
     def check_signal(df, adx_threshold, atr_threshold):
+        """Возвращает LONG/SHORT или None по последней свече с учётом порогов ADX/ATR."""
         last = df.iloc[-1]
 
         if last["adx"] <= adx_threshold:
@@ -53,8 +66,12 @@ class SignalEngine:
 
     @staticmethod
     def decide_from_candles(df: pd.DataFrame, adx_thresh: float, atr_thresh: float) -> str | None:
+        """Высокоуровневая функция: принимает df OHLC, считает индикаторы и возвращает сигнал."""
         if df is None or len(df) < 50:
+            logger.debug("Недостаточно данных для сигнала: len=%s", 0 if df is None else len(df))
             return None
         df = SignalEngine.calculate_adx(df.copy(), period=14)
-        return SignalEngine.check_signal(df, adx_thresh, atr_thresh)
+        signal = SignalEngine.check_signal(df, adx_thresh, atr_thresh)
+        logger.debug("Решение по последней свече: %s", signal)
+        return signal
 
