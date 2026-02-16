@@ -7,8 +7,8 @@ import sys
 
 def setup_logger():
     """Инициализирует базовую конфигурацию логирования и возвращает именованный логгер 'bot'."""
-    level_name = os.getenv("LOG_LEVEL", "DEBUG").upper()
-    level = getattr(logging, level_name, logging.DEBUG)
+    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
 
     log_dir = os.getenv("LOG_DIR")
     if not log_dir:

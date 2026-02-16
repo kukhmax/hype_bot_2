@@ -94,7 +94,7 @@ class RedisCandleStore:
         k = RedisCandleStore.key(pair, tf)
         await redis_client.rpush(k, json.dumps(candle))
         await redis_client.ltrim(k, -keep, -1)
-        logger.info("Сохранена свеча %s %sm, всего храним %s", pair, tf, keep)
+        logger.debug("Сохранена свеча %s %sm, всего храним %s", pair, tf, keep)
 
     @staticmethod
     async def get_last(pair: str, tf: int, n: int = 200) -> List[dict]:

@@ -3,8 +3,8 @@
 Функции:
 - Подключение к WS и восстановление при разрывах.
 - Подписка на поток mid-цен (allMids).
-+- Построение свечей через CandlePipeline и хранение в Redis.
-- Расчёт сигналов ADX/ATR и рассылка уведомлений с защитой от дубликатов.
+- Построение свечей через CandlePipeline и хранение в Redis.
+- Расчёт сигналов ML Adaptive Supertrend и рассылка уведомлений с защитой от дубликатов.
 """
 
 import asyncio
@@ -41,6 +41,7 @@ class MarketWS:
                 async with websockets.connect(HYPERLIQUID_WS, ping_interval=20) as ws:
                     self.ws = ws
                     await self.subscribe_all_pairs()
+                    logger.info("Начинаем отслеживать цены через WS для подписанных пар")
                     await self.listen()
 
             except Exception as e:
@@ -91,7 +92,7 @@ class MarketWS:
     async def _handle_mid(self, pair: str, price: float):
         ts_ms = int(time.time() * 1000)
         if ts_ms - self._last_ws_log_ts_ms >= 5 * 60 * 1000:
-            logger.debug("WS tick sample %s @ %.6f", pair, price)
+            logger.info("WS: пример тика %s @ %.6f (раз в 5 минут)", pair, price)
             self._last_ws_log_ts_ms = ts_ms
 
         users = await SubscriptionService.get_all_users()
@@ -138,7 +139,19 @@ class MarketWS:
             res = MLAdaptiveSupertrendEngine.evaluate(df, factor=3.0, atr_len=10, training_len=100, adx_confirm=20.0)
             if not res:
                 continue
-            await IndicatorCache.set_last(pair, tf, {"t": int(df.iloc[-1]["timestamp"].value // 10**6), "centroids": res["centroids"], "cluster": res["cluster"], "assigned": res["assigned"], "st": res["st"], "dir": res["dir"], "adx": res["adx"]})
+            await IndicatorCache.set_last(
+                pair,
+                tf,
+                {
+                    "t": int(df.iloc[-1]["timestamp"].value // 10**6),
+                    "centroids": res["centroids"],
+                    "cluster": res["cluster"],
+                    "assigned": res["assigned"],
+                    "st": res["st"],
+                    "dir": res["dir"],
+                    "adx": res["adx"],
+                },
+            )
             if not res["signal"]:
                 continue
             for uid, s in subs_by_tf[tf]:
@@ -149,3 +162,4 @@ class MarketWS:
                     continue
                 logger.info("Сигнал %s user=%s pair=%s tf=%sm", res["signal"], uid, pair, tf)
                 await Notifier.send_signal(user_id=uid, pair=pair, signal=res["signal"], risk=s["risk"])
+

@@ -90,6 +90,7 @@ class SubscriptionService:
                 return
 
             try:
+                logger.info("Начинаем загрузку истории для подписки user=%s pair=%s tf=%sm (до %s свечей)", user_id, pair, tf, 150)
                 loaded = await HistoryLoader.preload_for_pair_tf(pair, tf, n=150)
                 logger.info("История для подписки user=%s pair=%s tf=%sm загружена, свечей: %s", user_id, pair, tf, loaded)
             except Exception as e:
@@ -102,6 +103,7 @@ class SubscriptionService:
             if df is None or len(df) < 120:
                 logger.debug("Недостаточно истории для первичного сигнала user=%s pair=%s tf=%sm", user_id, base_pair, tf)
                 return
+            logger.info("Анализируем историю по ML Supertrend для user=%s pair=%s tf=%sm", user_id, base_pair, tf)
             res = MLAdaptiveSupertrendEngine.evaluate(df, factor=3.0, atr_len=10, training_len=100, adx_confirm=20.0)
             logger.info("Первичный расчёт по подписке user=%s pair=%s tf=%sm -> %s", user_id, base_pair, tf, (res or {}).get("signal") or "нет сигнала")
             if not res or not res["signal"]:
