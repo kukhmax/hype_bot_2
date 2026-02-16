@@ -2,7 +2,7 @@
 
 import logging
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
@@ -43,8 +43,61 @@ async def show_subscriptions(message: Message, state: FSMContext):
         )
 
     text = "📋 Ваши активные подписки:\n\n" + "\n".join(lines)
-    await message.answer(text)
+
+    keyboard_rows = []
+    for sub in subs:
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"❌ Отменить {sub['pair']} | TF: {sub['timeframe']}",
+                    callback_data=f"cancel_sub:{sub['id']}"
+                )
+            ]
+        )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+
+    await message.answer(text, reply_markup=kb)
     logger.info("Отправлен список подписок user=%s count=%s", message.from_user.id, len(subs))
+
+
+@router.callback_query(F.data.startswith("cancel_sub:"))
+async def cancel_subscription(cb: CallbackQuery):
+    """Обрабатывает нажатие кнопки отмены подписки и обновляет список в сообщении."""
+    _, sub_id = cb.data.split(":", 1)
+    await SubscriptionService.delete_subscription(cb.from_user.id, sub_id)
+    logger.info("Отменена подписка user=%s id=%s", cb.from_user.id, sub_id)
+
+    subs = await SubscriptionService.get_user_subscriptions(cb.from_user.id)
+
+    if not subs:
+        await cb.message.edit_text("У вас пока нет активных подписок.")
+        await cb.answer("Подписка отменена", show_alert=True)
+        return
+
+    lines = []
+    for sub in subs:
+        lines.append(
+            f"• {sub['pair']} | TF: {sub['timeframe']} | ADX ≥ {sub['adx']} | ATR ≥ {sub['atr']} | Risk: {sub['risk']}%"
+        )
+
+    text = "📋 Ваши активные подписки:\n\n" + "\n".join(lines)
+
+    keyboard_rows = []
+    for sub in subs:
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"❌ Отменить {sub['pair']} | TF: {sub['timeframe']}",
+                    callback_data=f"cancel_sub:{sub['id']}"
+                )
+            ]
+        )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+
+    await cb.message.edit_text(text, reply_markup=kb)
+    await cb.answer("Подписка отменена", show_alert=True)
 
 
 @router.message(SubscriptionFSM.pair)
