@@ -14,8 +14,6 @@ logger = logging.getLogger(__name__)
 class SubscriptionFSM(StatesGroup):
     pair = State()
     timeframe = State()
-    adx = State()
-    atr = State()
     risk = State()
 
 
@@ -39,7 +37,7 @@ async def show_subscriptions(message: Message, state: FSMContext):
     lines = []
     for sub in subs:
         lines.append(
-            f"• {sub['pair']} | TF: {sub['timeframe']} | ADX ≥ {sub['adx']} | ATR ≥ {sub['atr']} | Risk: {sub['risk']}%"
+            f"• {sub['pair']} | TF: {sub['timeframe']} | Risk: {sub['risk']}%"
         )
 
     text = "📋 Ваши активные подписки:\n\n" + "\n".join(lines)
@@ -78,7 +76,7 @@ async def cancel_subscription(cb: CallbackQuery):
     lines = []
     for sub in subs:
         lines.append(
-            f"• {sub['pair']} | TF: {sub['timeframe']} | ADX ≥ {sub['adx']} | ATR ≥ {sub['atr']} | Risk: {sub['risk']}%"
+            f"• {sub['pair']} | TF: {sub['timeframe']} | Risk: {sub['risk']}%"
         )
 
     text = "📋 Ваши активные подписки:\n\n" + "\n".join(lines)
@@ -110,40 +108,13 @@ async def process_pair(message: Message, state: FSMContext):
 
 @router.message(SubscriptionFSM.timeframe)
 async def process_tf(message: Message, state: FSMContext):
-    """Принимает таймфрейм и запрашивает порог ADX."""
+    """Принимает таймфрейм и запрашивает риск."""
     await state.update_data(timeframe=message.text)
-    await state.set_state(SubscriptionFSM.adx)
-    await message.answer("Минимальный ADX:")
-
-
-@router.message(SubscriptionFSM.adx)
-async def process_adx(message: Message, state: FSMContext):
-    """Принимает порог ADX и запрашивает порог ATR."""
-    try:
-        value = float(message.text.replace("%", "").replace(",", "."))
-    except ValueError:
-        await message.answer("Введите числовое значение ADX (например, 25 или 25.5).")
-        return
-
-    await state.update_data(adx=value)
-    await state.set_state(SubscriptionFSM.atr)
-    await message.answer("Минимальный ATR:")
-    logger.debug("user=%s adx=%.4f", message.from_user.id, value)
-
-
-@router.message(SubscriptionFSM.atr)
-async def process_atr(message: Message, state: FSMContext):
-    """Принимает порог ATR и запрашивает риск в процентах."""
-    try:
-        value = float(message.text.replace("%", "").replace(",", "."))
-    except ValueError:
-        await message.answer("Введите числовое значение ATR (например, 0.5 или 1.2).")
-        return
-
-    await state.update_data(atr=value)
     await state.set_state(SubscriptionFSM.risk)
     await message.answer("Risk %:")
-    logger.debug("user=%s atr=%.4f", message.from_user.id, value)
+
+
+
 
 
 @router.message(SubscriptionFSM.risk)

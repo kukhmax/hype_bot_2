@@ -8,9 +8,9 @@ from app.core.redis import redis_client
 from app.config import MAX_SUBSCRIPTIONS
 from app.services.history_loader import HistoryLoader
 from app.services.candles import RedisCandleStore
-from app.services.signal_engine import SignalEngine
 from app.services.signal_lock import SignalLock
 from app.services.notifier import Notifier
+from app.services.ml_supertrend import MLAdaptiveSupertrendEngine
 
 logger = logging.getLogger(__name__)
 
@@ -98,14 +98,13 @@ class SubscriptionService:
 
             base_pair = pair[:-4] if pair.endswith("USDC") else pair
 
-            df = await RedisCandleStore.to_df(base_pair, tf, n=150)
-            if df is None or len(df) < 30:
+            df = await RedisCandleStore.to_df(base_pair, tf, n=220)
+            if df is None or len(df) < 120:
                 logger.debug("Недостаточно истории для первичного сигнала user=%s pair=%s tf=%sm", user_id, base_pair, tf)
                 return
-
-            signal = SignalEngine.decide_from_candles(df, data["adx"], data["atr"])
-            logger.info("Первичный расчёт по подписке user=%s pair=%s tf=%sm -> %s", user_id, base_pair, tf, signal or "нет сигнала")
-            if not signal:
+            res = MLAdaptiveSupertrendEngine.evaluate(df, factor=3.0, atr_len=10, training_len=100, adx_confirm=20.0)
+            logger.info("Первичный расчёт по подписке user=%s pair=%s tf=%sm -> %s", user_id, base_pair, tf, (res or {}).get("signal") or "нет сигнала")
+            if not res or not res["signal"]:
                 return
 
             ttl = tf * 60
@@ -117,7 +116,7 @@ class SubscriptionService:
             await Notifier.send_signal(
                 user_id=user_id,
                 pair=base_pair,
-                signal=signal,
+                signal=res["signal"],
                 risk=data["risk"]
             )
 

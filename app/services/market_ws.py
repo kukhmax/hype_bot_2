@@ -13,13 +13,13 @@ import time
 import websockets
 from app.config import HYPERLIQUID_WS
 from app.core.logger import setup_logger
-from app.services.signal_engine import SignalEngine
 from app.services.subscription_service import SubscriptionService
 from app.services.notifier import Notifier
 from app.services.candles import CandlePipeline, RedisCandleStore
 from app.services.signal_lock import SignalLock
 from app.services.indicator_cache import IndicatorCache
 from app.services.subscription_service import get_tracked_pairs_cached
+from app.services.ml_supertrend import MLAdaptiveSupertrendEngine
 
 logger = setup_logger()
 
@@ -132,25 +132,20 @@ class MarketWS:
                 subs_by_tf.setdefault(tf, []).append((uid, s))
 
         for tf in sorted(subs_by_tf.keys()):
-            df = await RedisCandleStore.to_df(pair, tf, n=200)
-            if df is None or len(df) < 30:
+            df = await RedisCandleStore.to_df(pair, tf, n=220)
+            if df is None or len(df) < 120:
                 continue
-            df_ind = SignalEngine.calculate_adx(df.copy(), period=14)
-            last = df_ind.iloc[-1]
-            adx_last = float(last["adx"])
-            atr_last = float(last["atr"])
-            pdi = float(last["+di"])
-            mdi = float(last["-di"])
-            direction = "LONG" if pdi > mdi else "SHORT"
-            await IndicatorCache.set_last(pair, tf, {"t": int(df_ind.iloc[-1]["timestamp"].value // 10**6), "adx": adx_last, "atr": atr_last, "+di": pdi, "-di": mdi, "dir": direction})
-
+            res = MLAdaptiveSupertrendEngine.evaluate(df, factor=3.0, atr_len=10, training_len=100, adx_confirm=20.0)
+            if not res:
+                continue
+            await IndicatorCache.set_last(pair, tf, {"t": int(df.iloc[-1]["timestamp"].value // 10**6), "centroids": res["centroids"], "cluster": res["cluster"], "assigned": res["assigned"], "st": res["st"], "dir": res["dir"], "adx": res["adx"]})
+            if not res["signal"]:
+                continue
             for uid, s in subs_by_tf[tf]:
-                if adx_last <= float(s["adx"]) or atr_last <= float(s["atr"]):
-                    continue
                 ttl = tf * 60
                 acquired = await SignalLock.acquire(uid, pair, tf, ttl_seconds=ttl)
                 if not acquired:
                     logger.debug("Сигнал подавлен дедупом: user=%s pair=%s tf=%sm", uid, pair, tf)
                     continue
-                logger.info("Сигнал %s user=%s pair=%s tf=%sm", direction, uid, pair, tf)
-                await Notifier.send_signal(user_id=uid, pair=pair, signal=direction, risk=s["risk"])
+                logger.info("Сигнал %s user=%s pair=%s tf=%sm", res["signal"], uid, pair, tf)
+                await Notifier.send_signal(user_id=uid, pair=pair, signal=res["signal"], risk=s["risk"])
