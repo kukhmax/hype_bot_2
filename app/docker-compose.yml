@@ -1,15 +1,13 @@
+version: "3.9"
+
 services:
 
   redis:
     image: redis:7-alpine
-    container_name: trading_redis
     restart: always
-    ports:
-      - "6379:6379"
 
   bot:
     build: .
-    container_name: trading_bot
     restart: always
     env_file:
       - .env

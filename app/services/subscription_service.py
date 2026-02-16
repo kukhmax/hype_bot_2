@@ -40,3 +40,9 @@ class SubscriptionService:
     async def delete_subscription(user_id: int, sub_id: str):
         key = f"user:{user_id}:subscriptions"
         await redis_client.hdel(key, sub_id)
+
+    @staticmethod
+    async def get_all_users():
+        keys = await redis_client.keys("user:*:subscriptions")
+        users = [int(k.split(":")[1]) for k in keys]
+        return users

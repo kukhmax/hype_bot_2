@@ -50,3 +50,15 @@ class SignalEngine:
             return "LONG"
 
         return "SHORT"
+
+    @staticmethod
+    def check_realtime(pair, adx, atr):
+        # здесь должен быть кэш последних свечей
+        # для production нужно хранить OHLCV в Redis
+
+        # временно — рандом логика для теста
+        import random
+        if random.random() > 0.995:
+            return "LONG"
+        return None
+
