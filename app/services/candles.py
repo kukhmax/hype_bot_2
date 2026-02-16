@@ -128,9 +128,13 @@ class CandlePipeline:
     def __init__(self):
         self.builders: Dict[tuple, CandleBuilder] = {}
 
-    async def on_tick(self, pair: str, ts_ms: int, price: float, timeframes: List[int]):
-        """Обрабатывает тик и обновляет свечи для всех интересующих таймфреймов."""
+    async def on_tick(self, pair: str, ts_ms: int, price: float, timeframes: List[int]) -> List[int]:
+        """Обрабатывает тик и обновляет свечи для всех интересующих таймфреймов.
+
+        Возвращает список таймфреймов, по которым была закрыта свеча.
+        """
         logger.debug("Tick %s ts=%s price=%.6f tf_list=%s", pair, ts_ms, price, timeframes)
+        closed: List[int] = []
         for tf in timeframes:
             key = (pair, tf)
             if key not in self.builders:
@@ -138,3 +142,5 @@ class CandlePipeline:
             finished = await self.builders[key].update(ts_ms, price)
             if finished:
                 await RedisCandleStore.append(pair, tf, finished)
+                closed.append(tf)
+        return closed
