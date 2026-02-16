@@ -1,7 +1,6 @@
-aiogram
-websockets
-aiohttp
+aiogram==3.4.1
+redis==5.0.1
+pydantic==2.6.1
+python-dotenv==1.0.1
 numpy
 pandas
-redis
-python-dotenv

@@ -1,24 +1,42 @@
-from app.redis_client import redis_client
+import uuid
+import json
+from app.core.redis import redis_client
 from app.config import MAX_SUBSCRIPTIONS
 
-async def add_subscription(user_id, symbol, tf):
+class SubscriptionService:
 
-    subs = await redis_client.smembers(f"user:{user_id}:subs")
-    if len(subs) >= MAX_SUBSCRIPTIONS:
-        return False
+    @staticmethod
+    async def create_subscription(user_id: int, data: dict):
+        key = f"user:{user_id}:subscriptions"
 
-    key = f"{symbol}:{tf}"
+        subs = await redis_client.hgetall(key)
 
-    await redis_client.sadd(f"user:{user_id}:subs", key)
-    await redis_client.sadd(f"sub:{key}", user_id)
+        if len(subs) >= MAX_SUBSCRIPTIONS:
+            raise Exception("Subscription limit reached")
 
-    return True
+        # защита от дубликатов
+        for sub in subs.values():
+            if json.loads(sub)["pair"] == data["pair"]:
+                raise Exception("Already subscribed to this pair")
 
+        sub_id = str(uuid.uuid4())
+        await redis_client.hset(key, sub_id, json.dumps(data))
+        return sub_id
 
-async def get_user_subscriptions(user_id):
-    return await redis_client.smembers(f"user:{user_id}:subs")
+    @staticmethod
+    async def get_user_subscriptions(user_id: int):
+        key = f"user:{user_id}:subscriptions"
+        subs = await redis_client.hgetall(key)
 
+        result = []
+        for sub_id, sub in subs.items():
+            obj = json.loads(sub)
+            obj["id"] = sub_id
+            result.append(obj)
 
-async def remove_subscription(user_id, pair):
-    await redis_client.srem(f"user:{user_id}:subs", pair)
-    await redis_client.srem(f"sub:{pair}", user_id)
+        return result
+
+    @staticmethod
+    async def delete_subscription(user_id: int, sub_id: str):
+        key = f"user:{user_id}:subscriptions"
+        await redis_client.hdel(key, sub_id)

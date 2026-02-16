@@ -3,8 +3,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-WS_URL = "wss://api.hyperliquid.xyz/ws"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
 MAX_SUBSCRIPTIONS = 3
+RATE_LIMIT_SECONDS = 1

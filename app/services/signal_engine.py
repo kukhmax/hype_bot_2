@@ -1,29 +1,52 @@
-from app.redis_client import redis_client
-from app.keyboards import signal_keyboard
-from aiogram import Bot
+import pandas as pd
+import numpy as np
 
-async def send_signal(bot: Bot, symbol, tf, direction, adx, atr):
+class SignalEngine:
 
-    key = f"{symbol}:{tf}"
-    users = await redis_client.smembers(f"sub:{key}")
-
-    for user_id in users:
-
-        settings = await redis_client.hgetall(f"user:{user_id}:settings")
-
-        if float(adx) <= float(settings["adx_threshold"]):
-            continue
-
-        if float(atr) <= float(settings["atr_threshold"]):
-            continue
-
-        risk = settings["risk_percent"]
-
-        await bot.send_message(
-            user_id,
-            f"{symbol} {tf}\n"
-            f"Signal: {direction}\n"
-            f"ADX: {adx:.2f}\n"
-            f"ATR: {atr:.4f}",
-            reply_markup=signal_keyboard(symbol, direction, risk)
+    @staticmethod
+    def calculate_adx(df, period=14):
+        df["tr"] = np.maximum(
+            df["high"] - df["low"],
+            np.maximum(
+                abs(df["high"] - df["close"].shift()),
+                abs(df["low"] - df["close"].shift())
+            )
         )
+
+        df["+dm"] = np.where(
+            (df["high"] - df["high"].shift()) >
+            (df["low"].shift() - df["low"]),
+            np.maximum(df["high"] - df["high"].shift(), 0),
+            0
+        )
+
+        df["-dm"] = np.where(
+            (df["low"].shift() - df["low"]) >
+            (df["high"] - df["high"].shift()),
+            np.maximum(df["low"].shift() - df["low"], 0),
+            0
+        )
+
+        df["atr"] = df["tr"].rolling(period).mean()
+        df["+di"] = 100 * (df["+dm"].rolling(period).mean() / df["atr"])
+        df["-di"] = 100 * (df["-dm"].rolling(period).mean() / df["atr"])
+
+        df["dx"] = 100 * abs(df["+di"] - df["-di"]) / (df["+di"] + df["-di"])
+        df["adx"] = df["dx"].rolling(period).mean()
+
+        return df
+
+    @staticmethod
+    def check_signal(df, adx_threshold, atr_threshold):
+        last = df.iloc[-1]
+
+        if last["adx"] <= adx_threshold:
+            return None
+
+        if last["atr"] <= atr_threshold:
+            return None
+
+        if last["+di"] > last["-di"]:
+            return "LONG"
+
+        return "SHORT"

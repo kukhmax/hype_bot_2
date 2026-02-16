@@ -1,11 +1,12 @@
-from aiogram import Router, types
-from app.keyboards import main_menu
+from aiogram import Router
+from aiogram.types import Message
+from app.handlers.menu import main_menu
 
 router = Router()
 
-@router.message()
-async def start(message: types.Message):
+@router.message(commands=["start"])
+async def start_handler(message: Message):
     await message.answer(
-        "Добро пожаловать 🚀",
+        "Добро пожаловать в Trading Bot 🚀",
         reply_markup=main_menu()
     )

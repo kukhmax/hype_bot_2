@@ -10,5 +10,4 @@ def setup_logger():
             logging.FileHandler("bot.log")
         ]
     )
-
     return logging.getLogger("bot")
