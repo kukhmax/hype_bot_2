@@ -52,13 +52,9 @@ class SignalEngine:
         return "SHORT"
 
     @staticmethod
-    def check_realtime(pair, adx, atr):
-        # здесь должен быть кэш последних свечей
-        # для production нужно хранить OHLCV в Redis
-
-        # временно — рандом логика для теста
-        import random
-        if random.random() > 0.995:
-            return "LONG"
-        return None
+    def decide_from_candles(df: pd.DataFrame, adx_thresh: float, atr_thresh: float) -> str | None:
+        if df is None or len(df) < 50:
+            return None
+        df = SignalEngine.calculate_adx(df.copy(), period=14)
+        return SignalEngine.check_signal(df, adx_thresh, atr_thresh)
 

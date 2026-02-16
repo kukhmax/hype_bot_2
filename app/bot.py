@@ -3,6 +3,7 @@ from aiogram import Bot, Dispatcher
 from app.config import BOT_TOKEN
 from app.core.logger import setup_logger
 from app.handlers import start, subscriptions
+from app.handlers import trade
 from app.services.market_ws import MarketWS
 
 logger = setup_logger()
@@ -13,6 +14,7 @@ async def main():
 
     dp.include_router(start.router)
     dp.include_router(subscriptions.router)
+    dp.include_router(trade.router)
 
     ws = MarketWS()
 
