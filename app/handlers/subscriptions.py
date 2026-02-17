@@ -22,7 +22,7 @@ async def start_subscription(message: Message, state: FSMContext):
     """Старт диалога: запрос пары (тикера)."""
     logger.info("Старт оформления подписки user=%s", message.from_user.id)
     await state.set_state(SubscriptionFSM.pair)
-    await message.answer("Введите пару:")
+    await message.answer("Введите тикер (например, BTC, ETH):")
 
 
 @router.message(F.text == "📋 Активные подписки")

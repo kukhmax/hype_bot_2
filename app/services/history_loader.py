@@ -55,7 +55,7 @@ class HistoryLoader:
             return 0
         interval = f"{tf}m"
         logger.info("Загрузка истории %s %s (%s свечей)", store_pair, interval, n)
-        resp = await HyperliquidAPI.get_candles(store_pair, interval=interval)
+        resp = await HyperliquidAPI.get_candles(store_pair, interval=interval, n=n)
         candles = _parse_candles(resp)
         if not candles:
             logger.warning("Пустой ответ истории %s %s", store_pair, interval)
