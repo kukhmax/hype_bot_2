@@ -38,6 +38,23 @@
    # или по имени контейнера
    docker logs -f app-bot-1
    ```
+  Чтобы увидеть набор, который реально учитывается:
+
+  1. Посмотри ключи свечей в Redis (они создаются только для реально «живых» пар):
+   ```bash
+   docker compose exec redis redis-cli KEYS "ohlcv:*"
+   ```
+  Как узнать, сколько свечей уже есть через WebSocket
+
+    Все свечи (и из REST‑истории, и из WS) лежат в списках Redis:
+
+      - ключ формируется в RedisCandleStore.key :
+   ```python
+   f"ohlcv:{pair}:{tf}m"
+   ```
+   ```bash
+   docker compose exec redis redis-cli LLEN ohlcv:SOL:1m
+   ```
 
 4. Напишите боту `/start` и оформите подписку через меню.
 
