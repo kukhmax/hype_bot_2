@@ -1,6 +1,8 @@
 import asyncio
 import websockets
 import json
+import os
+import logging
 from typing import Dict, List, Callable, Optional
 import numpy as np
 from datetime import datetime
@@ -10,9 +12,11 @@ class HyperLiquidWebSocket:
         self.ws_url = "wss://api.hyperliquid.xyz/ws"
         self.subscriptions = {}  # token -> {timeframe: callback}
         self.candle_data = {}  # token_timeframe -> {timestamps, opens, highs, lows, closes, volumes}
+        self.logger = logging.getLogger(__name__)
         
     async def connect(self):
         """Подключение к WebSocket HyperLiquid"""
+        self.logger.info("Connecting to HyperLiquid WS: %s", self.ws_url)
         self.websocket = await websockets.connect(self.ws_url)
         asyncio.create_task(self._listen())
     
@@ -66,7 +70,7 @@ class HyperLiquidWebSocket:
                     self._process_candle(data['data'])
                     
         except websockets.exceptions.ConnectionClosed:
-            print("WebSocket connection closed. Reconnecting...")
+            self.logger.warning("WebSocket connection closed. Reconnecting...")
             await asyncio.sleep(5)
             await self.connect()
     

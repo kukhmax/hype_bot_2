@@ -2,19 +2,26 @@ import asyncio
 import logging
 import os
 from dotenv import load_dotenv
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-from bot.handlers.start import start, button_handler, handle_subscription_input
+from bot.handlers.start import start, button_handler, handle_subscription_input, cancel_handler
 from bot.handlers.subscriptions import list_subscriptions, unsubscribe_handler
 from bot.services.hyperliquid import HyperLiquidWebSocket
 from bot.services.strategy import EMAStrategy
 from bot.services.deepseek import DeepSeekService
 from bot.services.redis_service import RedisService
 
-# Настройка логирования
+# Настройка логирования (консоль + файл .log)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_FILE = os.getenv("BOT_LOG_FILE", "logs/bot.log")
+os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -149,42 +156,33 @@ class TradingBot:
             logger.error(f"Failed to send message to {user_id}: {e}")
     
     async def run(self):
-        """Запуск бота"""
-        # Создаем приложение Telegram
+        """Запуск бота в уже существующем event loop"""
         self.application = Application.builder().token(self.telegram_token).build()
-        
-        # Сохраняем сервисы в bot_data для доступа из хендлеров
         self.application.bot_data['redis_service'] = self.redis
         self.application.bot_data['hyperliquid'] = self.hyperliquid
         self.application.bot_data['strategy'] = self.strategy
         self.application.bot_data['deepseek'] = self.deepseek
         self.application.bot_data['bot_instance'] = self
 
-        # Регистрируем хендлеры
         self.application.add_handler(CommandHandler("start", start))
         self.application.add_handler(CommandHandler("cancel", cancel_handler))
         self.application.add_handler(CallbackQueryHandler(button_handler, pattern="^(subscribe|list_subs|back_to_menu)$"))
         self.application.add_handler(CallbackQueryHandler(unsubscribe_handler, pattern="^unsubscribe_"))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_subscription_input))
-        
-        # Инициализируем сервисы
+
         await self.initialize()
-        
-        # Запускаем бота
+
         await self.application.initialize()
         await self.application.start()
         logger.info("Bot started")
-        
-        # Держим бота запущенным
+
         try:
-            await self.application.updater.start_polling()
-            # Бесконечное ожидание
+            # держим цикл живым
             while True:
                 await asyncio.sleep(3600)
-        except KeyboardInterrupt:
-            logger.info("Shutting down...")
         finally:
-            await self.shutdown()
+            await self.application.stop()
+            await self.application.shutdown()
     
     async def shutdown(self):
         """Корректное завершение"""
@@ -200,7 +198,34 @@ class TradingBot:
 def main():
     """Точка входа"""
     bot = TradingBot()
-    asyncio.run(bot.run())
+    application = Application.builder() \
+        .token(bot.telegram_token) \
+        .post_init(lambda app: bot.initialize()) \
+        .build()
+    # bot_data
+    application.bot_data['redis_service'] = bot.redis
+    application.bot_data['hyperliquid'] = bot.hyperliquid
+    application.bot_data['strategy'] = bot.strategy
+    application.bot_data['deepseek'] = bot.deepseek
+    application.bot_data['bot_instance'] = bot
+    # handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("cancel", cancel_handler))
+    application.add_handler(CallbackQueryHandler(button_handler, pattern="^(subscribe|list_subs|back_to_menu)$"))
+    application.add_handler(CallbackQueryHandler(unsubscribe_handler, pattern="^unsubscribe_"))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_subscription_input))
+    # diagnostics: log all updates
+    async def log_update(update, context: ContextTypes.DEFAULT_TYPE):
+        uid = getattr(update.effective_user, "id", None)
+        logger.info(f"Update received: type={type(update).__name__}, user={uid}")
+    application.add_handler(MessageHandler(filters.ALL, log_update), group=100)
+    # errors
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+        logger.error("Unhandled error: %s", context.error, exc_info=context.error)
+    application.add_error_handler(error_handler)
+    # run polling (blocks)
+    logger.info("Starting Application.run_polling()")
+    application.run_polling()
 
 if __name__ == "__main__":
     main()

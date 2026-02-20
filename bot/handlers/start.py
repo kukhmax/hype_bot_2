@@ -1,3 +1,4 @@
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 import logging
@@ -7,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
+    logger.info("start handler: user=%s chat=%s", getattr(update.effective_user, 'id', None), getattr(update.effective_chat, 'id', None))
     welcome_text = """
 🚀 **HyperLiquid EMA+ADX Trading Bot**
 
@@ -43,6 +45,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатий на кнопки"""
+    logger.info("button_handler: data=%s user=%s", getattr(update.callback_query, 'data', None), getattr(update.effective_user, 'id', None))
     query = update.callback_query
     await query.answer()
     
@@ -68,6 +71,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_subscription_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка ввода подписки"""
+    logger.info("handle_subscription_input: text=%s user=%s", getattr(update.message, 'text', None), getattr(update.effective_user, 'id', None))
     if not context.user_data.get('awaiting_subscription'):
         return
     
@@ -153,6 +157,7 @@ async def handle_subscription_input(update: Update, context: ContextTypes.DEFAUL
 
 async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /cancel"""
+    logger.info("cancel handler: user=%s", getattr(update.effective_user, 'id', None))
     if context.user_data.get('awaiting_subscription'):
         context.user_data['awaiting_subscription'] = False
         await update.message.reply_text("❌ Ввод отменен.")
