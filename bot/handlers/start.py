@@ -88,26 +88,30 @@ async def handle_subscription_input(update: Update, context: ContextTypes.DEFAUL
     logger.info("handle_subscription_input: text=%s user=%s", getattr(update.message, 'text', None), getattr(update.effective_user, 'id', None))
     text = update.message.text.strip()
     
-    if text in ("📝 Подписаться", "📋 Активные подписки"):
-        if text == "📝 Подписаться":
-            fake_update = Update(update.update_id, message=update.message)
-            class FakeQuery:
-                def __init__(self, message):
-                    self.data = "subscribe"
-                    self.message = message
-                async def answer(self):
-                    return
-                async def edit_message_text(self, *args, **kwargs):
-                    await update.message.reply_text(*args, **kwargs)
-            fake_update.callback_query = FakeQuery(update.message)
-            await button_handler(fake_update, context)
-            return
-        if text == "📋 Активные подписки":
-            await list_subscriptions(update, context)
-            return
+    if text == "📝 Подписаться":
+        logger.info("bottom button pressed: subscribe user=%s", getattr(update.effective_user, 'id', None))
+        context.user_data['awaiting_subscription'] = True
+        await update.message.reply_text(
+            "📝 **Добавление подписки**\n\n"
+            "Введите токен и таймфрейм через пробел\n"
+            "Например: `ETH 5m` или `SOL 1m`\n\n"
+            "**Доступные таймфреймы:**\n"
+            "• 1m - 1 минута\n"
+            "• 5m - 5 минут\n"
+            "• 15m - 15 минут\n\n"
+            "Для отмены введите /cancel",
+            parse_mode='Markdown'
+        )
+        return
+    
+    if text == "📋 Активные подписки":
+        logger.info("bottom button pressed: list_subscriptions user=%s", getattr(update.effective_user, 'id', None))
+        await list_subscriptions(update, context)
+        return
     
     if not context.user_data.get('awaiting_subscription'):
         return
+    
     if text.lower() == '/cancel':
         context.user_data['awaiting_subscription'] = False
         await start(update, context)

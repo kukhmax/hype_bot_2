@@ -39,9 +39,18 @@ async def list_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = "📋 **Ваши активные подписки:**\n\n"
     
     for sub in subscriptions:
-        created = datetime.fromisoformat(sub.created_at).strftime('%d.%m %H:%M')
+        created_raw = getattr(sub, "created_at", None)
+        created_dt = None
+        if isinstance(created_raw, datetime):
+            created_dt = created_raw
+        elif isinstance(created_raw, str):
+            try:
+                created_dt = datetime.fromisoformat(created_raw)
+            except ValueError:
+                created_dt = None
+        created_str = created_dt.strftime('%d.%m %H:%M') if created_dt else "неизвестно"
         text += f"• **{sub.token}** | {sub.timeframe}\n"
-        text += f"  └ Подписано: {created}\n\n"
+        text += f"  └ Подписано: {created_str}\n\n"
     
     text += "Выберите подписку для управления или добавьте новую:"
     
