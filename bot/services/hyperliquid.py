@@ -25,6 +25,12 @@ class HyperLiquidWebSocket:
         key = f"{token}_{timeframe}"
         
         if key not in self.subscriptions:
+            self.logger.info(
+                "Subscribing to candles: token=%s timeframe=%s key=%s",
+                token,
+                timeframe,
+                key,
+            )
             self.subscriptions[key] = []
             
             # Формируем запрос на подписку
@@ -51,6 +57,28 @@ class HyperLiquidWebSocket:
                 'closes': [],
                 'volumes': []
             }
+            self.logger.info("Initialized candle storage for %s", key)
+        else:
+            count = len(self.candle_data[key]['timestamps'])
+            if count:
+                try:
+                    start_dt = datetime.fromtimestamp(self.candle_data[key]['timestamps'][0] / 1000)
+                    end_dt = datetime.fromtimestamp(self.candle_data[key]['timestamps'][-1] / 1000)
+                    self.logger.info(
+                        "Existing candle history for %s: count=%d range=%s -> %s",
+                        key,
+                        count,
+                        start_dt.isoformat(),
+                        end_dt.isoformat(),
+                    )
+                except Exception:
+                    self.logger.info(
+                        "Existing candle history for %s: count=%d ts_from=%s ts_to=%s",
+                        key,
+                        count,
+                        self.candle_data[key]['timestamps'][0],
+                        self.candle_data[key]['timestamps'][-1],
+                    )
     
     async def unsubscribe(self, token: str, timeframe: str, callback: Callable):
         """Отписка от свечей"""
@@ -76,13 +104,11 @@ class HyperLiquidWebSocket:
     
     def _process_candle(self, candle_data: Dict):
         """Обработка полученной свечи"""
-        # Формат данных HyperLiquid: внутри data могут быть разные структуры,
-        # для свечей ожидаем поля coin/interval. Если их нет — логируем и выходим.
-        if 'coin' not in candle_data or 'interval' not in candle_data:
+        coin = candle_data.get('coin') or candle_data.get('s')
+        timeframe = candle_data.get('interval') or candle_data.get('i')
+        if not coin or not timeframe:
             self.logger.warning("Unexpected candle payload keys=%s", list(candle_data.keys()))
             return
-        coin = candle_data['coin']
-        timeframe = candle_data['interval']
         key = f"{coin}_{timeframe}"
         
         if key in self.candle_data:

@@ -54,10 +54,24 @@ class TradingBot:
     async def restore_subscriptions(self):
         """Восстановление подписок после перезапуска"""
         subscriptions = await self.redis.get_all_active_subscriptions()
+        if not subscriptions:
+            logger.info("No active subscriptions found on restore")
+        else:
+            logger.info(
+                "Restoring %d active subscriptions", 
+                len(subscriptions),
+            )
         
         # Группируем по токенам
         for sub in subscriptions:
             key = f"{sub.token}_{sub.timeframe}"
+            logger.info(
+                "Restoring subscription: user=%s token=%s timeframe=%s key=%s",
+                getattr(sub, "user_id", None),
+                sub.token,
+                sub.timeframe,
+                key,
+            )
             
             if key not in self.active_tasks:
                 # Создаем задачу для обработки этого токена

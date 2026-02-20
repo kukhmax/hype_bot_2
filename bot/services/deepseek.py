@@ -1,15 +1,20 @@
 import aiohttp
 import asyncio
 import os
+import logging
+from datetime import datetime
 from typing import Dict, Optional
 from ..models.signal import Signal
+
+logger = logging.getLogger(__name__)
+
 
 class DeepSeekService:
     def __init__(self):
         self.api_key = os.getenv("DEEPSEEK_API_KEY")
         self.api_url = os.getenv("DEEPSEEK_API_URL")
     
-    async def confirm_signal(self, setup_info: Dict, token: str, timeframe: str) -> Optional[Dict]:
+    async def confirm_signal(self, setup_info: Dict, token: str, timeframe: str) -> Optional[Signal]:
         """
         Отправка запроса в DeepSeek для подтверждения сигнала
         """
@@ -43,10 +48,15 @@ class DeepSeekService:
                         result = await response.json()
                         return self._parse_response(result, setup_info, token, timeframe)
                     else:
-                        print(f"DeepSeek API error: {response.status}")
+                        body = await response.text()
+                        logger.error(
+                            "DeepSeek API error: status=%s body=%s",
+                            response.status,
+                            body,
+                        )
                         return None
             except Exception as e:
-                print(f"Error calling DeepSeek: {e}")
+                logger.error("Error calling DeepSeek: %s", e)
                 return None
     
     def _build_prompt(self, setup_info: Dict, token: str, timeframe: str) -> str:
@@ -96,8 +106,6 @@ class DeepSeekService:
         """
         try:
             content = api_response['choices'][0]['message']['content']
-            # В реальном проекте здесь нужно безопасно распарсить JSON
-            # Для простоты используем eval (не рекомендуется в продакшне!)
             import json
             data = json.loads(content)
             
@@ -116,8 +124,7 @@ class DeepSeekService:
                 timestamp=datetime.now()
             )
         except Exception as e:
-            print(f"Error parsing DeepSeek response: {e}")
-            # Fallback сигнал
+            logger.error("Error parsing DeepSeek response, using fallback: %s", e)
             return Signal(
                 token=token,
                 timeframe=timeframe,

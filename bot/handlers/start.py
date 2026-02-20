@@ -157,6 +157,12 @@ async def handle_subscription_input(update: Update, context: ContextTypes.DEFAUL
     try:
         redis_service = context.bot_data['redis_service']
         await redis_service.add_subscription(update.effective_user.id, token, timeframe)
+        logger.info(
+            "Subscription added: user=%s token=%s timeframe=%s",
+            getattr(update.effective_user, 'id', None),
+            token,
+            timeframe,
+        )
         
         # Запускаем обработку если нужно
         bot_instance = context.bot_data['bot_instance']
