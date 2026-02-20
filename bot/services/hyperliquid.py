@@ -76,6 +76,11 @@ class HyperLiquidWebSocket:
     
     def _process_candle(self, candle_data: Dict):
         """Обработка полученной свечи"""
+        # Формат данных HyperLiquid: внутри data могут быть разные структуры,
+        # для свечей ожидаем поля coin/interval. Если их нет — логируем и выходим.
+        if 'coin' not in candle_data or 'interval' not in candle_data:
+            self.logger.warning("Unexpected candle payload keys=%s", list(candle_data.keys()))
+            return
         coin = candle_data['coin']
         timeframe = candle_data['interval']
         key = f"{coin}_{timeframe}"
@@ -88,6 +93,27 @@ class HyperLiquidWebSocket:
             self.candle_data[key]['lows'].append(float(candle_data['l']))
             self.candle_data[key]['closes'].append(float(candle_data['c']))
             self.candle_data[key]['volumes'].append(float(candle_data['v']))
+            count = len(self.candle_data[key]['timestamps'])
+            try:
+                start_dt = datetime.fromtimestamp(self.candle_data[key]['timestamps'][0] / 1000)
+                end_dt = datetime.fromtimestamp(self.candle_data[key]['timestamps'][-1] / 1000)
+                self.logger.info(
+                    "New candle %s: total=%d range=%s -> %s close=%.4f",
+                    key,
+                    count,
+                    start_dt.isoformat(),
+                    end_dt.isoformat(),
+                    self.candle_data[key]['closes'][-1],
+                )
+            except Exception:
+                self.logger.info(
+                    "New candle %s: total=%d ts_from=%s ts_to=%s close=%.4f",
+                    key,
+                    count,
+                    self.candle_data[key]['timestamps'][0],
+                    self.candle_data[key]['timestamps'][-1],
+                    self.candle_data[key]['closes'][-1],
+                )
             
             # Ограничиваем историю
             max_candles = int(os.getenv("MAX_CANDLES_HISTORY", 200))

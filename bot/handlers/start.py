@@ -1,5 +1,5 @@
 import asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 import logging
 from .subscriptions import list_subscriptions, unsubscribe_handler, back_to_menu
@@ -29,19 +29,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Выберите действие:
     """
     
-    keyboard = [
+    inline_keyboard = [
         [
             InlineKeyboardButton("📝 Подписаться", callback_data="subscribe"),
             InlineKeyboardButton("📋 Активные подписки", callback_data="list_subs")
         ]
     ]
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_keyboard = [
+        [
+            KeyboardButton("📝 Подписаться"),
+            KeyboardButton("📋 Активные подписки"),
+        ]
+    ]
+    
+    inline_markup = InlineKeyboardMarkup(inline_keyboard)
+    bottom_markup = ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True)
     
     if update.message:
-        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+        await update.message.reply_text(welcome_text, reply_markup=inline_markup, parse_mode='Markdown')
+        await update.message.reply_text("Выберите действие с помощью кнопок внизу.", reply_markup=bottom_markup)
     elif update.callback_query:
-        await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+        await update.callback_query.edit_message_text(welcome_text, reply_markup=inline_markup, parse_mode='Markdown')
+        await update.effective_chat.send_message("Выберите действие с помощью кнопок внизу.", reply_markup=bottom_markup)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатий на кнопки"""
@@ -68,16 +78,36 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     elif query.data == "back_to_menu":
         await back_to_menu(update, context)
+    else:
+        logger.warning("Unknown callback data: %s", query.data)
+        # Возвращаем главное меню на всякий случай
+        await back_to_menu(update, context)
 
 async def handle_subscription_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка ввода подписки"""
     logger.info("handle_subscription_input: text=%s user=%s", getattr(update.message, 'text', None), getattr(update.effective_user, 'id', None))
-    if not context.user_data.get('awaiting_subscription'):
-        return
-    
     text = update.message.text.strip()
     
-    # Проверка на отмену
+    if text in ("📝 Подписаться", "📋 Активные подписки"):
+        if text == "📝 Подписаться":
+            fake_update = Update(update.update_id, message=update.message)
+            class FakeQuery:
+                def __init__(self, message):
+                    self.data = "subscribe"
+                    self.message = message
+                async def answer(self):
+                    return
+                async def edit_message_text(self, *args, **kwargs):
+                    await update.message.reply_text(*args, **kwargs)
+            fake_update.callback_query = FakeQuery(update.message)
+            await button_handler(fake_update, context)
+            return
+        if text == "📋 Активные подписки":
+            await list_subscriptions(update, context)
+            return
+    
+    if not context.user_data.get('awaiting_subscription'):
+        return
     if text.lower() == '/cancel':
         context.user_data['awaiting_subscription'] = False
         await start(update, context)
