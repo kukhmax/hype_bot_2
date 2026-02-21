@@ -40,9 +40,10 @@ class EMAStrategy:
         current_ema_high = ema_high[-1]
         prev_high = max(highs[-5:-1])  # предыдущий максимум (исключая текущую свечу)
         
-        condition1 = current_close > current_ema_high
+        condition1 = current_close >= current_ema_high
         condition2 = adx > self.adx_threshold and plus_di > minus_di
-        condition3 = prev_high > current_ema_high and current_close > prev_high
+        breakout_tolerance = prev_high * 0.001
+        condition3 = prev_high > current_ema_high and current_close > prev_high - breakout_tolerance
         last_ts = timestamps[-1] if len(timestamps) else None
         logger.info(
             "EMA+ADX LONG check [%s]: candles=%d ts=%s close=%.4f ema_high=%.4f prev_high=%.4f "
@@ -117,9 +118,10 @@ class EMAStrategy:
         current_ema_low = ema_low[-1]
         prev_low = min(lows[-5:-1])  # предыдущий минимум
         
-        condition1 = current_close < current_ema_low
+        condition1 = current_close <= current_ema_low
         condition2 = adx > self.adx_threshold and minus_di > plus_di
-        condition3 = prev_low < current_ema_low and current_close < prev_low
+        breakdown_tolerance = prev_low * 0.001
+        condition3 = prev_low < current_ema_low and current_close < prev_low + breakdown_tolerance
         last_ts = timestamps[-1] if len(timestamps) else None
         logger.info(
             "EMA+ADX SHORT check [%s]: candles=%d ts=%s close=%.4f ema_low=%.4f prev_low=%.4f "

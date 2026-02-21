@@ -15,9 +15,14 @@ class DeepSeekService:
         self.api_url = os.getenv("DEEPSEEK_API_URL")
     
     async def confirm_signal(self, setup_info: Dict, token: str, timeframe: str) -> Optional[Signal]:
-        """
-        Отправка запроса в DeepSeek для подтверждения сигнала
-        """
+        if not self.api_key or not self.api_url:
+            logger.warning(
+                "DeepSeek disabled or misconfigured: api_key_set=%s api_url=%s",
+                bool(self.api_key),
+                self.api_url,
+            )
+            return self._build_fallback_signal(setup_info, token, timeframe)
+
         prompt = self._build_prompt(setup_info, token, timeframe)
         
         async with aiohttp.ClientSession() as session:
@@ -54,15 +59,12 @@ class DeepSeekService:
                             response.status,
                             body,
                         )
-                        return None
+                        return self._build_fallback_signal(setup_info, token, timeframe)
             except Exception as e:
                 logger.error("Error calling DeepSeek: %s", e)
-                return None
+                return self._build_fallback_signal(setup_info, token, timeframe)
     
     def _build_prompt(self, setup_info: Dict, token: str, timeframe: str) -> str:
-        """
-        Формирование промпта для DeepSeek на основе нашей стратегии
-        """
         return f"""
         CRYPTO FUTURES SIGNAL CONFIRMATION
         
@@ -101,9 +103,6 @@ class DeepSeekService:
         """
     
     def _parse_response(self, api_response: Dict, setup_info: Dict, token: str, timeframe: str) -> Signal:
-        """
-        Парсинг ответа от DeepSeek в модель Signal
-        """
         try:
             content = api_response['choices'][0]['message']['content']
             import json
@@ -125,17 +124,20 @@ class DeepSeekService:
             )
         except Exception as e:
             logger.error("Error parsing DeepSeek response, using fallback: %s", e)
-            return Signal(
-                token=token,
-                timeframe=timeframe,
-                side=setup_info['side'],
-                confidence=70.0,
-                entry_min=setup_info['entry'] * 0.995,
-                entry_max=setup_info['entry'] * 1.005,
-                stop_loss=setup_info['entry'] * 0.98,
-                take_profit_1=setup_info['entry'] * 1.02,
-                take_profit_2=setup_info['entry'] * 1.04,
-                description="Signal detected, but AI confirmation failed",
-                price_at_signal=setup_info['entry'],
-                timestamp=datetime.now()
-            )
+            return self._build_fallback_signal(setup_info, token, timeframe)
+
+    def _build_fallback_signal(self, setup_info: Dict, token: str, timeframe: str) -> Signal:
+        return Signal(
+            token=token,
+            timeframe=timeframe,
+            side=setup_info['side'],
+            confidence=70.0,
+            entry_min=setup_info['entry'] * 0.995,
+            entry_max=setup_info['entry'] * 1.005,
+            stop_loss=setup_info['entry'] * 0.98,
+            take_profit_1=setup_info['entry'] * 1.02,
+            take_profit_2=setup_info['entry'] * 1.04,
+            description="Signal detected, but AI confirmation failed",
+            price_at_signal=setup_info['entry'],
+            timestamp=datetime.now()
+        )
