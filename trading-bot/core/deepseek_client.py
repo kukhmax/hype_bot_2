@@ -22,6 +22,7 @@ def build_analysis_prompt(
     tf: str,
     setup: SetupResult,
     current_price: float,
+    gemini_report: str | None = None,
 ) -> str:
     direction_ru = "ЛОНГ" if setup.direction == "LONG" else "ШОРТ"
     condition = (
@@ -58,6 +59,9 @@ ADX:         {setup.adx_value:.2f} (порог >20)
 -DI:         {setup.minus_di:.2f}
 Объём (ratio к среднему 20): {setup.volume_ratio:.2f}x
 
+=== ОТЧЕТ НЕЗАВИСИМОГО АНАЛИТИКА (GEMINI) ===
+{gemini_report if gemini_report else "Отчет недоступен."}
+
 === УСЛОВИЯ СЕТАПА ===
 {condition}
 
@@ -93,9 +97,10 @@ async def analyze_setup(
     token: str,
     tf: str,
     setup: SetupResult,
+    gemini_report: str | None = None,
 ) -> dict | None:
     """Отправить запрос в DeepSeek и вернуть распарсенный JSON или None."""
-    prompt = build_analysis_prompt(token, tf, setup, setup.close_last)
+    prompt = build_analysis_prompt(token, tf, setup, setup.close_last, gemini_report)
 
     headers = {
         "Authorization": f"Bearer {config.DEEPSEEK_API_KEY}",

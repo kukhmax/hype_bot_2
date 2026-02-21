@@ -10,6 +10,7 @@ from config import config
 from core.redis_client import redis_client
 from core.strategy import strategy
 from core.deepseek_client import analyze_setup
+from core.gemini_client import analyze_setup_with_gemini
 from core.hyperliquid_ws import HyperliquidWSClient, fetch_historical_candles
 
 logger = logging.getLogger(__name__)
@@ -58,25 +59,26 @@ async def on_candle(user_id: int, token: str, tf: str, candle: dict):
     # Отмечаем для отчета
     _signals_status[(user_id, token, tf)] = True
 
+    # Запрашиваем Gemini
+    logger.info(f"Requesting Gemini analysis for {token}/{tf}")
+    gemini_report = await analyze_setup_with_gemini(token, tf, setup, setup.close_last)
+
     # Запрашиваем DeepSeek
     logger.info(f"Requesting DeepSeek analysis for {token}/{tf}")
-    analysis = await analyze_setup(token, tf, setup)
+    analysis = await analyze_setup(token, tf, setup, gemini_report)
     if analysis is None:
         logger.warning("DeepSeek returned None, sending raw signal")
         await send_raw_signal(user_id, token, tf, setup)
         return
 
     verdict = analysis.get("verdict", "SKIP")
-    if verdict == "SKIP":
-        reason = analysis.get("skip_reason", "неизвестно")
-        logger.info(f"Signal skipped by AI: {reason}")
-        return
+    logger.info(f"DeepSeek verdict: {verdict}")
 
     # Устанавливаем кулдаун перед отправкой
     await redis_client.set_cooldown(user_id, token, tf)
 
-    # Формируем и отправляем сообщение
-    msg = format_signal_message(token, tf, setup, analysis)
+    # Формируем и отправляем сообщение (теперь отправляем всегда, даже при SKIP)
+    msg = format_signal_message(token, tf, setup, analysis, gemini_report)
     if _bot:
         try:
             await _bot.send_message(user_id, msg, parse_mode="HTML")
@@ -85,7 +87,7 @@ async def on_candle(user_id: int, token: str, tf: str, candle: dict):
             logger.error(f"Failed to send message to user {user_id}: {e}")
 
 
-def format_signal_message(token: str, tf: str, setup, analysis: dict) -> str:
+def format_signal_message(token: str, tf: str, setup, analysis: dict, gemini_report: str | None) -> str:
     """Оформляет текстовое сообщение сигнала для отправки пользователю."""
     logger.debug(f"Formatting signal message for {token}/{tf}")
     direction = analysis.get("direction", setup.direction)
@@ -99,16 +101,30 @@ def format_signal_message(token: str, tf: str, setup, analysis: dict) -> str:
     rr1 = analysis.get("rr_ratio_tp1", 0)
     rr2 = analysis.get("rr_ratio_tp2", 0)
     desc = analysis.get("analysis", "")
+    skip_reason = analysis.get("skip_reason", "")
 
     emoji = "🟢" if direction == "LONG" else "🔴"
-    verdict_str = "⚡️ Агрессивный" if verdict == "AGGRESSIVE_ENTRY" else "⚠️ Осторожный"
+    
+    if verdict == "SKIP":
+        st_color = "❌"
+        verdict_str = "ОТКЛОНЕН AI (Ложный пробой/Ловушка)"
+    elif verdict == "AGGRESSIVE_ENTRY":
+        st_color = "⚡️"
+        verdict_str = "Агрессивный вход"
+    else:
+        st_color = "⚠️"
+        verdict_str = "Осторожный вход"
+        
     tf_display = config.TF_DISPLAY.get(tf, tf)
+    
+    # Форматируем текст отчета Gemini
+    gemini_text = f"\n\n🤖 <b>Отчет Gemini:</b>\n<i>{html.escape(gemini_report)}</i>" if gemini_report else ""
 
     return (
         f"{emoji} <b>СИГНАЛ: {direction}</b> | {html.escape(token)} | {html.escape(tf_display)}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🤖 <b>Вход:</b> {verdict_str}\n"
-        f"📊 <b>Уверенность AI:</b> {confidence}%\n"
+        f"{st_color} <b>Вердикт:</b> {verdict_str}\n"
+        f"📊 <b>Уверенность DeepSeek:</b> {confidence}%\n"
         f"\n"
         f"📍 <b>Вход:</b> {entry_low:.4f} – {entry_high:.4f}\n"
         f"🛑 <b>Стоп-лосс:</b> {sl:.4f}\n"
@@ -119,7 +135,8 @@ def format_signal_message(token: str, tf: str, setup, analysis: dict) -> str:
         f"+DI {setup.plus_di:.1f} / -DI {setup.minus_di:.1f}\n"
         f"📦 <b>Объём:</b> {setup.volume_ratio:.2f}x от среднего\n"
         f"\n"
-        f"💬 <i>{html.escape(desc)}</i>\n"
+        f"💬 <b>Анализ DeepSeek:</b> <i>{html.escape(skip_reason if verdict == 'SKIP' else desc)}</i>"
+        f"{gemini_text}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"⏱ Таймфрейм: {html.escape(tf_display)} | 🔗 Hyperliquid"
     )

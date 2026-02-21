@@ -19,6 +19,11 @@ class Config:
     # Hyperliquid
     HL_WS_URL: str = os.getenv("HL_WS_URL", "wss://api.hyperliquid.xyz/ws")
 
+    # Gemini
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    GEMINI_BASE_URL: str = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+
     # Strategy
     MIN_CANDLES: int = int(os.getenv("MIN_CANDLES", "50"))
     EMA_PERIOD: int = int(os.getenv("EMA_PERIOD", "20"))
