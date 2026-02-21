@@ -12,6 +12,7 @@ router = Router()
 
 @router.callback_query(F.data == "my_subs")
 async def show_subscriptions(callback: CallbackQuery):
+    """Хендлер кнопки 'Мои подписки'. Показывает список активных подписок пользователя."""
     subs = await redis_client.get_subscriptions(callback.from_user.id)
     if not subs:
         await callback.message.edit_text(NO_SUBS, reply_markup=main_menu_kb())
@@ -26,6 +27,7 @@ async def show_subscriptions(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("unsub:"))
 async def handle_unsubscribe(callback: CallbackQuery):
+    """Хендлер отписки от конкретной пары."""
     _, token, tf = callback.data.split(":", 2)
     user_id = callback.from_user.id
 
@@ -52,6 +54,7 @@ async def handle_unsubscribe(callback: CallbackQuery):
 
 @router.callback_query(F.data == "back_main")
 async def back_to_main(callback: CallbackQuery):
+    """Хендлер возврата в главное меню."""
     await callback.message.edit_text(
         WELCOME, parse_mode="HTML", reply_markup=main_menu_kb()
     )
@@ -60,4 +63,5 @@ async def back_to_main(callback: CallbackQuery):
 
 @router.callback_query(F.data == "noop")
 async def noop(callback: CallbackQuery):
+    """Заглушка для неактивных кнопок."""
     await callback.answer()

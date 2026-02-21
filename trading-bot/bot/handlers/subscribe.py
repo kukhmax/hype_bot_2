@@ -1,3 +1,6 @@
+"""
+Обработчики процесса подписки на новые пары с использованием FSM (конечный автомат).
+"""
 import logging
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
@@ -18,6 +21,7 @@ router = Router()
 
 
 class SubscribeStates(StatesGroup):
+    """Состояния FSM для сохранения прогресса выбора токена и таймфрейма."""
     waiting_token = State()
     waiting_tf = State()
 
@@ -26,6 +30,7 @@ class SubscribeStates(StatesGroup):
 
 @router.callback_query(F.data == "subscribe")
 async def start_subscribe(callback: CallbackQuery, state: FSMContext):
+    """Хендлер нажатия 'Подписаться'. Переводит бота в состояние ожидания тикера токена."""
     logger.info(f"User {callback.from_user.id} started subscription process")
     await state.set_state(SubscribeStates.waiting_token)
     await callback.message.edit_text(
@@ -38,6 +43,7 @@ async def start_subscribe(callback: CallbackQuery, state: FSMContext):
 
 @router.message(SubscribeStates.waiting_token)
 async def got_token(message: Message, state: FSMContext):
+    """Хендлер получения текстового сообщения с тикером токена."""
     token = message.text.strip().upper()
 
     # Валидация — только буквы и цифры, до 10 символов
@@ -58,6 +64,7 @@ async def got_token(message: Message, state: FSMContext):
 
 @router.callback_query(SubscribeStates.waiting_tf, F.data.startswith("tf:"))
 async def got_timeframe(callback: CallbackQuery, state: FSMContext):
+    """Хендлер выбора таймфрейма. Завершает процесс и оформляет подписку."""
     tf = callback.data.split(":", 1)[1]
     data = await state.get_data()
     token = data.get("token", "")

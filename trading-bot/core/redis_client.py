@@ -4,10 +4,15 @@ from config import config
 
 
 class RedisClient:
+    """
+    Клиент для взаимодействия с Redis. Обрабатывает подписки пользователей, 
+    историю свечей и кулдауны сигналов.
+    """
     def __init__(self):
         self._pool: aioredis.Redis | None = None
 
     async def connect(self):
+        """Создает пул соединений с Redis по заданному URL."""
         self._pool = aioredis.from_url(
             config.REDIS_URL,
             encoding="utf-8",
@@ -20,6 +25,7 @@ class RedisClient:
 
     @property
     def r(self) -> aioredis.Redis:
+        """Возвращает активный инстанс соединения; вызывает ошибку, если пул не инициализирован."""
         if not self._pool:
             raise RuntimeError("Redis not connected")
         return self._pool
@@ -79,6 +85,7 @@ class RedisClient:
         await pipe.execute()
 
     async def get_candles(self, user_id: int, token: str, tf: str) -> list[dict]:
+        """Получить все сохраненные свечи (до max_len) для конкретной пары пользователя."""
         key = config.CANDLES_KEY.format(user_id=user_id, token=token.upper(), tf=tf)
         raw = await self.r.lrange(key, 0, -1)
         return [json.loads(c) for c in raw]

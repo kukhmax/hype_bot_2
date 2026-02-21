@@ -1,3 +1,6 @@
+"""
+Обработчик команды /start
+"""
 from aiogram import Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message
@@ -10,4 +13,5 @@ router = Router()
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
+    """Отправляет приветственное сообщение и главное меню."""
     await message.answer(WELCOME, parse_mode="HTML", reply_markup=main_menu_kb())

@@ -49,6 +49,7 @@ def _ema(series: np.ndarray, period: int) -> np.ndarray:
 
 
 def _true_range(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray) -> np.ndarray:
+    """Вычисляет True Range (истинный диапазон) для серии свечей."""
     tr = np.zeros(len(highs))
     tr[0] = highs[0] - lows[0]
     for i in range(1, len(highs)):
@@ -68,6 +69,10 @@ def calculate_indicators(
     ema_period: int = 20,
     adx_period: int = 14,
 ) -> IndicatorResult:
+    """
+    Рассчитывает все необходимые индикаторы (EMA, ADX, DI) для списка 
+    свечей одной серии. Используется оптимизированный расчет через numpy.
+    """
     n = len(closes)
     assert n >= adx_period + ema_period, "Недостаточно свечей"
 

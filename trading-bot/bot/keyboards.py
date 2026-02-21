@@ -4,6 +4,7 @@ from config import config
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
+    """Отображает главное меню бота (Подписаться / Мои подписки)."""
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Подписаться", callback_data="subscribe")
     builder.button(text="📋 Активные подписки", callback_data="my_subs")
@@ -39,6 +40,7 @@ def timeframe_kb() -> InlineKeyboardMarkup:
 
 
 def cancel_kb() -> InlineKeyboardMarkup:
+    """Только кнопка 'Отмена' для прерывания процесса."""
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Отмена", callback_data="back_main")
     return builder.as_markup()

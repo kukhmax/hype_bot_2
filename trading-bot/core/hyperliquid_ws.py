@@ -34,6 +34,7 @@ class HyperliquidWSClient:
     # ── Public API ─────────────────────────────────────────────────────────────
 
     async def subscribe(self, user_id: int, token: str, tf: str):
+        """Регистрирует подписку для пользователя и отправляет запрос на сервер, если это первая подписка."""
         async with self._lock:
             key = (token.upper(), tf)
             is_new = key not in self._subscriptions or not self._subscriptions[key]
@@ -44,6 +45,7 @@ class HyperliquidWSClient:
                 logger.info(f"Subscribed WS: {token}/{tf}")
 
     async def unsubscribe(self, user_id: int, token: str, tf: str):
+        """Удаляет подписку пользователя. Отписывается от канала на сервере, если пользователей не осталось."""
         async with self._lock:
             key = (token.upper(), tf)
             if key in self._subscriptions:
@@ -55,7 +57,7 @@ class HyperliquidWSClient:
                         logger.info(f"Unsubscribed WS: {token}/{tf}")
 
     async def run_forever(self):
-        """Запустить клиент с авто-переподключением."""
+        """Запустить клиент с авто-переподключением при обрывах связи."""
         self._running = True
         while self._running:
             try:
@@ -65,6 +67,7 @@ class HyperliquidWSClient:
                 await asyncio.sleep(5)
 
     async def stop(self):
+        """Останавливает WS клиент и закрывает соединение."""
         self._running = False
         if self._ws:
             await self._ws.close()
@@ -158,7 +161,7 @@ class HyperliquidWSClient:
 async def fetch_historical_candles(token: str, tf: str, count: int = 200) -> list[dict]:
     """
     Загрузить исторические свечи через REST API Hyperliquid.
-    Нужно для инициализации буфера при подписке.
+    Используется для начального заполнения буфера перед стартом стратегии.
     """
     import aiohttp
     import time

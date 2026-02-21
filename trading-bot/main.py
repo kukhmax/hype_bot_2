@@ -50,8 +50,10 @@ async def main():
     # Запускаем polling
     logger.info("Bot started. Polling...")
     try:
+        # Старт поллинга новых событий
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        # Корректное закрытие ресурсов при завершении работы бота
         await redis_client.close()
         await bot.session.close()
 

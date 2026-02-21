@@ -22,16 +22,21 @@ _signals_status: dict[tuple[int, str, str], bool] = {}
 
 
 def set_bot(bot):
+    """Устанавливает глобальный экземпляр бота для использования в воркере."""
     global _bot
     _bot = bot
 
 
 def get_ws_client() -> HyperliquidWSClient:
+    """Возвращает текущий инстанс WS-клиента Hyperliquid."""
     return _ws_client
 
 
 async def on_candle(user_id: int, token: str, tf: str, candle: dict):
-    """Callback: вызывается при каждой закрытой свече."""
+    """
+    Callback: вызывается при закрытии каждой свечи.
+    Сохраняет свечу, вызывает стратегию, получает подтверждение AI и отправляет сигнал.
+    """
     # Сохраняем свечу
     await redis_client.push_candle(user_id, token, tf, candle)
 
@@ -81,6 +86,8 @@ async def on_candle(user_id: int, token: str, tf: str, candle: dict):
 
 
 def format_signal_message(token: str, tf: str, setup, analysis: dict) -> str:
+    """Оформляет текстовое сообщение сигнала для отправки пользователю."""
+    logger.debug(f"Formatting signal message for {token}/{tf}")
     direction = analysis.get("direction", setup.direction)
     verdict = analysis.get("verdict", "")
     confidence = analysis.get("confidence", 0)
@@ -139,7 +146,10 @@ async def send_raw_signal(user_id: int, token: str, tf: str, setup):
 
 
 async def init_worker(bot):
-    """Инициализировать воркер: восстановить подписки из Redis."""
+    """
+    Инициализировать воркер: восстановить подписки из Redis, 
+    загрузить исторические данные и запустить WS-клиент в фоне.
+    """
     global _ws_client
     set_bot(bot)
 
