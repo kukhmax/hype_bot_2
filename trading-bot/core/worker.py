@@ -4,6 +4,7 @@
 """
 import asyncio
 import logging
+import html
 
 from config import config
 from core.redis_client import redis_client
@@ -45,9 +46,10 @@ async def on_candle(user_id: int, token: str, tf: str, candle: dict):
     if await redis_client.is_on_cooldown(user_id, token, tf):
         return
 
-    logger.info(f"Setup found! uid={user_id} {token}/{tf} {setup.direction}")
+    logger.info(f"Signal detected! {token}/{tf} direction: {setup.direction} | price: {setup.close_last} | uid={user_id}")
 
     # Запрашиваем DeepSeek
+    logger.info(f"Requesting DeepSeek analysis for {token}/{tf}")
     analysis = await analyze_setup(token, tf, setup)
     if analysis is None:
         logger.warning("DeepSeek returned None, sending raw signal")
@@ -66,7 +68,11 @@ async def on_candle(user_id: int, token: str, tf: str, candle: dict):
     # Формируем и отправляем сообщение
     msg = format_signal_message(token, tf, setup, analysis)
     if _bot:
-        await _bot.send_message(user_id, msg, parse_mode="HTML")
+        try:
+            await _bot.send_message(user_id, msg, parse_mode="HTML")
+            logger.info(f"Signal message sent to user {user_id} for {token}/{tf}")
+        except Exception as e:
+            logger.error(f"Failed to send message to user {user_id}: {e}")
 
 
 def format_signal_message(token: str, tf: str, setup, analysis: dict) -> str:
@@ -87,7 +93,7 @@ def format_signal_message(token: str, tf: str, setup, analysis: dict) -> str:
     tf_display = config.TF_DISPLAY.get(tf, tf)
 
     return (
-        f"{emoji} <b>СИГНАЛ: {direction}</b> | {token} | {tf_display}\n"
+        f"{emoji} <b>СИГНАЛ: {direction}</b> | {html.escape(token)} | {html.escape(tf_display)}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"🤖 <b>Вход:</b> {verdict_str}\n"
         f"📊 <b>Уверенность AI:</b> {confidence}%\n"
@@ -101,9 +107,9 @@ def format_signal_message(token: str, tf: str, setup, analysis: dict) -> str:
         f"+DI {setup.plus_di:.1f} / -DI {setup.minus_di:.1f}\n"
         f"📦 <b>Объём:</b> {setup.volume_ratio:.2f}x от среднего\n"
         f"\n"
-        f"💬 <i>{desc}</i>\n"
+        f"💬 <i>{html.escape(desc)}</i>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏱ Таймфрейм: {tf_display} | 🔗 Hyperliquid"
+        f"⏱ Таймфрейм: {html.escape(tf_display)} | 🔗 Hyperliquid"
     )
 
 
@@ -114,7 +120,7 @@ async def send_raw_signal(user_id: int, token: str, tf: str, setup):
     emoji = "🟢" if setup.direction == "LONG" else "🔴"
     tf_display = config.TF_DISPLAY.get(tf, tf)
     msg = (
-        f"{emoji} <b>{setup.direction}</b> | {token} | {tf_display}\n"
+        f"{emoji} <b>{setup.direction}</b> | {html.escape(token)} | {html.escape(tf_display)}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"⚠️ <i>AI анализ недоступен — базовый сигнал</i>\n"
         f"\n"

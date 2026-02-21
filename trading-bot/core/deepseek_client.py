@@ -127,6 +127,7 @@ async def analyze_setup(
                 data = await resp.json()
 
         content = data["choices"][0]["message"]["content"]
+        logger.info(f"DeepSeek response received for {token}/{tf}: {content[:100]}...")
         result = json.loads(content)
         return result
 

@@ -12,9 +12,17 @@ from core.redis_client import redis_client
 from core.worker import init_worker
 from bot.handlers import start, subscribe, subscriptions
 
+from logging.handlers import RotatingFileHandler
+
+# Настройка логирования
+logging_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    format=logging_format,
+    handlers=[
+        RotatingFileHandler("bot.log", maxBytes=5*1024*1024, backupCount=2),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 

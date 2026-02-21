@@ -26,6 +26,7 @@ class SubscribeStates(StatesGroup):
 
 @router.callback_query(F.data == "subscribe")
 async def start_subscribe(callback: CallbackQuery, state: FSMContext):
+    logger.info(f"User {callback.from_user.id} started subscription process")
     await state.set_state(SubscribeStates.waiting_token)
     await callback.message.edit_text(
         SUB_ASK_TOKEN, parse_mode="HTML", reply_markup=cancel_kb()
@@ -69,6 +70,7 @@ async def got_timeframe(callback: CallbackQuery, state: FSMContext):
     # Проверяем дубликат
     added = await redis_client.add_subscription(user_id, token, tf)
     if not added:
+        logger.info(f"User {user_id} already subscribed to {token}/{tf}")
         await callback.message.edit_text(
             SUB_ALREADY.format(token=token, tf_display=tf_display),
             parse_mode="HTML",
@@ -76,6 +78,8 @@ async def got_timeframe(callback: CallbackQuery, state: FSMContext):
         )
         await callback.answer()
         return
+
+    logger.info(f"User {user_id} successfully subscribed to {token}/{tf}")
 
     # Инициализируем исторические свечи
     await callback.message.edit_text(

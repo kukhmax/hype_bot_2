@@ -75,8 +75,7 @@ class HyperliquidWSClient:
         logger.info(f"Connecting to {config.HL_WS_URL}")
         async with websockets.connect(
             config.HL_WS_URL,
-            ping_interval=20,
-            ping_timeout=20,
+            ping_interval=None,
         ) as ws:
             self._ws = ws
             logger.info("WS connected")
