@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 # Будет установлен из main.py
 _bot = None
 _ws_client: HyperliquidWSClient | None = None
+# Трекинг сигналов для периодического отчета: {(user_id, token, tf): bool}
+_signals_status: dict[tuple[int, str, str], bool] = {}
 
 
 def set_bot(bot):
@@ -47,6 +49,9 @@ async def on_candle(user_id: int, token: str, tf: str, candle: dict):
         return
 
     logger.info(f"Signal detected! {token}/{tf} direction: {setup.direction} | price: {setup.close_last} | uid={user_id}")
+    
+    # Отмечаем для отчета
+    _signals_status[(user_id, token, tf)] = True
 
     # Запрашиваем DeepSeek
     logger.info(f"Requesting DeepSeek analysis for {token}/{tf}")
@@ -158,3 +163,39 @@ async def init_worker(bot):
 
     # Запускаем WS в фоне
     asyncio.create_task(_ws_client.run_forever())
+    
+    # Запускаем периодический отчет
+    asyncio.create_task(status_logger_loop())
+
+
+async def status_logger_loop():
+    """Периодически выводит в лог состояние всех подписок."""
+    while True:
+        await asyncio.sleep(config.STATUS_LOG_INTERVAL)
+        try:
+            all_subs = await redis_client.get_all_subscriptions()
+            if not all_subs:
+                logger.info("[STATUS] Нет активных подписок")
+                continue
+
+            lines = [" [PERIODIC STATUS REPORT]"]
+            for user_id, subs in all_subs.items():
+                for token, tf in subs:
+                    # Считаем количество свечей
+                    candles = await redis_client.get_candles(user_id, token, tf)
+                    count = len(candles)
+                    
+                    # Был ли сигнал
+                    has_signal = _signals_status.get((user_id, token, tf), False)
+                    signal_str = "✅ БЫЛ" if has_signal else "❌ нет"
+                    
+                    lines.append(
+                        f"  • User {user_id} | {token}/{tf} | Свечей: {count}/{config.MIN_CANDLES} | Сигнал: {signal_str}"
+                    )
+                    
+                    # Сбрасываем статус сигнала после отчета
+                    _signals_status[(user_id, token, tf)] = False
+            
+            logger.info("\n".join(lines))
+        except Exception as e:
+            logger.error(f"Error in status_logger_loop: {e}")
