@@ -44,3 +44,16 @@ def cancel_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Отмена", callback_data="back_main")
     return builder.as_markup()
+
+def signal_trade_kb(token: str, direction: str, sl: float, tp: float) -> InlineKeyboardMarkup:
+    """Кнопка открытия позиции, прикрепляемая к сигналу."""
+    builder = InlineKeyboardBuilder()
+    # Округляем до 4 знаков, чтобы влезть в 64 байта callback_data
+    cb_data = f"trade:{token}:{direction}:{sl:.4f}:{tp:.4f}"
+    # Если callback_data слишком большая, Telegram выдаст ошибку, но тут должно хватить
+    if len(cb_data.encode("utf-8")) > 64:
+        # Fallback без цен, цены будем брать из стейта или не ставить
+        cb_data = f"trade:{token}:{direction}:0:0"
+        
+    builder.button(text="💰 Открыть позицию (Market)", callback_data=cb_data)
+    return builder.as_markup()

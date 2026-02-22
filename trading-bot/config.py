@@ -18,6 +18,8 @@ class Config:
 
     # Hyperliquid
     HL_WS_URL: str = os.getenv("HL_WS_URL", "wss://api.hyperliquid.xyz/ws")
+    HL_ADDRESS: str = os.getenv("HL_ADDRESS", "")
+    HL_PRIVATE_KEY: str = os.getenv("HL_PRIVATE_KEY", "")
 
     # Gemini
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")

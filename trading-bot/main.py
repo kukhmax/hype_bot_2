@@ -10,7 +10,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 from config import config
 from core.redis_client import redis_client
 from core.worker import init_worker
-from bot.handlers import start, subscribe, subscriptions
+from bot.handlers import start, subscribe, subscriptions, trading
 
 from logging.handlers import RotatingFileHandler
 
@@ -42,6 +42,7 @@ async def main():
     dp.include_router(start.router)
     dp.include_router(subscribe.router)
     dp.include_router(subscriptions.router)
+    dp.include_router(trading.router)
 
     # Инициализируем воркер (восстанавливает подписки + запускает WS)
     await init_worker(bot)

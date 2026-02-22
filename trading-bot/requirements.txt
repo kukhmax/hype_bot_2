@@ -5,3 +5,7 @@ websockets==13.1
 numpy==2.2.1
 pandas==2.2.3
 python-dotenv==1.0.1
+matplotlib
+mplfinance
+eth-account==0.10.0
+hyperliquid-python-sdk

@@ -6,12 +6,16 @@ import asyncio
 import logging
 import html
 
+from aiogram.types import BufferedInputFile
+
 from config import config
 from core.redis_client import redis_client
 from core.strategy import strategy
 from core.deepseek_client import analyze_setup
 from core.gemini_client import analyze_setup_with_gemini
 from core.hyperliquid_ws import HyperliquidWSClient, fetch_historical_candles
+from core.charting import generate_setup_chart
+from bot.keyboards import signal_trade_kb
 
 logger = logging.getLogger(__name__)
 
@@ -78,17 +82,44 @@ async def on_candle(user_id: int, token: str, tf: str, candle: dict):
     await redis_client.set_cooldown(user_id, token, tf)
 
     # Формируем и отправляем сообщение (теперь отправляем всегда, даже при SKIP)
-    msg = format_signal_message(token, tf, setup, analysis, gemini_report)
+    msg, ai_msg = format_signal_message(token, tf, setup, analysis, gemini_report)
+    direction = analysis.get("direction", setup.direction)
+    sl = analysis.get("stop_loss", 0)
+    tp1 = analysis.get("take_profit_1", 0)
+
     if _bot:
         try:
-            await _bot.send_message(user_id, msg, parse_mode="HTML")
-            logger.info(f"Signal message sent to user {user_id} for {token}/{tf}")
+            # Сначала отправляем фотографию графика, чтобы не зависеть от лимита caption в 1024 символа
+            try:
+                tf_display = config.TF_DISPLAY.get(tf, tf)
+                chart_bytes = await asyncio.to_thread(
+                    generate_setup_chart,
+                    token=token,
+                    tf_display=tf_display,
+                    candles=candles,
+                    ema_high=ctx.indicators.ema_high,
+                    ema_low=ctx.indicators.ema_low
+                )
+                photo = BufferedInputFile(chart_bytes.getvalue(), filename=f"{token}_{tf}.png")
+                await _bot.send_photo(chat_id=user_id, photo=photo)
+            except Exception as chart_err:
+                logger.error(f"Failed to generate/send chart for {token}: {chart_err}")
+
+            # Главное сообщение (с кнопкой)
+            kbd = signal_trade_kb(token=token, direction=direction, sl=sl, tp=tp1)
+            sent_msg = await _bot.send_message(user_id, msg, parse_mode="HTML", disable_web_page_preview=True, reply_markup=kbd)
+            
+            # Сообщение с анализом AI реплаем на главное
+            if ai_msg.strip():
+                await _bot.send_message(user_id, ai_msg, parse_mode="HTML", reply_to_message_id=sent_msg.message_id)
+
+            logger.info(f"Signal messages sent to user {user_id} for {token}/{tf}")
         except Exception as e:
             logger.error(f"Failed to send message to user {user_id}: {e}")
 
 
-def format_signal_message(token: str, tf: str, setup, analysis: dict, gemini_report: str | None) -> str:
-    """Оформляет текстовое сообщение сигнала для отправки пользователю."""
+def format_signal_message(token: str, tf: str, setup, analysis: dict, gemini_report: str | None) -> tuple[str, str]:
+    """Оформляет текстовое сообщение сигнала (основное и AI анализ)."""
     logger.debug(f"Formatting signal message for {token}/{tf}")
     direction = analysis.get("direction", setup.direction)
     verdict = analysis.get("verdict", "")
@@ -120,7 +151,7 @@ def format_signal_message(token: str, tf: str, setup, analysis: dict, gemini_rep
     # Форматируем текст отчета Gemini
     gemini_text = f"\n\n🤖 <b>Отчет Gemini:</b>\n<i>{html.escape(gemini_report)}</i>" if gemini_report else ""
 
-    return (
+    msg = (
         f"{emoji} <b>СИГНАЛ: {direction}</b> | {html.escape(token)} | {html.escape(tf_display)}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"{st_color} <b>Вердикт:</b> {verdict_str}\n"
@@ -134,12 +165,16 @@ def format_signal_message(token: str, tf: str, setup, analysis: dict, gemini_rep
         f"📈 <b>ADX:</b> {setup.adx_value:.1f}  "
         f"+DI {setup.plus_di:.1f} / -DI {setup.minus_di:.1f}\n"
         f"📦 <b>Объём:</b> {setup.volume_ratio:.2f}x от среднего\n"
-        f"\n"
-        f"💬 <b>Анализ DeepSeek:</b> <i>{html.escape(skip_reason if verdict == 'SKIP' else desc)}</i>"
-        f"{gemini_text}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏱ Таймфрейм: {html.escape(tf_display)} | 🔗 Hyperliquid"
+        f"⏱ Таймфрейм: {html.escape(tf_display)} | <a href=\"https://app.hyperliquid.xyz/trade/{html.escape(token)}\">🔗 Hyperliquid</a>"
     )
+
+    ai_msg = (
+        f"💬 <b>Анализ DeepSeek:</b>\n<i>{html.escape(skip_reason if verdict == 'SKIP' else desc)}</i>"
+        f"{gemini_text}"
+    )
+
+    return msg, ai_msg
 
 
 async def send_raw_signal(user_id: int, token: str, tf: str, setup):
