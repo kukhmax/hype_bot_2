@@ -76,11 +76,25 @@ class RedisClient:
 
     # ── Candles ────────────────────────────────────────────────────────────────
 
-    async def push_candle(self, user_id: int, token: str, tf: str, candle: dict, max_len: int = 200):
-        """Добавить свечу в список, сохраняя не более max_len элементов."""
+    async def update_or_append_candle(self, user_id: int, token: str, tf: str, new_candle: dict, max_len: int = 1000):
+        """
+        Обновить последнюю свечу или добавить новую, сохраняя не более max_len элементов.
+        Hyperliquid WS не присылает флаг закрытия, поэтому мы ориентируемся на timestamp `t`.
+        """
         key = config.CANDLES_KEY.format(user_id=user_id, token=token.upper(), tf=tf)
+        
+        # Получаем последнюю свечу
+        last_item = await self.r.lindex(key, -1)
+        
         pipe = self.r.pipeline()
-        pipe.rpush(key, json.dumps(candle))
+        if last_item:
+            last_candle = json.loads(last_item)
+            if last_candle.get("t") == new_candle.get("t"):
+                # Обновляем текущую (не закрытую) свечу
+                pipe.rpop(key)
+        
+        # Добавляем свечу (новую или обновленную)
+        pipe.rpush(key, json.dumps(new_candle))
         pipe.ltrim(key, -max_len, -1)
         await pipe.execute()
 

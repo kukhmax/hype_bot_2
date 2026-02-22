@@ -110,10 +110,10 @@ class HyperliquidWSClient:
         #  "v": "123.45", "n": 200}
         token = data.get("s", "").upper()
         tf = data.get("i", "")
-        is_closed = data.get("x", False)  # true если свеча закрыта
-
-        if not is_closed:
-            return  # Ждём только закрытых свечей
+        # Hyperliquid type "candle" continually updates the current candle.
+        # It does not send explicit `is_closed` flags reliably for all pairs.
+        # We push all updates, and redis_client handles overwriting the latest candle.
+        is_closed = data.get("x", False)
 
         candle = {
             "t": data["t"],          # timestamp open ms

@@ -142,7 +142,7 @@ def find_swing_low(lows: np.ndarray, lookback: int = 20) -> float:
     return float(np.min(lows[-lookback - 1: -1]))
 
 
-def check_setup(ind: IndicatorResult, adx_threshold: float = 20.0) -> SetupResult:
+def check_setup(ind: IndicatorResult, adx_threshold: float = 15.0) -> SetupResult:
     """
     Проверяет сигнал на последней завершённой свече.
 
@@ -186,8 +186,7 @@ def check_setup(ind: IndicatorResult, adx_threshold: float = 20.0) -> SetupResul
         close > ema_h
         and adx_val > adx_threshold
         and pdi > mdi
-        and prev_high > float(ind.ema_high[-2])  # PH выше канала
-        and close > prev_high                      # цена пробила PH
+        and close > prev_high  # цена пробила PH
     ):
         return SetupResult(direction="LONG", **base)
 
@@ -196,8 +195,7 @@ def check_setup(ind: IndicatorResult, adx_threshold: float = 20.0) -> SetupResul
         close < ema_l
         and adx_val > adx_threshold
         and mdi > pdi
-        and prev_low < float(ind.ema_low[-2])  # PL ниже канала
-        and close < prev_low                    # цена пробила PL
+        and close < prev_low  # цена пробила PL
     ):
         return SetupResult(direction="SHORT", **base)
 

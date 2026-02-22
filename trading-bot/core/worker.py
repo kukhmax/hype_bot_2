@@ -38,8 +38,8 @@ async def on_candle(user_id: int, token: str, tf: str, candle: dict):
     Callback: вызывается при закрытии каждой свечи.
     Сохраняет свечу, вызывает стратегию, получает подтверждение AI и отправляет сигнал.
     """
-    # Сохраняем свечу
-    await redis_client.push_candle(user_id, token, tf, candle)
+    # 1. Сохраняем/обновляем свечу в Redis (держим 1000 для запаса под старшие ТФ)
+    await redis_client.update_or_append_candle(user_id, token, tf, candle, max_len=1000)
 
     # Читаем все свечи
     candles = await redis_client.get_candles(user_id, token, tf)
