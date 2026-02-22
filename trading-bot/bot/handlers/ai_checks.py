@@ -99,10 +99,40 @@ async def handle_gemini_check(callback: CallbackQuery):
         await loading_msg.edit_text("❌ Ошибка при запросе к Gemini.")
         return
 
+    verdict = gemini_report.get("verdict", "SKIP")
+    confidence = gemini_report.get("confidence", 0)
+    entry_low = gemini_report.get("entry_low", setup.close_last)
+    entry_high = gemini_report.get("entry_high", setup.close_last)
+    sl = gemini_report.get("stop_loss", 0)
+    tp1 = gemini_report.get("take_profit_1", 0)
+    tp2 = gemini_report.get("take_profit_2", 0)
+    rr1 = gemini_report.get("rr_ratio_tp1", 0)
+    rr2 = gemini_report.get("rr_ratio_tp2", 0)
+    desc = gemini_report.get("analysis", "")
+    skip_reason = gemini_report.get("skip_reason", "")
+
+    if verdict == "SKIP":
+        st_color = "❌"
+        verdict_str = "ОТКЛОНЕН (Ложный пробой/Ловушка)"
+    elif verdict == "AGGRESSIVE_ENTRY":
+        st_color = "⚡️"
+        verdict_str = "Агрессивный вход"
+    else:
+        st_color = "⚠️"
+        verdict_str = "Осторожный вход"
+
     msg = (
-        f"🤖 <b>Gemini Отчет</b> | {token} {tf}\n"
+        f"🤖 <b>Gemini Анализ</b> | {token} {tf}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>{html.escape(gemini_report)}</i>"
+        f"{st_color} <b>Вердикт:</b> {verdict_str}\n"
+        f"📊 <b>Уверенность:</b> {confidence}%\n"
+        f"\n"
+        f"📍 <b>Вход:</b> {entry_low:.4f} – {entry_high:.4f}\n"
+        f"🛑 <b>Стоп-лосс:</b> {sl:.4f}\n"
+        f"🎯 <b>TP1:</b> {tp1:.4f}  (RR {rr1:.1f}:1)\n"
+        f"🎯 <b>TP2:</b> {tp2:.4f}  (RR {rr2:.1f}:1)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💬 <i>{html.escape(skip_reason if verdict == 'SKIP' else desc)}</i>"
     )
 
     await loading_msg.edit_text(msg, parse_mode="HTML")
