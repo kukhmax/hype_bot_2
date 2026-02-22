@@ -70,7 +70,6 @@ async def analyze_setup_with_gemini(
         ],
         "generationConfig": {
             "temperature": 0.5,
-            "maxOutputTokens": 600,
         }
     }
 

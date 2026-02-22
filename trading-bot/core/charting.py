@@ -41,8 +41,8 @@ def generate_setup_chart(
 
     # Подготавливаем дополнительные линии (EMA)
     apdd = [
-        mpf.make_addplot(ema_h_slice, color="rgba(0,0,255,0.6)", width=1.5, title="EMA20(H)"),
-        mpf.make_addplot(ema_l_slice, color="rgba(255,0,0,0.6)", width=1.5, title="EMA20(L)")
+        mpf.make_addplot(ema_h_slice, color="blue", alpha=0.6, width=1.5, title="EMA20(H)"),
+        mpf.make_addplot(ema_l_slice, color="red", alpha=0.6, width=1.5, title="EMA20(L)")
     ]
 
     # Настраиваем стиль
