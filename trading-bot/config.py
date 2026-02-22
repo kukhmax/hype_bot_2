@@ -44,8 +44,8 @@ class Config:
     CANDLES_KEY = "candles:{user_id}:{token}:{tf}" # LIST of OHLCV json
     SIGNAL_COOLDOWN_KEY = "cooldown:{user_id}:{token}:{tf}"  # Cooldown чтобы не спамить
 
-    SIGNAL_COOLDOWN_SEC: int = 300  # 5 минут между сигналами по одной паре
-    STATUS_LOG_INTERVAL: int = 900  # 15 минут между отчетами в логах
+    SIGNAL_COOLDOWN_SEC: int = 450  # 5 минут между сигналами по одной паре
+    STATUS_LOG_INTERVAL: int = 1800  # 30 минут между отчетами в логах
 
 
 config = Config()

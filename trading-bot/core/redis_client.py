@@ -114,6 +114,21 @@ class RedisClient:
                 pipe.rpush(key, json.dumps(c))
             await pipe.execute()
 
+    # ── AI Checks Setup Cache ──────────────────────────────────────────────────
+
+    async def save_latest_setup(self, user_id: int, token: str, tf: str, setup_data: dict):
+        """Сохранить детали последнего сетапа во временный ключ (на 1 час) для ручной проверки AI."""
+        key = f"setup:{user_id}:{token.upper()}:{tf}"
+        await self.r.set(key, json.dumps(setup_data), ex=3600)
+
+    async def get_latest_setup(self, user_id: int, token: str, tf: str) -> dict | None:
+        """Получить данные последнего сохраненного сетапа."""
+        key = f"setup:{user_id}:{token.upper()}:{tf}"
+        data = await self.r.get(key)
+        if data:
+            return json.loads(data)
+        return None
+
     # ── Signal cooldown ────────────────────────────────────────────────────────
 
     async def is_on_cooldown(self, user_id: int, token: str, tf: str) -> bool:

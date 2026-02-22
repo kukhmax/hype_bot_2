@@ -53,8 +53,8 @@ def cancel_kb() -> InlineKeyboardMarkup:
     builder.button(text="❌ Отмена", callback_data="back_main")
     return builder.as_markup()
 
-def signal_trade_kb(token: str, direction: str, sl: float, tp: float) -> InlineKeyboardMarkup:
-    """Кнопка открытия позиции, прикрепляемая к сигналу."""
+def signal_trade_kb(token: str, direction: str, sl: float, tp: float, tf: str = "3m") -> InlineKeyboardMarkup:
+    """Кнопки открытия позиции и ручной проверки AI, прикрепляемые к сигналу."""
     builder = InlineKeyboardBuilder()
     # Округляем до 4 знаков, чтобы влезть в 64 байта callback_data
     cb_data = f"trade:{token}:{direction}:{sl:.4f}:{tp:.4f}"
@@ -64,4 +64,7 @@ def signal_trade_kb(token: str, direction: str, sl: float, tp: float) -> InlineK
         cb_data = f"trade:{token}:{direction}:0:0"
         
     builder.button(text="💰 Открыть позицию (Market)", callback_data=cb_data)
+    builder.button(text="🧠 Deepseek check", callback_data=f"ds_check:{token}:{tf}")
+    builder.button(text="🤖 Gemini check", callback_data=f"gm_check:{token}:{tf}")
+    builder.adjust(1, 2)
     return builder.as_markup()
