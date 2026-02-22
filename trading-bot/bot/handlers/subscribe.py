@@ -32,11 +32,11 @@ class SubscribeStates(StatesGroup):
 async def start_subscribe(callback: CallbackQuery, state: FSMContext):
     """Хендлер нажатия 'Подписаться'. Переводит бота в состояние ожидания тикера токена."""
     logger.info(f"User {callback.from_user.id} started subscription process")
+    await callback.answer()
     await state.set_state(SubscribeStates.waiting_token)
     await callback.message.edit_text(
         SUB_ASK_TOKEN, parse_mode="HTML", reply_markup=cancel_kb()
     )
-    await callback.answer()
 
 
 # ── Шаг 2: ввели токен ───────────────────────────────────────────────────────
@@ -78,15 +78,17 @@ async def got_timeframe(callback: CallbackQuery, state: FSMContext):
     added = await redis_client.add_subscription(user_id, token, tf)
     if not added:
         logger.info(f"User {user_id} already subscribed to {token}/{tf}")
+        await callback.answer()
         await callback.message.edit_text(
             SUB_ALREADY.format(token=token, tf_display=tf_display),
             parse_mode="HTML",
             reply_markup=main_menu_kb(),
         )
-        await callback.answer()
         return
 
     logger.info(f"User {user_id} successfully subscribed to {token}/{tf}")
+    
+    await callback.answer()
 
     # Инициализируем исторические свечи
     await callback.message.edit_text(
@@ -111,4 +113,3 @@ async def got_timeframe(callback: CallbackQuery, state: FSMContext):
         parse_mode="HTML",
         reply_markup=main_menu_kb(),
     )
-    await callback.answer()
