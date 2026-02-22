@@ -1,5 +1,5 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from config import config
 
 
@@ -10,6 +10,14 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     builder.button(text="📋 Активные подписки", callback_data="my_subs")
     builder.adjust(1)
     return builder.as_markup()
+
+def bottom_menu_kb() -> ReplyKeyboardMarkup:
+    """Отображает нижнее закрепленное меню бота с двумя основными кнопками."""
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="➕ Подписаться")
+    builder.button(text="📋 Активные подписки")
+    builder.adjust(2)
+    return builder.as_markup(resize_keyboard=True, persistent=True)
 
 
 def subscriptions_kb(subs: list[tuple[str, str]]) -> InlineKeyboardMarkup:

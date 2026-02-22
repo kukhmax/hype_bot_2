@@ -25,6 +25,20 @@ async def show_subscriptions(callback: CallbackQuery):
         )
 
 
+@router.message(F.text == "📋 Активные подписки")
+async def show_subscriptions_text(message: Message):
+    """Хендлер текстовой кнопки 'Активные подписки'."""
+    subs = await redis_client.get_subscriptions(message.from_user.id)
+    if not subs:
+        await message.answer(NO_SUBS, reply_markup=main_menu_kb())
+    else:
+        await message.answer(
+            SUBS_HEADER,
+            parse_mode="HTML",
+            reply_markup=subscriptions_kb(subs),
+        )
+
+
 @router.callback_query(F.data.startswith("unsub:"))
 async def handle_unsubscribe(callback: CallbackQuery):
     """Хендлер отписки от конкретной пары."""

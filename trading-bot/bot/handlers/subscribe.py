@@ -39,6 +39,16 @@ async def start_subscribe(callback: CallbackQuery, state: FSMContext):
     )
 
 
+@router.message(F.text == "➕ Подписаться")
+async def start_subscribe_text(message: Message, state: FSMContext):
+    """Отлов текстовой кнопки 'Подписаться'."""
+    logger.info(f"User {message.from_user.id} started subscription process via text map")
+    await state.set_state(SubscribeStates.waiting_token)
+    await message.answer(
+        SUB_ASK_TOKEN, parse_mode="HTML", reply_markup=cancel_kb()
+    )
+
+
 # ── Шаг 2: ввели токен ───────────────────────────────────────────────────────
 
 @router.message(SubscribeStates.waiting_token)
