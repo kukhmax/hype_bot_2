@@ -138,7 +138,11 @@ async def fetch_historical(
     tf_map_mexc_futures = {"1m": "Min1", "5m": "Min5", "15m": "Min15",
                            "1h": "Hour1", "4h": "Hour4", "1d": "Day1"}
 
-    async with aiohttp.ClientSession() as session:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+
+    async with aiohttp.ClientSession(headers=headers) as session:
         try:
             if exchange == "binance":
                 params = {"symbol": symbol, "interval": tf, "limit": limit}
@@ -163,10 +167,13 @@ async def fetch_historical(
                         ))
 
             elif exchange == "mexc" and market == "futures":
-                params = {"symbol": symbol, "interval": tf_map_mexc_futures.get(tf, "Hour1"), "limit": limit}
-                async with session.get(url, params=params) as resp:
+                f_url = f"{url}/{symbol}"
+                params = {"interval": tf_map_mexc_futures.get(tf, "Hour1"), "limit": limit}
+                async with session.get(f_url, params=params) as resp:
                     data = await resp.json()
                     items = data.get("data", {})
+                    if not items:
+                        logger.error(f"[DataFeed] MEXC REST API пустой ответ: {data}")
                     ts_list = items.get("time", [])
                     opens = items.get("open", [])
                     highs = items.get("high", [])
