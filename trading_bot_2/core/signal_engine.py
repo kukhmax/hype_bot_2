@@ -9,6 +9,7 @@ SignalEngine: оркестратор всей логики анализа.
 from dataclasses import dataclass, field
 from typing import Optional
 import asyncio
+import time
 
 from core.candle_buffer import CandleBuffer
 from indicators.calculator import calculate_indicators, IndicatorSet
@@ -126,6 +127,37 @@ class SignalEngine:
         self._gemini = None
         self._last_signal_ts: int = 0
         self._cooldown_sec = 60 * 5  # не слать сигналы чаще раз в 5 минут
+        
+        # Статистика паттернов для отчетов
+        self._report_interval_sec = self._get_report_interval(timeframe)
+        self._last_report_time = time.time()
+        self._stats_checks = 0
+        self._total_patterns_checked = 0
+        self._stats_patterns = {}
+
+    def _get_report_interval(self, tf: str) -> int:
+        if tf == "1m": return 15 * 60
+        if tf == "5m": return 30 * 60
+        if tf == "15m": return 60 * 60
+        if tf == "1h": return 4 * 60 * 60
+        return 60 * 60
+
+    def _log_periodic_report(self):
+        found_total = sum(self._stats_patterns.values())
+        minutes = int(self._report_interval_sec / 60)
+        
+        text_details = ", ".join([f"{k}: {v}" for k, v in self._stats_patterns.items()]) if self._stats_patterns else "Ничего не найдено"
+            
+        logger.info(
+            f"📊 [Отчет {self.symbol} {self.timeframe}] за {minutes} мин:\n"
+            f"   Свечей: {self._stats_checks} | Проверено паттернов общ: {self._total_patterns_checked} | Прошло проверку: {found_total}\n"
+            f"   Детали: {text_details}"
+        )
+        
+        self._last_report_time = time.time()
+        self._stats_checks = 0
+        self._total_patterns_checked = 0
+        self._stats_patterns.clear()
 
     def _get_gemini(self):
         if self._gemini is None:
@@ -141,6 +173,8 @@ class SignalEngine:
             return None
 
     async def _analyze(self, buf: CandleBuffer) -> Optional[TradeSignal]:
+        self._stats_checks += 1
+        
         # Кулдаун
         cur_ts = buf[0].timestamp
         if cur_ts - self._last_signal_ts < self._cooldown_sec * 1000:
@@ -155,11 +189,17 @@ class SignalEngine:
         results = []
         logger.debug(f"[Engine] ({self.symbol} {self.timeframe}) Поиск паттернов...")
         for detector in ALL_PATTERNS:
+            self._total_patterns_checked += 1
             # logger.debug(f"[Engine] ({self.symbol}) Проверка паттерна: {detector.__class__.__name__}")
             r = detector.detect(buf, ind)
             if r.detected:
                 results.append(r)
+                self._stats_patterns[r.name] = self._stats_patterns.get(r.name, 0) + 1
                 logger.debug(f"[Pattern] ✅ Найден {r.name} ({r.direction.value}) str={r.strength:.2f}")
+
+        # Проверка времени для отчета (печатаем статистику)
+        if time.time() - self._last_report_time >= self._report_interval_sec:
+            self._log_periodic_report()
 
         if not results:
             logger.debug(f"[Engine] ({self.symbol} {self.timeframe}) Паттерны не найдены")
