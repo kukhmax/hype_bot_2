@@ -43,7 +43,7 @@ class Config:
     WS_URLS = {
         "mexc": {
             "spot": "wss://wbs.mexc.com/ws",
-            "futures": "wss://contract.mexc.com/ws",
+            "futures": "wss://contract.mexc.com/edge",
         },
         "binance": {
             "spot": "wss://stream.binance.com:9443/ws",
