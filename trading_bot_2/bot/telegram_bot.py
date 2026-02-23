@@ -166,17 +166,23 @@ class TradingBot:
         await cq.answer("Остановлено")
 
     async def cb_status(self, cq: CallbackQuery):
-        await cq.message.edit_text(
-            self._status_text(), reply_markup=main_menu_kb(), parse_mode="Markdown"
-        )
+        try:
+            await cq.message.edit_text(
+                self._status_text(), reply_markup=main_menu_kb(), parse_mode="Markdown"
+            )
+        except Exception:
+            pass
         await cq.answer()
 
     async def cb_back_main(self, cq: CallbackQuery, state: FSMContext):
         await state.clear()
-        await cq.message.edit_text(
-            f"Пара: `{self.symbol}` · {'🟢 Работает' if self.is_running else '🔴 Остановлен'}",
-            reply_markup=main_menu_kb(), parse_mode="Markdown",
-        )
+        try:
+            await cq.message.edit_text(
+                f"Пара: `{self.symbol}` · {'🟢 Работает' if self.is_running else '🔴 Остановлен'}",
+                reply_markup=main_menu_kb(), parse_mode="Markdown",
+            )
+        except Exception:
+            pass
         await cq.answer()
 
     # ─── Выбор пары ───────────────────────────────────────────────────────────
