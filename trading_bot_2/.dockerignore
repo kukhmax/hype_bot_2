@@ -1,0 +1,29 @@
+# Git
+.git
+.gitignore
+
+# Python кэш
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+
+# Виртуальные окружения
+venv/
+.venv/
+env/
+
+# Среда разработки
+.env
+.idea/
+.vscode/
+
+# Логи
+logs/
+*.log
+
+# Временные файлы
+*.zip
+*.tmp

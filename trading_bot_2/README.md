@@ -88,3 +88,53 @@ trading_bot/
 `BTC_USDT`, `ETH_USDT`, `SOL_USDT`, `BNB_USDT`, `XRP_USDT`, `DOGE_USDT`
 
 ⚠️ **Дисклеймер**: Бот не даёт финансовых советов. Торгуйте осознанно, используйте риск-менеджмент.
+
+---
+
+## 🐳 Docker
+
+### Запуск через Docker Compose (рекомендуется)
+
+```bash
+# 1. Настрой переменные окружения
+cp .env.example .env
+nano .env   # вставь токены
+
+# 2. Сборка и запуск
+docker compose up -d
+
+# 3. Логи в реальном времени
+docker compose logs -f
+
+# 4. Остановка
+docker compose down
+```
+
+### Или напрямую через Docker
+
+```bash
+# Сборка образа
+docker build -t trading-bot .
+
+# Запуск
+docker run -d \
+  --name trading_signal_bot \
+  --restart unless-stopped \
+  --env-file .env \
+  -v $(pwd)/logs:/app/logs \
+  trading-bot
+
+# Логи
+docker logs -f trading_signal_bot
+
+# Остановка
+docker stop trading_signal_bot
+```
+
+### Обновление бота
+
+```bash
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+```
