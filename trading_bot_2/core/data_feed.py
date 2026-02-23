@@ -136,7 +136,7 @@ async def fetch_historical(
 
     tf_map_bybit = {"1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D"}
     tf_map_mexc_futures = {"1m": "Min1", "5m": "Min5", "15m": "Min15",
-                           "1h": "Hour1", "4h": "Hour4", "1d": "Day1"}
+                           "1h": "Min60", "4h": "Hour4", "1d": "Day1"}
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -258,8 +258,7 @@ class DataFeed:
         logger.info(f"[DataFeed] Подключение к {self.exchange} {self.market} WS...")
         async with websockets.connect(
             self._ws_url,
-            ping_interval=20,
-            ping_timeout=10,
+            ping_interval=None,
         ) as ws:
             # Подписываемся
             sub = subscribe_msg(self.exchange, self.market, self.symbol, self.tf)
