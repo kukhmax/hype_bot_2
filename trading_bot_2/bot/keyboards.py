@@ -11,28 +11,27 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 def main_menu_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="▶️ Старт", callback_data="start_monitor"),
-        InlineKeyboardButton(text="⏹ Стоп",  callback_data="stop_monitor"),
+        InlineKeyboardButton(text="➕ Добавить пару", callback_data="add_pair"),
+        InlineKeyboardButton(text="⏹ Стоп пара",  callback_data="stop_pair_menu"),
     )
     b.row(
-        InlineKeyboardButton(text="🔀 Сменить пару", callback_data="change_pair"),
+        InlineKeyboardButton(text="⏹ Останов. все", callback_data="stop_all"),
         InlineKeyboardButton(text="⚙️ Настройки",   callback_data="settings"),
     )
     b.row(InlineKeyboardButton(text="📊 Статус", callback_data="status"))
     return b.as_markup()
 
 
-# ─── Выбор пары ───────────────────────────────────────────────────────────────
+# ─── Выбор пары и ТФ ──────────────────────────────────────────────────────────
 
 def popular_pairs_kb() -> InlineKeyboardMarkup:
     """Быстрый выбор популярных пар MEXC Futures."""
     pairs = [
-        ("BTC", "BTC_USDT"), ("ETH", "ETH_USDT"),
+        ("TON", "TON_USDT"), ("ETH", "ETH_USDT"),
         ("SOL", "SOL_USDT"), ("BNB", "BNB_USDT"),
         ("XRP", "XRP_USDT"), ("DOGE", "DOGE_USDT"),
     ]
     b = InlineKeyboardBuilder()
-    # По 3 в ряд
     row = []
     for label, pair in pairs:
         row.append(InlineKeyboardButton(text=label, callback_data=f"pair_{pair}"))
@@ -42,6 +41,28 @@ def popular_pairs_kb() -> InlineKeyboardMarkup:
     if row:
         b.row(*row)
     b.row(InlineKeyboardButton(text="✏️ Ввести вручную", callback_data="pair_custom"))
+    b.row(InlineKeyboardButton(text="◀️ Назад", callback_data="back_main"))
+    return b.as_markup()
+
+def timeframe_select_kb(pair: str) -> InlineKeyboardMarkup:
+    """Выбор таймфрейма после выбора пары."""
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="1m + 5m", callback_data=f"tf_{pair}_1m_5m"),
+        InlineKeyboardButton(text="5m + 15m", callback_data=f"tf_{pair}_5m_15m"),
+    )
+    b.row(
+        InlineKeyboardButton(text="15m + 1h", callback_data=f"tf_{pair}_15m_1h"),
+        InlineKeyboardButton(text="1h + 4h", callback_data=f"tf_{pair}_1h_4h"),
+    )
+    b.row(InlineKeyboardButton(text="◀️ Отмена", callback_data="back_main"))
+    return b.as_markup()
+
+def active_pairs_kb(active_pairs: list[str]) -> InlineKeyboardMarkup:
+    """Выбор запущенной пары для остановки."""
+    b = InlineKeyboardBuilder()
+    for pair in active_pairs:
+        b.row(InlineKeyboardButton(text=f"⏹ {pair}", callback_data=f"stop_{pair}"))
     b.row(InlineKeyboardButton(text="◀️ Назад", callback_data="back_main"))
     return b.as_markup()
 

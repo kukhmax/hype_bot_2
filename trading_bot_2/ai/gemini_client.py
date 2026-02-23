@@ -60,6 +60,7 @@ class GeminiClient:
         prompt = self._build_prompt(
             symbol, timeframe, direction, patterns, indicators, entry, stop_loss, take_profit
         )
+        logger.debug(f"[Gemini] ({symbol} {timeframe}) Отправка запроса к AI. Размер промпта: {len(prompt)} символов.")
 
         loop = asyncio.get_event_loop()
         try:
@@ -68,7 +69,7 @@ class GeminiClient:
                 lambda: self.model.generate_content(prompt)
             )
             raw = response.text.strip()
-            logger.debug(f"[Gemini] Raw response: {raw[:300]}")
+            logger.debug(f"[Gemini] ({symbol} {timeframe}) Успешный ответ от AI. Длина: {len(raw)} символов.\nСырой ответ:\n{raw}")
             return self._parse_response(raw)
         except Exception as e:
             logger.error(f"[Gemini] Ошибка API: {e}")

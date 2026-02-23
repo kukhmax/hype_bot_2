@@ -89,17 +89,24 @@ def format_signal_skipped(ctx: MTFContext) -> str:
     return f"⏭ Пропущено · `{ctx.signal.symbol}` {ctx.signal.direction.value}"
 
 
-def format_status(symbol: str, is_running: bool, buf_15m_len: int, buf_1h_len: int) -> str:
-    status = "🟢 Работает" if is_running else "🔴 Остановлен"
-    return (
-        f"📊 *Статус бота*\n\n"
-        f"Состояние: {status}\n"
-        f"Биржа: `MEXC Futures`\n"
-        f"Пара: `{symbol}`\n"
-        f"Таймфреймы: `15m` (вход) + `1h` (тренд)\n\n"
-        f"Буфер 15m: `{buf_15m_len}` свечей\n"
-        f"Буфер 1h:  `{buf_1h_len}` свечей\n"
-    )
+def format_status(active_monitors: dict) -> str:
+    if not active_monitors:
+        return "📊 *Статус бота*\n\n🔴 Нет активных мониторингов."
+    
+    lines = ["📊 *Активные мониторинги:*\n"]
+    for pair, data in active_monitors.items():
+        engine = data["engine"]
+        buf_entry = len(engine.buf_entry) if engine and hasattr(engine, "buf_entry") else (len(engine.buf_15m) if engine else 0)
+        buf_trend = len(engine.buf_trend) if engine and hasattr(engine, "buf_trend") else (len(engine.buf_1h) if engine else 0)
+        entry_tf = getattr(engine, "entry_tf", "15m") if engine else "15m"
+        trend_tf = getattr(engine, "trend_tf", "1h")  if engine else "1h"
+        
+        lines.append(
+            f"🟢 `{pair}`\n"
+            f"   ТФ: `{entry_tf}` (вход) + `{trend_tf}` (тренд)\n"
+            f"   Свечи: {buf_entry} / {buf_trend}\n"
+        )
+    return "\n".join(lines)
 
 
 def _bar(score: int) -> str:

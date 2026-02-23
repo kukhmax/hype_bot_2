@@ -1,6 +1,6 @@
 """
 Telegram бот на aiogram 3.
-Управляет MultiTFEngine (MEXC Futures, 15m+1h).
+Управляет несколькими MultiTFEngine (MEXC Futures).
 Получает MTFContext → отправляет сигнал с кнопками подтверждения/пропуска.
 Таймер: если пользователь не ответил за CONFIRM_TIMEOUT_SEC — сигнал устаревает.
 """
@@ -18,6 +18,7 @@ from bot.keyboards import (
     main_menu_kb, popular_pairs_kb, settings_kb,
     min_patterns_kb, min_confidence_kb, confirm_timeout_kb,
     signal_action_kb, signal_confirmed_kb, signal_skipped_kb,
+    timeframe_select_kb, active_pairs_kb
 )
 from bot.signal_formatter import (
     format_mtf_signal, format_signal_confirmed,
@@ -66,11 +67,8 @@ class TradingBot:
         self.dp = Dispatcher(storage=MemoryStorage())
 
         # Состояние сессии
-        self.symbol: str = config.DEFAULT_SYMBOL
-        self.is_running: bool = False
-        self.chat_id: Optional[int] = None
-        self._engine: Optional[MultiTFEngine] = None
-        self._engine_task: Optional[asyncio.Task] = None
+        self.active_monitors: dict[str, dict] = {} # symbol -> {"engine": engine, "task": task}
+        self.chat_id: Optional[int] = config.TELEGRAM_CHAT_ID
 
         # Активный pending-сигнал (только один одновременно)
         self._pending: Optional[PendingSignal] = None
@@ -85,19 +83,22 @@ class TradingBot:
         # Команды
         dp.message.register(self.cmd_start,  Command("start"))
         dp.message.register(self.cmd_status, Command("status"))
-        dp.message.register(self.cmd_stop,   Command("stop"))
-        dp.message.register(self.cmd_pair,   Command("pair"))
+        dp.message.register(self.cmd_stop_all, Command("stop_all"))
 
         # Главное меню
-        dp.callback_query.register(self.cb_start_monitor, F.data == "start_monitor")
-        dp.callback_query.register(self.cb_stop_monitor,  F.data == "stop_monitor")
+        dp.callback_query.register(self.cb_add_pair,      F.data == "add_pair")
+        dp.callback_query.register(self.cb_stop_pair_menu,F.data == "stop_pair_menu")
+        dp.callback_query.register(self.cb_stop_all,      F.data == "stop_all")
         dp.callback_query.register(self.cb_status,        F.data == "status")
-        dp.callback_query.register(self.cb_change_pair,   F.data == "change_pair")
         dp.callback_query.register(self.cb_back_main,     F.data == "back_main")
 
-        # Выбор пары
+        # Добавление пары и ТФ
         dp.callback_query.register(self.cb_pair_select, F.data.startswith("pair_"))
+        dp.callback_query.register(self.cb_tf_select,   F.data.startswith("tf_"))
         dp.message.register(self.fsm_custom_pair, BotStates.entering_custom_pair)
+        
+        # Остановка конкретной пары
+        dp.callback_query.register(self.cb_stop_specific_pair, F.data.startswith("stop_"))
 
         # Настройки
         dp.callback_query.register(self.cb_settings,     F.data == "settings")
@@ -108,10 +109,19 @@ class TradingBot:
         dp.callback_query.register(self.cb_mc,  F.data.startswith("mc_"))
         dp.callback_query.register(self.cb_ct,  F.data.startswith("ct_"))
 
-        # ── Сигнал: ключевые кнопки ──
+        # Сигнал: ключевые кнопки
         dp.callback_query.register(self.cb_sig_confirm, F.data.startswith("sig_confirm_"))
         dp.callback_query.register(self.cb_sig_skip,    F.data.startswith("sig_skip_"))
         dp.callback_query.register(self.cb_sig_details, F.data.startswith("sig_details_"))
+
+    # ─── Утилиты ──────────────────────────────────────────────────────────────
+    def is_running(self) -> bool:
+        return len(self.active_monitors) > 0
+
+    def active_pairs_list_str(self) -> str:
+        if not self.active_monitors:
+            return "🔴 Нет активных мониторингов."
+        return "\n".join([f"🟢 `{pair}`" for pair in self.active_monitors])
 
     # ─── Команды ──────────────────────────────────────────────────────────────
 
@@ -119,56 +129,28 @@ class TradingBot:
         self.chat_id = msg.chat.id
         await state.clear()
         await msg.answer(
-            "👋 *Trading Signal Bot*\n\n"
-            "📡 *MEXC Futures* · мультитаймфрейм `15m + 1h`\n"
-            "🔍 12 свечных паттернов · ADX/RSI/CCI · AI Gemini\n\n"
-            f"Текущая пара: `{self.symbol}`\n\n"
-            "Выбери действие:",
+            f"👋 *Trading Signal Bot V2*\n\n"
+            f"📡 MEXC Futures · Мульти-мониторинг\n"
+            f"🔍 Свечные паттерны · Индикаторы · AI Gemini\n\n"
+            f"Активные пары:\n{self.active_pairs_list_str()}\n\n"
+            f"Выбери действие:",
             reply_markup=main_menu_kb(),
             parse_mode="Markdown",
         )
 
     async def cmd_status(self, msg: Message):
-        await msg.answer(self._status_text(), parse_mode="Markdown")
+        await msg.answer(format_status(self.active_monitors), parse_mode="Markdown")
 
-    async def cmd_stop(self, msg: Message):
-        await self._stop_monitor()
-        await msg.answer("⏹ Мониторинг остановлен.", reply_markup=main_menu_kb())
-
-    async def cmd_pair(self, msg: Message):
-        parts = msg.text.split()
-        if len(parts) < 2:
-            await msg.answer("Использование: `/pair BTC_USDT`", parse_mode="Markdown")
-            return
-        self.symbol = parts[1].upper()
-        await msg.answer(f"✅ Пара: `{self.symbol}`\nПерезапусти мониторинг.", parse_mode="Markdown")
+    async def cmd_stop_all(self, msg: Message):
+        await self._stop_all()
+        await msg.answer("⏹ Все мониторинги остановлены.", reply_markup=main_menu_kb())
 
     # ─── Главное меню ─────────────────────────────────────────────────────────
-
-    async def cb_start_monitor(self, cq: CallbackQuery):
-        if self.is_running:
-            await cq.answer("Уже запущен!", show_alert=False)
-            return
-        await cq.message.edit_text(
-            f"🚀 Запускаю мониторинг...\n\n"
-            f"Пара: `{self.symbol}`\n"
-            f"15m сигналы + 1h тренд-фильтр\n"
-            f"Мин. паттернов: {config.MIN_PATTERNS_TO_SIGNAL}\n"
-            f"Мин. confluence: {config.MIN_CONFIDENCE}%",
-            parse_mode="Markdown",
-        )
-        await cq.answer()
-        await self._start_monitor(cq.message.chat.id)
-
-    async def cb_stop_monitor(self, cq: CallbackQuery):
-        await self._stop_monitor()
-        await cq.message.edit_text("⏹ Мониторинг остановлен.", reply_markup=main_menu_kb())
-        await cq.answer("Остановлено")
 
     async def cb_status(self, cq: CallbackQuery):
         try:
             await cq.message.edit_text(
-                self._status_text(), reply_markup=main_menu_kb(), parse_mode="Markdown"
+                format_status(self.active_monitors), reply_markup=main_menu_kb(), parse_mode="Markdown"
             )
         except Exception:
             pass
@@ -178,18 +160,18 @@ class TradingBot:
         await state.clear()
         try:
             await cq.message.edit_text(
-                f"Пара: `{self.symbol}` · {'🟢 Работает' if self.is_running else '🔴 Остановлен'}",
+                f"Список пар:\n{self.active_pairs_list_str()}",
                 reply_markup=main_menu_kb(), parse_mode="Markdown",
             )
         except Exception:
             pass
         await cq.answer()
 
-    # ─── Выбор пары ───────────────────────────────────────────────────────────
+    # ─── Добавление пары ──────────────────────────────────────────────────────
 
-    async def cb_change_pair(self, cq: CallbackQuery):
+    async def cb_add_pair(self, cq: CallbackQuery):
         await cq.message.edit_text(
-            "📊 Выбери пару для мониторинга:",
+            "📊 Выбери пару для добавления:",
             reply_markup=popular_pairs_kb(),
         )
         await cq.answer()
@@ -201,33 +183,80 @@ class TradingBot:
             await state.set_state(BotStates.entering_custom_pair)
             await cq.answer()
             return
-
-        self.symbol = data
-        was_running = self.is_running
-        if was_running:
-            await self._stop_monitor()
-
+        
         await cq.message.edit_text(
-            f"✅ Пара: `{self.symbol}`"
-            f"{chr(10)}Перезапускаю мониторинг..." if was_running else f"✅ Пара: `{self.symbol}`",
-            reply_markup=main_menu_kb() if not was_running else None,
+            f"✅ Пара: `{data}`\nВыбери таймфреймы (Вход + Тренд):",
+            reply_markup=timeframe_select_kb(data),
             parse_mode="Markdown",
         )
-        await cq.answer(f"Выбрано: {self.symbol}")
-
-        if was_running:
-            await self._start_monitor(cq.message.chat.id)
+        await cq.answer()
 
     async def fsm_custom_pair(self, msg: Message, state: FSMContext):
         pair = msg.text.strip().upper()
         if "_" not in pair:
             pair = pair.replace("USDT", "_USDT")
-        self.symbol = pair
         await state.clear()
         await msg.answer(
-            f"✅ Пара: `{self.symbol}`\nИспользуй ▶️ Старт для запуска.",
-            reply_markup=main_menu_kb(), parse_mode="Markdown",
+            f"✅ Пара: `{pair}`\nВыбери таймфреймы (Вход + Тренд):",
+            reply_markup=timeframe_select_kb(pair),
+            parse_mode="Markdown",
         )
+
+    async def cb_tf_select(self, cq: CallbackQuery):
+        # Format: tf_BTC_USDT_15m_1h
+        parts = cq.data.split("_")
+        # tf_1 = "tf"
+        # Since pair might have an underscore: tf, BTC, USDT, 15m, 1h
+        entry_tf = parts[-2]
+        trend_tf = parts[-1]
+        pair = "_".join(parts[1:-2])
+
+        if pair in self.active_monitors:
+            await cq.answer(f"⚠️ {pair} уже мониторится!", show_alert=True)
+            return
+
+        await cq.message.edit_text(
+            f"🚀 Запускаю мониторинг...\n\n"
+            f"Пара: `{pair}`\n"
+            f"ТФ: `{entry_tf} + {trend_tf}`\n"
+            f"Мин. паттернов: {config.MIN_PATTERNS_TO_SIGNAL}\n"
+            f"Мин. confluence: {config.MIN_CONFIDENCE}%",
+            parse_mode="Markdown",
+        )
+        await cq.answer()
+        await self._start_monitor(cq.message.chat.id, pair, entry_tf, trend_tf)
+
+    # ─── Остановка пары ───────────────────────────────────────────────────────
+
+    async def cb_stop_all(self, cq: CallbackQuery):
+        await self._stop_all()
+        await cq.message.edit_text("⏹ Все мониторинги остановлены.", reply_markup=main_menu_kb())
+        await cq.answer("Остановлено")
+
+    async def cb_stop_pair_menu(self, cq: CallbackQuery):
+        if not self.active_monitors:
+            await cq.answer("Нет активных пар.", show_alert=True)
+            return
+        
+        await cq.message.edit_text(
+            "Выбери пару для остановки:",
+            reply_markup=active_pairs_kb(list(self.active_monitors.keys())),
+        )
+        await cq.answer()
+        
+    async def cb_stop_specific_pair(self, cq: CallbackQuery):
+        pair = cq.data.replace("stop_", "")
+        if pair not in self.active_monitors:
+            await cq.answer("Пара уже остановлена.", show_alert=True)
+            return
+            
+        await self._stop_monitor(pair)
+        await cq.message.edit_text(
+            f"⏹ `{pair}` остановлен.\n\n" + self.active_pairs_list_str(),
+            reply_markup=main_menu_kb(),
+            parse_mode="Markdown"
+        )
+        await cq.answer(f"{pair} остановлен")
 
     # ─── Настройки ────────────────────────────────────────────────────────────
 
@@ -415,50 +444,57 @@ class TradingBot:
 
     # ─── Monitor ──────────────────────────────────────────────────────────────
 
-    async def _start_monitor(self, chat_id: int):
+    async def _start_monitor(self, chat_id: int, pair: str, entry_tf: str, trend_tf: str):
         self.chat_id = chat_id
-        self._engine = MultiTFEngine(
-            symbol=self.symbol,
+        engine = MultiTFEngine(
+            symbol=pair,
+            entry_tf=entry_tf,
+            trend_tf=trend_tf,
             on_signal=self._on_signal,
         )
-        self.is_running = True
-        self._engine_task = asyncio.create_task(self._engine.start())
+        task = asyncio.create_task(engine.start())
+        self.active_monitors[pair] = {
+            "engine": engine,
+            "task": task
+        }
 
         await self.bot.send_message(
             chat_id,
             f"✅ *Мониторинг запущен*\n\n"
-            f"Пара: `{self.symbol}` · MEXC Futures\n"
-            f"Таймфреймы: `15m` + `1h`\n"
+            f"Пара: `{pair}` · MEXC Futures\n"
+            f"Таймфреймы: `{entry_tf}` + `{trend_tf}`\n"
             f"Мин. паттернов: `{config.MIN_PATTERNS_TO_SIGNAL}`\n"
             f"Мин. confluence: `{config.MIN_CONFIDENCE}%`\n"
-            f"Таймаут сигнала: `{config.CONFIRM_TIMEOUT_SEC // 60} мин`\n\n"
             f"⏳ Загружаю историю свечей...",
             reply_markup=main_menu_kb(),
             parse_mode="Markdown",
         )
-        logger.info(f"[Bot] Мониторинг запущен: {self.symbol}")
+        logger.info(f"[Bot] Мониторинг запущен: {pair} [{entry_tf} + {trend_tf}]")
 
-    async def _stop_monitor(self):
+    async def _stop_monitor(self, pair: str):
+        if pair in self.active_monitors:
+            monitor = self.active_monitors[pair]
+            await monitor["engine"].stop()
+            task = monitor["task"]
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            del self.active_monitors[pair]
+            logger.info(f"[Bot] Мониторинг {pair} остановлен")
+
+    async def _stop_all(self):
         if self._pending:
             self._pending.cancel_timer()
             self._pending = None
-        if self._engine:
-            await self._engine.stop()
-        if self._engine_task and not self._engine_task.done():
-            self._engine_task.cancel()
-            try:
-                await self._engine_task
-            except asyncio.CancelledError:
-                pass
-        self.is_running = False
-        self._engine = None
-        self._engine_task = None
-        logger.info("[Bot] Мониторинг остановлен")
-
-    def _status_text(self) -> str:
-        buf_15m = len(self._engine.buf_15m) if self._engine else 0
-        buf_1h  = len(self._engine.buf_1h)  if self._engine else 0
-        return format_status(self.symbol, self.is_running, buf_15m, buf_1h)
+            
+        pairs = list(self.active_monitors.keys())
+        for pair in pairs:
+            await self._stop_monitor(pair)
+            
+        logger.info("[Bot] Все мониторинги остановлены")
 
     # ─── Run ──────────────────────────────────────────────────────────────────
 

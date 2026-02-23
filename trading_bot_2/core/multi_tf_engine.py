@@ -45,62 +45,66 @@ class MultiTFEngine:
     def __init__(
         self,
         symbol: str,
+        entry_tf: str,
+        trend_tf: str,
         on_signal: Callable[[MTFContext], Awaitable[None]],
     ):
         self.symbol = symbol
+        self.entry_tf = entry_tf
+        self.trend_tf = trend_tf
         self.on_signal = on_signal
 
         # Буферы
-        self.buf_15m = CandleBuffer(maxlen=300)
-        self.buf_1h = CandleBuffer(maxlen=300)
+        self.buf_entry = CandleBuffer(maxlen=300)
+        self.buf_trend = CandleBuffer(maxlen=300)
 
-        # SignalEngine работает только на 15m
-        self.engine_15m = SignalEngine(
+        # SignalEngine работает только на базовом ТФ
+        self.signal_engine = SignalEngine(
             symbol=symbol,
-            timeframe=config.ENTRY_TIMEFRAME,
+            timeframe=entry_tf,
             exchange=config.DEFAULT_EXCHANGE,
             market=config.DEFAULT_MARKET_TYPE,
         )
 
         # DataFeed × 2
-        self._feed_15m = DataFeed(
+        self._feed_entry = DataFeed(
             exchange=config.DEFAULT_EXCHANGE,
             market=config.DEFAULT_MARKET_TYPE,
             symbol=symbol,
-            tf=config.ENTRY_TIMEFRAME,
-            buffer=self.buf_15m,
-            on_closed_candle=self._on_15m_closed,
+            tf=entry_tf,
+            buffer=self.buf_entry,
+            on_closed_candle=self._on_entry_closed,
         )
-        self._feed_1h = DataFeed(
+        self._feed_trend = DataFeed(
             exchange=config.DEFAULT_EXCHANGE,
             market=config.DEFAULT_MARKET_TYPE,
             symbol=symbol,
-            tf=config.TREND_TIMEFRAME,
-            buffer=self.buf_1h,
-            on_closed_candle=self._on_1h_closed,   # просто накапливаем
+            tf=trend_tf,
+            buffer=self.buf_trend,
+            on_closed_candle=self._on_trend_closed,   # просто накапливаем
         )
 
-        self._task_15m: Optional[asyncio.Task] = None
-        self._task_1h: Optional[asyncio.Task] = None
+        self._task_entry: Optional[asyncio.Task] = None
+        self._task_trend: Optional[asyncio.Task] = None
         self._running = False
 
     # ─── Public ──────────────────────────────────────────────────────────────
 
     async def start(self):
         self._running = True
-        logger.info(f"[MTF] Запуск {self.symbol}: {config.ENTRY_TIMEFRAME} + {config.TREND_TIMEFRAME}")
-        self._task_1h = asyncio.create_task(self._feed_1h.start())
-        # Небольшая задержка чтобы 1h история успела загрузиться
+        logger.info(f"[MTF] Запуск {self.symbol}: {self.entry_tf} + {self.trend_tf}")
+        self._task_trend = asyncio.create_task(self._feed_trend.start())
+        # Небольшая задержка чтобы трендовая история успела загрузиться
         await asyncio.sleep(3)
-        self._task_15m = asyncio.create_task(self._feed_15m.start())
+        self._task_entry = asyncio.create_task(self._feed_entry.start())
         # Ждём оба таска
-        await asyncio.gather(self._task_15m, self._task_1h, return_exceptions=True)
+        await asyncio.gather(self._task_entry, self._task_trend, return_exceptions=True)
 
     async def stop(self):
         self._running = False
-        await self._feed_15m.stop()
-        await self._feed_1h.stop()
-        for t in (self._task_15m, self._task_1h):
+        await self._feed_entry.stop()
+        await self._feed_trend.stop()
+        for t in (self._task_entry, self._task_trend):
             if t and not t.done():
                 t.cancel()
                 try:
@@ -111,29 +115,29 @@ class MultiTFEngine:
 
     # ─── Callbacks ───────────────────────────────────────────────────────────
 
-    async def _on_1h_closed(self, buf: CandleBuffer):
-        """Просто логируем — 1h свечи накапливаются в буфере."""
+    async def _on_trend_closed(self, buf: CandleBuffer):
+        """Просто логируем — трендовые свечи накапливаются в буфере."""
         if buf.ready(20):
             ind = calculate_indicators(buf)
             trend = "UP" if ind.trend_up else "DOWN" if ind.trend_down else "FLAT"
-            logger.debug(f"[MTF 1h] Тренд={trend} ADX={ind.adx:.1f} RSI={ind.rsi:.1f}")
+            logger.debug(f"[MTF {self.trend_tf}] Тренд={trend} ADX={ind.adx:.1f} RSI={ind.rsi:.1f}")
 
-    async def _on_15m_closed(self, buf_15m: CandleBuffer):
-        """Основная логика: 15m паттерны + фильтр 1h тренда."""
+    async def _on_entry_closed(self, buf_entry: CandleBuffer):
+        """Основная логика: паттерны входа + фильтр тренда."""
         if not self._running:
             return
 
-        # 1h буфер должен быть готов
-        if not self.buf_1h.ready(30):
-            logger.debug("[MTF] 1h буфер ещё не готов, пропуск")
+        # Трендовый буфер должен быть готов
+        if not self.buf_trend.ready(30):
+            logger.debug(f"[MTF] {self.trend_tf} буфер ещё не готов, пропуск")
             return
 
-        # Получаем индикаторы 1h
-        ind_1h = calculate_indicators(self.buf_1h)
-        h1_trend = "UP" if ind_1h.trend_up else "DOWN" if ind_1h.trend_down else "FLAT"
+        # Получаем индикаторы тренда
+        ind_trend = calculate_indicators(self.buf_trend)
+        h1_trend = "UP" if ind_trend.trend_up else "DOWN" if ind_trend.trend_down else "FLAT"
 
-        # Запускаем анализ на 15m
-        signal = await self.engine_15m.analyze(buf_15m)
+        # Запускаем анализ на ТФ входа
+        signal = await self.signal_engine.analyze(buf_entry)
         if not signal:
             return
 
@@ -146,26 +150,26 @@ class MultiTFEngine:
         if not tf_agreement:
             logger.info(
                 f"[MTF] ❌ Несогласованность TF: сигнал={signal.direction.value}, "
-                f"1h тренд={h1_trend} — пропуск"
+                f"{self.trend_tf} тренд={h1_trend} — пропуск"
             )
             return
 
         # Вычисляем итоговый confluence score
-        confluence = self._calc_confluence(signal, ind_1h, tf_agreement)
+        confluence = self._calc_confluence(signal, ind_trend, tf_agreement)
 
         ctx = MTFContext(
             signal=signal,
             h1_trend=h1_trend,
-            h1_adx=ind_1h.adx,
-            h1_rsi=ind_1h.rsi,
-            h1_ema_alignment=(ind_1h.trend_up or ind_1h.trend_down),
+            h1_adx=ind_trend.adx,
+            h1_rsi=ind_trend.rsi,
+            h1_ema_alignment=(ind_trend.trend_up or ind_trend.trend_down),
             tf_agreement=tf_agreement,
             confluence_score=confluence,
         )
 
         logger.info(
             f"[MTF] ✅ Confluence сигнал: {signal.direction.value} {self.symbol} "
-            f"confluence={confluence}% 1h={h1_trend}"
+            f"confluence={confluence}% {self.trend_tf}={h1_trend}"
         )
         await self.on_signal(ctx)
 

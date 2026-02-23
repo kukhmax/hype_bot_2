@@ -153,13 +153,16 @@ class SignalEngine:
 
         # 2. Паттерны
         results = []
+        logger.debug(f"[Engine] ({self.symbol} {self.timeframe}) Поиск паттернов...")
         for detector in ALL_PATTERNS:
+            # logger.debug(f"[Engine] ({self.symbol}) Проверка паттерна: {detector.__class__.__name__}")
             r = detector.detect(buf, ind)
             if r.detected:
                 results.append(r)
-                logger.debug(f"[Pattern] ✅ {r.name} {r.direction.value} str={r.strength}")
+                logger.debug(f"[Pattern] ✅ Найден {r.name} ({r.direction.value}) str={r.strength:.2f}")
 
         if not results:
+            logger.debug(f"[Engine] ({self.symbol} {self.timeframe}) Паттерны не найдены")
             return None
 
         # 3. Голосование по направлению

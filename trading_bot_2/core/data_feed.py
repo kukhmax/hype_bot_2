@@ -263,21 +263,35 @@ class DataFeed:
             # Подписываемся
             sub = subscribe_msg(self.exchange, self.market, self.symbol, self.tf)
             await ws.send(json.dumps(sub))
-            logger.info(f"[DataFeed] Подписка: {self.symbol} {self.tf}")
+            logger.info(f"[DataFeed] Подписка успешно отправлена: {self.symbol} {self.tf}")
 
             # Пинг-задача для MEXC (требует heartbeat)
             ping_task = asyncio.create_task(self._ping_loop(ws))
 
             try:
+                msg_count = 0
                 async for raw in ws:
                     if not self._running:
+                        logger.info(f"[DataFeed] Остановка чтения WS потока ({self.symbol})")
                         break
+                        
+                    msg_count += 1
+                    if msg_count % 500 == 0:
+                        logger.debug(f"[DataFeed] ({self.symbol} {self.tf}) Обработано {msg_count} сообщений WS...")
+                        
                     msg = json.loads(raw)
+                    # logger.debug(f"WS RAW: {msg}") # Uncomment to trace all market data
+                    
                     candle = self._parser(msg)
                     if candle:
                         closed = self.buffer.push(candle)
-                        if closed and self.buffer.ready(50):
-                            await self.on_closed_candle(self.buffer)
+                        if closed:
+                            logger.debug(f"[DataFeed] ({self.symbol} {self.tf}) Закрыта свеча T={candle.timestamp} C={candle.close}")
+                            if self.buffer.ready(50):
+                                await self.on_closed_candle(self.buffer)
+            except websockets.exceptions.ConnectionClosed as e:
+                logger.warning(f"[DataFeed] WS Соединение закрыто для {self.symbol} {self.tf}: {e}")
+                raise e
             finally:
                 ping_task.cancel()
 
