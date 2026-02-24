@@ -110,15 +110,72 @@ async def process_risk(message: Message, state: FSMContext):
 
 # --- ПУСТЫШКИ ДЛЯ КНОПОК ЗАПУСКА И ТЕСТОВ (будут реализованы в сл. шагах) ---
 
+from core.execution.live_engine import LiveEngine
+from core.strategies.trend_pullback import TrendPullbackStrategy
+
+_engine_task: asyncio.Task = None
+_engine_instance: LiveEngine = None
+
+async def send_tg_notification(text: str):
+    """Callback для LiveEngine, чтобы он мог писать в Telegram"""
+    from bot.telegram_bot import get_bot_instance
+    bot = get_bot_instance()
+    if bot and bot_settings.get("chat_id"):
+        try:
+            await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode="Markdown")
+        except Exception:
+            pass
+
 @router.message(F.text == "🚀 ЗАПУСК БОТА")
 async def cmd_start_bot(message: Message, state: FSMContext):
+    global _engine_task, _engine_instance
     await state.clear()
-    await message.answer("Запуск в разработке... (Перейдем к этому в Шаге 5)")
+    
+    if _engine_task and not _engine_task.done():
+        await message.answer("⚠️ Бот УЖЕ запущен!")
+        return
+        
+    bot_settings["chat_id"] = message.chat.id
+    mode = bot_settings["mode"]
+    symbol = bot_settings["symbol"]
+    tf = bot_settings["timeframe"]
+    
+    await message.answer(f"🚀 Инициализация движка для `{symbol}` ({tf}m) в режиме `{mode.upper()}`...")
+    
+    # Создаем стратегию
+    strategy = TrendPullbackStrategy(rsi_threshold=40, sl_atr_mult=1.5, rr_ratio=2.0)
+    
+    # Создаем движок
+    paper_trading = True if mode != "live" else False
+    _engine_instance = LiveEngine(
+        symbol=symbol, 
+        timeframe_minutes=tf, 
+        strategy=strategy, 
+        paper_trading=paper_trading,
+        tg_callback=send_tg_notification if mode in ["signals", "paper", "live"] else None
+    )
+    
+    is_ready = await _engine_instance.initialize()
+    if not is_ready:
+        await message.answer("❌ Ошибка инициализации Live Engine (проверьте логи).")
+        return
+        
+    # Запускаем в фоне
+    _engine_task = asyncio.create_task(_engine_instance.run_forever())
+    await message.answer("✅ **Live Engine успешно запущен и слушает потоки!**")
 
 @router.message(F.text == "🛑 СТОП")
 async def cmd_stop_bot(message: Message, state: FSMContext):
+    global _engine_task, _engine_instance
     await state.clear()
-    await message.answer("Остановка движка...")
+    
+    if _engine_task and not _engine_task.done():
+        _engine_task.cancel()
+        _engine_task = None
+        _engine_instance = None
+        await message.answer("🛑 Бот остановлен.")
+    else:
+        await message.answer("⚠️ Бот и так не запущен.")
 
 from core.backtest.optimizer import StrategyOptimizer
 from core.strategies.trend_pullback import TrendPullbackStrategy

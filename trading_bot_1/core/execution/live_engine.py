@@ -18,11 +18,13 @@ class LiveEngine:
     Связующее звено между WebSocket потоком, строителем свечей, стратегией и экзекутором ордеров.
     """
 
+    from typing import Callable, Awaitable
     def __init__(self, 
                  symbol: str, 
                  timeframe_minutes: int, 
                  strategy: BaseStrategy,
-                 paper_trading: bool = True):
+                 paper_trading: bool = True,
+                 tg_callback: 'Callable[[str], Awaitable[None]]' = None):
         
         self.symbol = symbol
         self.timeframe_minutes = timeframe_minutes
@@ -41,6 +43,11 @@ class LiveEngine:
         
         # Текущая открытая позиция
         self.current_position: Optional[Dict[str, Any]] = None
+        self.tg_callback = tg_callback
+
+    async def _notify(self, msg: str):
+        if hasattr(self, 'tg_callback') and self.tg_callback:
+            await self.tg_callback(msg)
 
     async def initialize(self):
         """Подготовка: скачивание истории для расчета индикаторов."""
@@ -118,6 +125,7 @@ class LiveEngine:
             signal_data = self.strategy.on_ohlcv(self.df, current_idx)
             
             if signal_data["signal"] != "NONE":
+                await self._notify(f"🎯 **СИГНАЛ** `{self.symbol}`\nНаправление: `{signal_data['signal']}`\nЦена: `{candle_dict['close']}`\nСтратегия: `{self.strategy.__class__.__name__}`")
                 await self._execute_signal(signal_data, candle_dict["close"])
 
     async def _check_paper_stops(self, candle: dict):
@@ -151,6 +159,7 @@ class LiveEngine:
                 
         if closed:
             self.risk_manager.report_trade_result(pnl)
+            await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [PAPER]**\nПара: `{self.symbol}`\nPnL: `{pnl:.2f} USDT`")
             self.current_position = None
 
     async def _execute_signal(self, signal: dict, current_price: float):
@@ -167,6 +176,7 @@ class LiveEngine:
         
         if size_info["quote_qty"] == 0:
             logger.warning(f"Ордер отменен риск-менеджером. Причина: {size_info['reason']}")
+            await self._notify(f"🚫 **РИСК-МЕНЕДЖМЕНТ**\nОрдер отменен: {size_info['reason']}")
             return
             
         quote_qty = size_info["quote_qty"]
@@ -174,6 +184,7 @@ class LiveEngine:
         
         if self.paper_trading:
             logger.info(f"[PAPER TRADING] Открываем {side} на сумму {quote_qty} USDT. Entry: {current_price}, SL: {stop_loss}, TP: {take_profit}")
+            await self._notify(f"🟢 **ПОЗИЦИЯ ОТКРЫТА [PAPER]**\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`\nSL: `{stop_loss}`\nTP: `{take_profit}`")
             self.current_position = {
                 "side": side,
                 "entry_price": current_price,
@@ -209,6 +220,7 @@ class LiveEngine:
                          self.current_position["tp_order_id"] = tp_res["orderId"]
                          
                 logger.info(f"[LIVE TRADING] Успешно открыта позиция {side}. Результат: {result}")
+                await self._notify(f"🔴 **ПОЗИЦИЯ ОТКРЫТА [LIVE]**\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`")
             else:
                 logger.error(f"[LIVE TRADING] Ошибка открытия ордера: {result}")
 
