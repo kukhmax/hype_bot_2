@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
@@ -119,7 +120,64 @@ async def cmd_stop_bot(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Остановка движка...")
 
+from core.backtest.optimizer import StrategyOptimizer
+from core.strategies.trend_pullback import TrendPullbackStrategy
+from core.strategies.breakout import BreakoutStrategy
+from core.strategies.liquidity_sweep import LiquiditySweepStrategy
+
 @router.message(F.text == "🧪 Тест Стратегий")
 async def cmd_test(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("Обработчик тестов будет добавлен в Шаге 4...")
+    await message.answer(f"⏳ Начинаю скачивание истории и бэктест для `{bot_settings['symbol']}` на `{bot_settings['timeframe']}m`...\nЭто займет около 10-15 секунд.")
+    
+    # Запускаем в фоне, чтобы не блочить бота
+    asyncio.create_task(run_optimizer_and_report(message))
+
+async def run_optimizer_and_report(message: Message):
+    import pandas as pd
+    from core.data.historical import MEXCHistoricalDownloader
+    
+    symbol = bot_settings['symbol']
+    tf = bot_settings['timeframe']
+    
+    try:
+        # 1. Скачиваем данные
+        df = await MEXCHistoricalDownloader.get_klines(symbol, tf, limit=3000)
+        
+        # 2. Настраиваем сетки для оптимизатора (по одной стратегии для теста)
+        # Для скорости возьмем TrendPullback
+        param_grid = {
+            'rsi_threshold': [30, 40],
+            'sl_atr_mult': [1.0, 1.5],
+            'rr_ratio': [1.5, 2.0]
+        }
+        
+        optimizer = StrategyOptimizer(data=df, strategy_class=TrendPullbackStrategy, param_grid=param_grid)
+        results = optimizer.run_optimization()
+        
+        if not results:
+            await message.answer("❌ Бэктест не нашел прибыльных параметров (сделок нет). Market is dead.")
+            return
+            
+        # Берем лучший по ROI
+        best = max(results, key=lambda x: x['ROI_%'])
+        
+        report = (
+            f"✅ **Бэктест Завершен!**\n"
+            f"Пара: `{symbol}` ({tf}m)\n\n"
+            f"🏆 **Лучшая Стратегия:** `Trend Pullback`\n"
+            f"⚙️ **Параметры:** `RSI={best['params']['rsi_threshold']}, SL={best['params']['sl_atr_mult']}ATR, RR={best['params']['rr_ratio']}`\n\n"
+            f"📊 **Результаты (на 3000 свечей):**\n"
+            f"• Профит: `{best['ROI_%']:.2f}%`\n"
+            f"• Винрейт: `{best['WinRate_%']:.2f}%`\n"
+            f"• Сделок: `{best['Total_Trades']}`\n"
+            f"• Макс Просадка: `{best['Max_Drawdown_%']:.2f}%`\n"
+            f"• Профит Фактор: `{best['Profit_Factor']:.2f}`\n\n"
+            f"💡 *Рекомендация:* Сохраните эти параметры."
+        )
+        
+        await message.answer(report)
+        
+    except Exception as e:
+        logger.error(f"Ошибка бэктеста: {e}")
+        await message.answer(f"❌ Произошла ошибка при тестировании: {e}")
