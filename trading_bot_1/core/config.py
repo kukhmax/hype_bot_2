@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     # API Keys for Execution (Required for Phase 3)
     API_KEY: str = ""
     API_SECRET: str = ""
+    
+    # Telegram Bot (Required for Phase 4)
+    TELEGRAM_BOT_TOKEN: str = ""
+    ADMIN_CHAT_ID: str = ""
 
     class Config:
         env_file = ".env"
