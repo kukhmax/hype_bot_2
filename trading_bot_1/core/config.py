@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     # Telegram Bot (Required for Phase 4)
     TELEGRAM_BOT_TOKEN: str = ""
     ADMIN_CHAT_ID: str = ""
+    
+    # AI / Gemini (Required for Phase 5)
+    GEMINI_API_KEY: str = ""
 
     class Config:
         env_file = ".env"
