@@ -149,7 +149,39 @@ class LiveEngine:
             
             if signal_data["signal"] != "NONE":
                 await self._notify(f"🎯 **СИГНАЛ** `{self.symbol}`\nНаправление: `{signal_data['signal']}`\nЦена: `{candle_dict['close']}`\nСтратегия: `{self.active_strategy.__class__.__name__}`")
-                await self._execute_signal(signal_data, candle_dict["close"])
+                
+                # --- AI VERIFICATION ---
+                from core.ai.gemini_client import gemini_client
+                import pandas as pd
+                
+                row = self.df.iloc[current_idx]
+                indicators = {
+                    'close': candle_dict['close'],
+                    'rsi': row.get('rsi', 0),
+                    'adx': row.get('adx', 0),
+                    'ema_200': row.get('ema_200', 0),
+                    'bb_width_percent': 0
+                }
+                
+                upper_bb = row.get('upper_bb', None)
+                lower_bb = row.get('lower_bb', None)
+                if pd.notna(upper_bb) and pd.notna(lower_bb) and indicators['close']:
+                    indicators['bb_width_percent'] = (upper_bb - lower_bb) / indicators['close'] * 100
+                    
+                await self._notify("🤖 Запрашиваю 'Второе мнение' у ИИ Gemini...")
+                is_approved, reasoning = await gemini_client.verify_signal(
+                    self.symbol, 
+                    self.timeframe_minutes, 
+                    signal_data["signal"], 
+                    indicators
+                )
+                
+                if is_approved:
+                    await self._notify(f"✅ **ИИ ОДОБРИЛ СДЕЛКУ**\n`{reasoning}`")
+                    await self._execute_signal(signal_data, candle_dict["close"])
+                else:
+                    await self._notify(f"❌ **ИИ ОТКЛОНИЛ СДЕЛКУ**\n`{reasoning}`")
+                    logger.info(f"Сделка отклонена ИИ. Причина: {reasoning}")
 
     async def _check_paper_stops(self, candle: dict):
         """Только для Paper Trading: закрытие сделки если цена коснулась SL/TP."""
