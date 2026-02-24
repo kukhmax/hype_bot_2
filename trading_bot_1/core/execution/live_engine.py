@@ -192,7 +192,20 @@ class LiveEngine:
         closed = False
         pnl = 0.0
         
+        # Логика Trailing Stop (перевод в БУ при достижении 1R)
+        if "initial_sl" not in pos:
+            pos["initial_sl"] = pos["stop_loss"]
+            
+        r_dist = abs(pos["entry_price"] - pos["initial_sl"])
+        
         if pos["side"] == "BUY":
+            # Перевод в безубыток при достижении 1R
+            if r_dist > 0 and candle["high"] >= pos["entry_price"] + r_dist:
+                if pos["stop_loss"] < pos["entry_price"]:
+                    pos["stop_loss"] = pos["entry_price"]
+                    logger.info(f"Trailing Stop (LONG): Стоп переведен в безубыток ({pos['stop_loss']})")
+                    await self._notify(f"🛡 **ATR TRAILING**\nСделка `{self.symbol}` (LONG) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']}`")
+                    
             if candle["low"] <= pos["stop_loss"]:
                 pnl = (pos["stop_loss"] - pos["entry_price"]) * pos["qty"]
                 logger.info(f"[-PAPER-] Сработал SL по BUY ({pos['stop_loss']}). PnL: {pnl:.2f}")
@@ -203,6 +216,13 @@ class LiveEngine:
                 closed = True
                 
         elif pos["side"] == "SELL":
+            # Перевод в безубыток при достижении 1R
+            if r_dist > 0 and candle["low"] <= pos["entry_price"] - r_dist:
+                if pos["stop_loss"] > pos["entry_price"]:
+                    pos["stop_loss"] = pos["entry_price"]
+                    logger.info(f"Trailing Stop (SHORT): Стоп переведен в безубыток ({pos['stop_loss']})")
+                    await self._notify(f"🛡 **ATR TRAILING**\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']}`")
+
             if candle["high"] >= pos["stop_loss"]:
                 pnl = (pos["entry_price"] - pos["stop_loss"]) * pos["qty"] # Шорт: цена выросла = убыток
                 logger.info(f"[-PAPER-] Сработал SL по SELL ({pos['stop_loss']}). PnL: {pnl:.2f}")

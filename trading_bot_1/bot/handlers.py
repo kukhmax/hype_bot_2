@@ -39,9 +39,14 @@ async def cmd_start(message: Message, state: FSMContext):
 @router.message(F.text == "📊 Статус")
 async def cmd_status(message: Message, state: FSMContext):
     await state.clear()
+    
+    current_regime = _engine_instance.current_regime if _engine_instance else "Не запущен"
+    
     text = (
         "📊 **ТЕКУЩИЙ СТАТУС**\n\n"
-        f"Режим: `{bot_settings['mode'].upper()}`\n"
+        f"Статус движка: `{'🟢 Активен' if _engine_instance else '🛑 Остановлен'}`\n"
+        f"Фаза рынка: `{current_regime}`\n"
+        f"Режим бота: `{bot_settings['mode'].upper()}`\n"
         f"Монета: `{bot_settings['symbol']}`\n"
         f"Таймфрейм: `{bot_settings['timeframe']}m`\n"
         f"Риск на сделку: `{bot_settings['risk_percent']}%`\n"
