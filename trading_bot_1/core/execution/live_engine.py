@@ -7,8 +7,12 @@ from core.data.mexc_client import MEXCWebSocketClient
 from core.data.candle_builder import CandleBuilder
 from core.data.historical import MEXCHistoricalDownloader
 from core.strategies.base import BaseStrategy
+from core.strategies.trend_pullback import TrendPullbackStrategy
+from core.strategies.breakout import BreakoutStrategy
+from core.strategies.liquidity_sweep import LiquiditySweepStrategy
 from core.execution.mexc_executor import MEXCExecutor
 from core.risk.manager import RiskManager
+from core.regime.classifier import RegimeClassifier
 
 logger = setup_logger("live_engine")
 
@@ -22,14 +26,22 @@ class LiveEngine:
     def __init__(self, 
                  symbol: str, 
                  timeframe_minutes: int, 
-                 strategy: BaseStrategy,
                  paper_trading: bool = True,
                  tg_callback: 'Callable[[str], Awaitable[None]]' = None):
         
         self.symbol = symbol
         self.timeframe_minutes = timeframe_minutes
-        self.strategy = strategy
         self.paper_trading = paper_trading
+        
+        # Стратегии для разных режимов
+        self.strategies = {
+            "strong_trend": TrendPullbackStrategy(rsi_threshold=40, sl_atr_mult=1.5, rr_ratio=2.0),
+            "weak_trend": TrendPullbackStrategy(rsi_threshold=35, sl_atr_mult=1.5, rr_ratio=1.5),
+            "high_volatility": BreakoutStrategy(bb_width_threshold=0.015, adx_threshold=20, dt_threshold=0),
+            "range": LiquiditySweepStrategy()
+        }
+        self.active_strategy = self.strategies["weak_trend"]
+        self.current_regime = "unknown"
         
         # Компоненты системы
         self.executor = MEXCExecutor()
@@ -107,11 +119,22 @@ class LiveEngine:
         new_row = pd.DataFrame([candle_dict])
         self.df = pd.concat([self.df, new_row], ignore_index=True)
         
-        # Просчитываем фичи (EMA, RSI, ATR) на новом DF
-        self.df = self.strategy.prepare_data(self.df)
+        # Просчитываем фичи (EMA, RSI, ATR) на новом DF используя любую стратегию (фичи общие)
+        self.df = self.active_strategy.prepare_data(self.df)
         
         # Скармливаем последний индекс стратегии
         current_idx = len(self.df) - 1
+        
+        # Определяем режим рынка (Regime Classifier)
+        regime_info = RegimeClassifier.classify(self.df, current_idx)
+        new_regime = regime_info["regime"]
+        
+        if new_regime != self.current_regime and new_regime != "unknown":
+            logger.info(f"Смена режима рынка: {self.current_regime} -> {new_regime}")
+            self.current_regime = new_regime
+            if new_regime in self.strategies:
+                self.active_strategy = self.strategies[new_regime]
+                await self._notify(f"🔄 **СМЕНА РЕЖИМА**\nНовый режим: `{new_regime}`\nВключена стратегия: `{self.active_strategy.__class__.__name__}`")
         
         # --- Симуляция проверки Stop Loss / Take Profit (т.к. лимитки мы ставим на бирже, мы просто ждем их срабатывания) ---
         # В реальной торговле мы бы периодически запрашивали статус ордеров (GET /api/v3/openOrders), 
@@ -122,10 +145,10 @@ class LiveEngine:
 
         # Вызываем логику стратегии для генерации сигнала
         if self.current_position is None:
-            signal_data = self.strategy.on_ohlcv(self.df, current_idx)
+            signal_data = self.active_strategy.on_ohlcv(self.df, current_idx)
             
             if signal_data["signal"] != "NONE":
-                await self._notify(f"🎯 **СИГНАЛ** `{self.symbol}`\nНаправление: `{signal_data['signal']}`\nЦена: `{candle_dict['close']}`\nСтратегия: `{self.strategy.__class__.__name__}`")
+                await self._notify(f"🎯 **СИГНАЛ** `{self.symbol}`\nНаправление: `{signal_data['signal']}`\nЦена: `{candle_dict['close']}`\nСтратегия: `{self.active_strategy.__class__.__name__}`")
                 await self._execute_signal(signal_data, candle_dict["close"])
 
     async def _check_paper_stops(self, candle: dict):

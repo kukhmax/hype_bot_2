@@ -142,15 +142,11 @@ async def cmd_start_bot(message: Message, state: FSMContext):
     
     await message.answer(f"🚀 Инициализация движка для `{symbol}` ({tf}m) в режиме `{mode.upper()}`...")
     
-    # Создаем стратегию
-    strategy = TrendPullbackStrategy(rsi_threshold=40, sl_atr_mult=1.5, rr_ratio=2.0)
-    
     # Создаем движок
     paper_trading = True if mode != "live" else False
     _engine_instance = LiveEngine(
         symbol=symbol, 
         timeframe_minutes=tf, 
-        strategy=strategy, 
         paper_trading=paper_trading,
         tg_callback=send_tg_notification if mode in ["signals", "paper", "live"] else None
     )

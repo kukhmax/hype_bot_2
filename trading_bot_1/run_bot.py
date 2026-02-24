@@ -18,26 +18,16 @@ async def main():
     
     args = parser.parse_args()
     
-    # 1. Выбираем стратегию
-    if args.strategy == "trend":
-        logger.info("Выбрана стратегия: Trend Pullback")
-        # Параметры из тестов оптимизации
-        strategy = TrendPullbackStrategy(rsi_threshold=40, sl_atr_mult=1.5, rr_ratio=2.0)
-    elif args.strategy == "breakout":
-        logger.info("Выбрана стратегия: Volatility Breakout")
-        strategy = BreakoutStrategy(bb_width_threshold=0.03, adx_threshold=20.0, sl_atr_mult=1.0, rr_ratio=1.5)
-    else:
-        logger.info("Выбрана стратегия: Liquidity Sweep")
-        strategy = LiquiditySweepStrategy(lookback_period=20, rsi_ob_os=40, sl_atr_mult=1.0, rr_ratio=2.0)
-        
+    # 1. Запуск
     paper_trading = not args.live
     mode_str = "PAPER TRADING (Без реальных ордеров)" if paper_trading else "LIVE TRADING (Осторожно, реальные деньги!)"
     
     logger.info(f"=== ЗАПУСК БОТА: {mode_str} ===")
     logger.info(f"Символ: {args.symbol} | Таймфрейм: {args.tf}m")
+    logger.info("Стратегия будет выбираться АВТОМАТИЧЕСКИ благодаря Regime Classifier!")
     
     # 2. Инициализируем движок
-    engine = LiveEngine(symbol=args.symbol, timeframe_minutes=args.tf, strategy=strategy, paper_trading=paper_trading)
+    engine = LiveEngine(symbol=args.symbol, timeframe_minutes=args.tf, paper_trading=paper_trading)
     
     is_ready = await engine.initialize()
     if not is_ready:
