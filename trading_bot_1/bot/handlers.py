@@ -336,10 +336,10 @@ async def cmd_stop_bot(message: Message, state: FSMContext):
         await message.answer("⚠️ Бот и так не запущен.")
 
 
-# --- ТЕСТ СТРАТЕГИЙ (выбор пары) ---
-
 from core.backtest.optimizer import StrategyOptimizer
 from core.strategies.trend_pullback import TrendPullbackStrategy
+from core.strategies.breakout import BreakoutStrategy
+from core.strategies.liquidity_sweep import LiquiditySweepStrategy
 
 @router.message(F.text == "🧪 Тест Стратегий")
 async def cmd_test_strategies(message: Message, state: FSMContext):
@@ -351,16 +351,15 @@ async def cmd_test_strategies(message: Message, state: FSMContext):
         return
 
     if len(pairs) == 1:
-        # Если пара одна — сразу тестим
         symbol = list(pairs.keys())[0]
         tf = pairs[symbol]["tf"]
         await message.answer(
-            f"⏳ Запускаю бэктест `{symbol}` ({tf}m)...\nОжидайте отчёт.",
+            f"⏳ Запускаю полный бэктест `{symbol}` ({tf}m)...\n"
+            "Тестирую 3 стратегии. Это займёт 1-2 минуты.",
             reply_markup=get_main_keyboard()
         )
         asyncio.create_task(run_optimizer_and_report(message, symbol, tf))
     else:
-        # Даём выбрать пару
         kb_buttons = [[KeyboardButton(text=f"🧪 {s}")] for s in pairs]
         kb_buttons.append([KeyboardButton(text="❌ Отмена")])
         kb = ReplyKeyboardMarkup(keyboard=kb_buttons, resize_keyboard=True)
@@ -385,7 +384,8 @@ async def process_test_pair_choice(message: Message, state: FSMContext):
     tf = pairs[symbol]["tf"]
     await state.clear()
     await message.answer(
-        f"⏳ Запускаю бэктест `{symbol}` ({tf}m)...\nОжидайте отчёт.",
+        f"⏳ Запускаю полный бэктест `{symbol}` ({tf}m)...\n"
+        "Тестирую 3 стратегии. Это займёт 1-2 минуты.",
         reply_markup=get_main_keyboard()
     )
     asyncio.create_task(run_optimizer_and_report(message, symbol, tf))
@@ -397,38 +397,94 @@ async def run_optimizer_and_report(message: Message, symbol: str, tf: int):
     try:
         df = await MEXCHistoricalDownloader.get_klines(symbol, tf, limit=3000)
 
-        param_grid = {
-            'rsi_threshold': [30, 40],
-            'sl_atr_mult': [1.0, 1.5],
-            'rr_ratio': [1.5, 2.0]
-        }
+        # --- Тестируем все 3 стратегии ---
+        strategies_config = [
+            {
+                "name": "Trend Pullback",
+                "class": TrendPullbackStrategy,
+                "grid": {
+                    'rsi_threshold': [30, 35, 40, 45],
+                    'sl_atr_mult': [1.0, 1.5, 2.0],
+                    'rr_ratio': [1.5, 2.0, 2.5]
+                }
+            },
+            {
+                "name": "Volatility Breakout",
+                "class": BreakoutStrategy,
+                "grid": {
+                    'bb_width_threshold': [0.01, 0.02, 0.03],
+                    'adx_threshold': [15, 20, 25],
+                    'sl_atr_mult': [1.0, 1.5],
+                    'rr_ratio': [1.5, 2.0]
+                }
+            },
+            {
+                "name": "Liquidity Sweep",
+                "class": LiquiditySweepStrategy,
+                "grid": {}  # Без параметров (дефолтные)
+            }
+        ]
 
-        optimizer = StrategyOptimizer(data=df, strategy_class=TrendPullbackStrategy)
-        results = optimizer.optimize(param_grid=param_grid)
+        all_results = []
 
-        if not results:
-            await message.answer("❌ Бэктест не нашел сделок. Рынок мёртв.")
+        for strat_cfg in strategies_config:
+            optimizer = StrategyOptimizer(data=df, strategy_class=strat_cfg["class"])
+
+            if strat_cfg["grid"]:
+                results = optimizer.optimize(param_grid=strat_cfg["grid"])
+            else:
+                # Стратегия без вариаций — один прогон
+                results = optimizer.optimize(param_grid={})
+
+            # Фильтруем: оставляем только результаты с хотя бы 1 сделкой
+            for r in results:
+                if r["total_trades"] > 0:
+                    r["strategy_name"] = strat_cfg["name"]
+                    all_results.append(r)
+
+        if not all_results:
+            await message.answer(
+                f"❌ **Бэктест `{symbol}` ({tf}m)**\n\n"
+                "Ни одна стратегия не нашла сигналов на данных 3000 свечей.\n"
+                "Попробуйте другой таймфрейм или монету."
+            )
             return
 
-        best = max(results, key=lambda x: x['roi'])
+        # Сортируем по ROI
+        all_results.sort(key=lambda x: x['roi'], reverse=True)
+        best = all_results[0]
+
+        params_str = ", ".join(f"{k}={v}" for k, v in best.get("params", {}).items())
+        if not params_str:
+            params_str = "default"
 
         report = (
             f"✅ **Бэктест Завершён!**\n"
             f"Пара: `{symbol}` ({tf}m)\n\n"
-            f"🏆 **Лучшая Стратегия:** `Trend Pullback`\n"
-            f"⚙️ **Параметры:** `RSI={best['params']['rsi_threshold']}, "
-            f"SL={best['params']['sl_atr_mult']}ATR, RR={best['params']['rr_ratio']}`\n\n"
+            f"🏆 **Лучшая:** `{best['strategy_name']}`\n"
+            f"⚙️ **Параметры:** `{params_str}`\n\n"
             f"📊 **Результаты (3000 свечей):**\n"
             f"• Профит: `{best['roi']:.2f}%`\n"
-            f"• Винрейт: `{best['winrate']:.2f}%`\n"
+            f"• Винрейт: `{best['winrate']:.1f}%`\n"
             f"• Сделок: `{best['total_trades']}`\n"
             f"• Макс Просадка: `{best['max_drawdown']:.2f}%`\n"
-            f"• Профит Фактор: `{best['profit_factor']:.2f}`\n\n"
-            f"💡 *Рекомендация:* Сохраните эти параметры."
+            f"• Профит Фактор: `{best['profit_factor']:.2f}`\n"
         )
+
+        # Добавляем TOP-3 если есть
+        if len(all_results) > 1:
+            report += "\n📋 **TOP-3 Стратегий:**\n"
+            for i, r in enumerate(all_results[:3]):
+                p_str = ", ".join(f"{k}={v}" for k, v in r.get("params", {}).items()) or "default"
+                report += (
+                    f"`#{i+1}` {r['strategy_name']} | "
+                    f"ROI: `{r['roi']:.2f}%` | "
+                    f"WR: `{r['winrate']:.0f}%` | "
+                    f"Сделок: `{r['total_trades']}`\n"
+                )
 
         await message.answer(report)
 
     except Exception as e:
-        logger.error(f"Ошибка бэктеста: {e}")
+        logger.error(f"Ошибка бэктеста: {e}", exc_info=True)
         await message.answer("❌ Произошла ошибка при тестировании. Проверьте логи.", parse_mode=None)
