@@ -154,7 +154,6 @@ class LiveEngine:
                 
                 # --- AI VERIFICATION ---
                 from core.ai.gemini_client import gemini_client
-                import pandas as pd
                 
                 row = self.df.iloc[current_idx]
                 indicators = {

@@ -428,7 +428,7 @@ async def run_optimizer_and_report(message: Message, symbol: str, tf: int):
         all_results = []
 
         for strat_cfg in strategies_config:
-            optimizer = StrategyOptimizer(data=df, strategy_class=strat_cfg["class"])
+            optimizer = StrategyOptimizer(data=df.copy(), strategy_class=strat_cfg["class"])
 
             if strat_cfg["grid"]:
                 results = optimizer.optimize(param_grid=strat_cfg["grid"])
