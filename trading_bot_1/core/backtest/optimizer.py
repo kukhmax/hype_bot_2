@@ -15,7 +15,7 @@ class StrategyOptimizer:
     """
     
     def __init__(self, data: pd.DataFrame, strategy_class: Type[BaseStrategy], initial_balance: float = 1000.0):
-        self.data = data
+        self.original_data = data
         self.strategy_class = strategy_class
         self.initial_balance = initial_balance
         self.results: List[Dict[str, Any]] = []
@@ -42,8 +42,9 @@ class StrategyOptimizer:
             # Инициализируем стратегию
             strategy_instance = self.strategy_class(**kwargs)
             
-            # Запускаем движок
-            engine = BacktestEngine(data=self.data, strategy=strategy_instance, initial_balance=self.initial_balance)
+            # Запускаем движок (свежая копия данных для каждого прогона)
+            data_copy = self.original_data.copy()
+            engine = BacktestEngine(data=data_copy, strategy=strategy_instance, initial_balance=self.initial_balance)
             engine.run()
             
             # Собираем все метрики из движка
