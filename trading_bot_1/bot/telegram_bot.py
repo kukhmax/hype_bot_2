@@ -40,13 +40,13 @@ async def main():
     try:
         # Уведомляем админа о старте
         if settings.ADMIN_CHAT_ID:
-            await bot.send_message(chat_id=settings.ADMIN_CHAT_ID, text="🤖 Telegram интерфейс Hype Bot запущен и готов к работе!")
+            await _bot_instance.send_message(chat_id=settings.ADMIN_CHAT_ID, text="🤖 Telegram интерфейс Hype Bot запущен и готов к работе!")
             
-        await dp.start_polling(bot)
+        await dp.start_polling(_bot_instance)
     except Exception as e:
         logger.error(f"Ошибка Polling: {e}")
     finally:
-        await bot.session.close()
+        await _bot_instance.session.close()
 
 if __name__ == "__main__":
     try:

@@ -27,17 +27,19 @@ class LiveEngine:
                  symbol: str, 
                  timeframe_minutes: int, 
                  paper_trading: bool = True,
+                 leverage: int = 1,
                  tg_callback: 'Callable[[str], Awaitable[None]]' = None):
         
         self.symbol = symbol
         self.timeframe_minutes = timeframe_minutes
         self.paper_trading = paper_trading
+        self.leverage = leverage
         
         # Стратегии для разных режимов
         self.strategies = {
             "strong_trend": TrendPullbackStrategy(rsi_threshold=40, sl_atr_mult=1.5, rr_ratio=2.0),
             "weak_trend": TrendPullbackStrategy(rsi_threshold=35, sl_atr_mult=1.5, rr_ratio=1.5),
-            "high_volatility": BreakoutStrategy(bb_width_threshold=0.015, adx_threshold=20, dt_threshold=0),
+            "high_volatility": BreakoutStrategy(bb_width_threshold=0.015, adx_threshold=20),
             "range": LiquiditySweepStrategy()
         }
         self.active_strategy = self.strategies["weak_trend"]
@@ -244,7 +246,7 @@ class LiveEngine:
         take_profit = signal.get("take_profit", None)
         
         current_balance = await self.executor.get_balance("USDT")
-        logger.info(f"Обработка сигнала {side}. Текущий баланс: {current_balance} USDT")
+        logger.info(f"Обработка сигнала {side}. Текущий баланс: {current_balance} USDT. Плечо: {self.leverage}x")
         
         # Рассчитываем размер через риск-менеджера
         size_info = self.risk_manager.calculate_position_size(current_balance, current_price, stop_loss)
@@ -254,8 +256,9 @@ class LiveEngine:
             await self._notify(f"🚫 **РИСК-МЕНЕДЖМЕНТ**\nОрдер отменен: {size_info['reason']}")
             return
             
-        quote_qty = size_info["quote_qty"]
-        base_qty = size_info["base_qty"]
+        # Применяем плечо
+        quote_qty = size_info["quote_qty"] * self.leverage
+        base_qty = size_info["base_qty"] * self.leverage
         
         if self.paper_trading:
             logger.info(f"[PAPER TRADING] Открываем {side} на сумму {quote_qty} USDT. Entry: {current_price}, SL: {stop_loss}, TP: {take_profit}")

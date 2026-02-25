@@ -5,3 +5,7 @@ class SettingsFSM(StatesGroup):
     waiting_for_symbol = State()
     waiting_for_timeframe = State()
     waiting_for_risk = State()
+    waiting_for_leverage = State()
+
+class PairFSM(StatesGroup):
+    waiting_for_add_symbol = State()

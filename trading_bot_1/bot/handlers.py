@@ -5,26 +5,37 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 
-from bot.states import SettingsFSM
+from bot.states import SettingsFSM, PairFSM
 from bot.settings import bot_settings
 
 logger = logging.getLogger("telegram_handlers")
 
 router = Router()
 
+# --- МЕНЕДЖЕР ДВИЖКОВ ---
+from core.execution.engine_manager import EngineManager
+
+_engine_manager: EngineManager = None
+
+
 def get_main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📊 Статус")],
             [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="🧪 Тест Стратегий")],
+            [KeyboardButton(text="➕ Добавить пару"), KeyboardButton(text="➖ Убрать пару")],
             [KeyboardButton(text="🚀 ЗАПУСК БОТА"), KeyboardButton(text="🛑 СТОП")]
         ],
         resize_keyboard=True
     )
 
+
+# --- /start ---
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
+    pairs_str = ", ".join(bot_settings["symbols"])
     welcome_text = (
         "👋 Добро пожаловать в **Hype Bot (v2)**!\n\n"
         "Я автономный торговый бот для фьючерсов на MEXC.\n"
@@ -32,26 +43,49 @@ async def cmd_start(message: Message, state: FSMContext):
         "📈 *Trend Pullback*\n"
         "⚡️ *Volatility Breakout*\n"
         "🧲 *Liquidity Sweep Reversal*\n\n"
+        f"🔧 Текущие пары: `{pairs_str}`\n"
+        f"⚙️ Плечо: `{bot_settings['leverage']}x`\n\n"
         "Используйте меню ниже для навигации."
     )
     await message.answer(welcome_text, reply_markup=get_main_keyboard())
+
+
+# --- СТАТУС ---
 
 @router.message(F.text == "📊 Статус")
 async def cmd_status(message: Message, state: FSMContext):
     await state.clear()
     
-    current_regime = _engine_instance.current_regime if _engine_instance else "Не запущен"
-    
-    text = (
-        "📊 **ТЕКУЩИЙ СТАТУС**\n\n"
-        f"Статус движка: `{'🟢 Активен' if _engine_instance else '🛑 Остановлен'}`\n"
-        f"Фаза рынка: `{current_regime}`\n"
-        f"Режим бота: `{bot_settings['mode'].upper()}`\n"
-        f"Монета: `{bot_settings['symbol']}`\n"
-        f"Таймфрейм: `{bot_settings['timeframe']}m`\n"
-        f"Риск на сделку: `{bot_settings['risk_percent']}%`\n"
-    )
+    if _engine_manager and _engine_manager.is_running:
+        statuses = _engine_manager.get_status()
+        lines = ["📊 **АКТИВНЫЕ ДВИЖКИ**\n"]
+        for s in statuses:
+            pos_icon = "🟢" if s["has_position"] else "⚪️"
+            pos_text = f"{s['position_side']}" if s["has_position"] else "Нет"
+            lines.append(
+                f"{pos_icon} `{s['symbol']}` | "
+                f"Режим: `{s['regime']}` | "
+                f"Стратегия: `{s['strategy']}` | "
+                f"Плечо: `{s['leverage']}x` | "
+                f"Позиция: `{pos_text}`"
+            )
+        lines.append(f"\n⚙️ Режим бота: `{bot_settings['mode'].upper()}`")
+        lines.append(f"Таймфрейм: `{bot_settings['timeframe']}m`")
+        lines.append(f"Риск: `{bot_settings['risk_percent']}%`")
+        text = "\n".join(lines)
+    else:
+        pairs_str = ", ".join(bot_settings["symbols"])
+        text = (
+            "📊 **ТЕКУЩИЙ СТАТУС**\n\n"
+            f"Статус движка: `🛑 Остановлен`\n"
+            f"Режим бота: `{bot_settings['mode'].upper()}`\n"
+            f"Пары: `{pairs_str}`\n"
+            f"Таймфрейм: `{bot_settings['timeframe']}m`\n"
+            f"Плечо: `{bot_settings['leverage']}x`\n"
+            f"Риск на сделку: `{bot_settings['risk_percent']}%`\n"
+        )
     await message.answer(text, reply_markup=get_main_keyboard())
+
 
 # --- НАСТРОЙКИ (FSM) ---
 
@@ -66,23 +100,17 @@ async def cmd_settings(message: Message, state: FSMContext):
 
 @router.message(SettingsFSM.waiting_for_mode)
 async def process_mode(message: Message, state: FSMContext):
-    mode_text = message.text.split()[0].lower() # "PAPER (Тест)" -> "paper"
+    mode_text = message.text.split()[0].lower()
     if mode_text not in ["paper", "live", "signals"]:
         await message.answer("Пожалуйста, выберите режим кнопкой.")
         return
         
     bot_settings["mode"] = mode_text
-    await message.answer("Режим сохранен.\n\nВведите торговую пару (например, `SOL_USDT` или `BTC_USDT`):", reply_markup=ReplyKeyboardRemove())
-    await state.set_state(SettingsFSM.waiting_for_symbol)
-
-@router.message(SettingsFSM.waiting_for_symbol)
-async def process_symbol(message: Message, state: FSMContext):
-    bot_settings["symbol"] = message.text.strip().upper()
     
     kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="5"), KeyboardButton(text="15")]
     ], resize_keyboard=True)
-    await message.answer("Сохранено.\n\nВыберите таймфрейм (в минутах):", reply_markup=kb)
+    await message.answer("Режим сохранен.\n\nВыберите таймфрейм (в минутах):", reply_markup=kb)
     await state.set_state(SettingsFSM.waiting_for_timeframe)
 
 @router.message(SettingsFSM.waiting_for_timeframe)
@@ -110,16 +138,120 @@ async def process_risk(message: Message, state: FSMContext):
         return
         
     bot_settings["risk_percent"] = risk
-    await message.answer("✅ Отлично! Настройки сохранены.", reply_markup=get_main_keyboard())
+    
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="1x"), KeyboardButton(text="3x"), KeyboardButton(text="5x")],
+        [KeyboardButton(text="10x"), KeyboardButton(text="20x")]
+    ], resize_keyboard=True)
+    await message.answer("Сохранено.\n\nВыберите кредитное плечо:", reply_markup=kb)
+    await state.set_state(SettingsFSM.waiting_for_leverage)
+
+@router.message(SettingsFSM.waiting_for_leverage)
+async def process_leverage(message: Message, state: FSMContext):
+    text = message.text.strip().lower().replace("x", "")
+    try:
+        lev = int(text)
+        if lev not in [1, 3, 5, 10, 20]:
+            raise ValueError
+    except ValueError:
+        await message.answer("Пожалуйста, выберите плечо кнопкой.")
+        return
+    
+    bot_settings["leverage"] = lev
+    pairs_str = ", ".join(bot_settings["symbols"])
+    await message.answer(
+        f"✅ Настройки сохранены!\n\n"
+        f"Режим: `{bot_settings['mode'].upper()}`\n"
+        f"Пары: `{pairs_str}`\n"
+        f"Таймфрейм: `{bot_settings['timeframe']}m`\n"
+        f"Риск: `{bot_settings['risk_percent']}%`\n"
+        f"Плечо: `{lev}x`",
+        reply_markup=get_main_keyboard()
+    )
     await state.clear()
 
-# --- ПУСТЫШКИ ДЛЯ КНОПОК ЗАПУСКА И ТЕСТОВ (будут реализованы в сл. шагах) ---
 
-from core.execution.live_engine import LiveEngine
-from core.strategies.trend_pullback import TrendPullbackStrategy
+# --- УПРАВЛЕНИЕ ПАРАМИ ---
 
-_engine_task: asyncio.Task = None
-_engine_instance: LiveEngine = None
+@router.message(F.text == "➕ Добавить пару")
+async def cmd_add_pair(message: Message, state: FSMContext):
+    await state.clear()
+    pairs_str = ", ".join(bot_settings["symbols"])
+    await message.answer(
+        f"📝 Текущие пары: `{pairs_str}`\n\n"
+        "Введите символ для добавления (например, `BTC_USDT`):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await state.set_state(PairFSM.waiting_for_add_symbol)
+
+@router.message(PairFSM.waiting_for_add_symbol)
+async def process_add_symbol(message: Message, state: FSMContext):
+    symbol = message.text.strip().upper()
+    
+    if not symbol.endswith("USDT") and not symbol.endswith("_USDT"):
+        await message.answer("Неверный формат. Пара должна оканчиваться на USDT (напр. `SOL_USDT`).")
+        return
+    
+    # Нормализуем формат
+    if "_" not in symbol and symbol.endswith("USDT"):
+        symbol = f"{symbol[:-4]}_USDT"
+    
+    if symbol in bot_settings["symbols"]:
+        await message.answer(f"⚠️ Пара `{symbol}` уже в списке.", reply_markup=get_main_keyboard())
+        await state.clear()
+        return
+    
+    bot_settings["symbols"].append(symbol)
+    pairs_str = ", ".join(bot_settings["symbols"])
+    await message.answer(f"✅ Пара `{symbol}` добавлена!\n\nТекущий список: `{pairs_str}`", reply_markup=get_main_keyboard())
+    await state.clear()
+
+
+@router.message(F.text == "➖ Убрать пару")
+async def cmd_remove_pair(message: Message, state: FSMContext):
+    await state.clear()
+    symbols = bot_settings["symbols"]
+    
+    if len(symbols) == 0:
+        await message.answer("⚠️ Список пар пуст.", reply_markup=get_main_keyboard())
+        return
+    
+    if len(symbols) == 1:
+        await message.answer(f"⚠️ Нельзя удалить последнюю пару (`{symbols[0]}`). Добавьте другую сначала.", reply_markup=get_main_keyboard())
+        return
+    
+    # Создаем кнопки с символами для удаления
+    kb_buttons = [[KeyboardButton(text=f"🗑 {s}")] for s in symbols]
+    kb_buttons.append([KeyboardButton(text="❌ Отмена")])
+    kb = ReplyKeyboardMarkup(keyboard=kb_buttons, resize_keyboard=True)
+    await message.answer("Выберите пару для удаления:", reply_markup=kb)
+
+
+@router.message(F.text.startswith("🗑 "))
+async def process_remove_pair(message: Message, state: FSMContext):
+    symbol = message.text.replace("🗑 ", "").strip()
+    
+    if symbol in bot_settings["symbols"]:
+        bot_settings["symbols"].remove(symbol)
+        
+        # Если движок запущен, останавливаем эту пару
+        global _engine_manager
+        if _engine_manager and symbol in _engine_manager.engines:
+            await _engine_manager.remove_pair(symbol)
+            await message.answer(f"🛑 Движок для `{symbol}` остановлен.")
+        
+        pairs_str = ", ".join(bot_settings["symbols"])
+        await message.answer(f"✅ Пара `{symbol}` удалена.\n\nОсталось: `{pairs_str}`", reply_markup=get_main_keyboard())
+    else:
+        await message.answer("⚠️ Пара не найдена.", reply_markup=get_main_keyboard())
+
+@router.message(F.text == "❌ Отмена")
+async def process_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Отменено.", reply_markup=get_main_keyboard())
+
+
+# --- ЗАПУСК / СТОП ---
 
 async def send_tg_notification(text: str):
     """Callback для LiveEngine, чтобы он мог писать в Telegram"""
@@ -131,52 +263,76 @@ async def send_tg_notification(text: str):
         except Exception:
             pass
 
+
 @router.message(F.text == "🚀 ЗАПУСК БОТА")
 async def cmd_start_bot(message: Message, state: FSMContext):
-    global _engine_task, _engine_instance
+    global _engine_manager
     await state.clear()
     
-    if _engine_task and not _engine_task.done():
+    if _engine_manager and _engine_manager.is_running:
         await message.answer("⚠️ Бот УЖЕ запущен!")
         return
         
     bot_settings["chat_id"] = message.chat.id
     mode = bot_settings["mode"]
-    symbol = bot_settings["symbol"]
+    symbols = bot_settings["symbols"]
     tf = bot_settings["timeframe"]
+    leverage = bot_settings["leverage"]
     
-    await message.answer(f"🚀 Инициализация движка для `{symbol}` ({tf}m) в режиме `{mode.upper()}`...")
+    if not symbols:
+        await message.answer("⚠️ Список пар пуст. Добавьте хотя бы одну пару.")
+        return
     
-    # Создаем движок
-    paper_trading = True if mode != "live" else False
-    _engine_instance = LiveEngine(
-        symbol=symbol, 
-        timeframe_minutes=tf, 
-        paper_trading=paper_trading,
-        tg_callback=send_tg_notification if mode in ["signals", "paper", "live"] else None
+    pairs_str = ", ".join(symbols)
+    await message.answer(
+        f"🚀 Инициализация движков...\n"
+        f"Пары: `{pairs_str}`\n"
+        f"Таймфрейм: `{tf}m` | Плечо: `{leverage}x` | Режим: `{mode.upper()}`"
     )
     
-    is_ready = await _engine_instance.initialize()
-    if not is_ready:
-        await message.answer("❌ Ошибка инициализации Live Engine (проверьте логи).")
-        return
-        
-    # Запускаем в фоне
-    _engine_task = asyncio.create_task(_engine_instance.run_forever())
-    await message.answer("✅ **Live Engine успешно запущен и слушает потоки!**")
+    paper_trading = mode != "live"
+    _engine_manager = EngineManager()
+    
+    success_count = 0
+    for symbol in symbols:
+        ok = await _engine_manager.add_pair(
+            symbol=symbol,
+            timeframe=tf,
+            leverage=leverage,
+            paper_trading=paper_trading,
+            tg_callback=send_tg_notification
+        )
+        if ok:
+            success_count += 1
+            await message.answer(f"✅ `{symbol}` — движок запущен")
+        else:
+            await message.answer(f"❌ `{symbol}` — ошибка инициализации")
+    
+    if success_count > 0:
+        await message.answer(
+            f"🟢 **Запущено {success_count}/{len(symbols)} движков!**\n"
+            "Слушаю потоки и жду сигналы..."
+        )
+    else:
+        await message.answer("❌ Ни один движок не запустился. Проверьте логи.")
+        _engine_manager = None
+
 
 @router.message(F.text == "🛑 СТОП")
 async def cmd_stop_bot(message: Message, state: FSMContext):
-    global _engine_task, _engine_instance
+    global _engine_manager
     await state.clear()
     
-    if _engine_task and not _engine_task.done():
-        _engine_task.cancel()
-        _engine_task = None
-        _engine_instance = None
-        await message.answer("🛑 Бот остановлен.")
+    if _engine_manager and _engine_manager.is_running:
+        count = len(_engine_manager.engines)
+        await _engine_manager.stop_all()
+        _engine_manager = None
+        await message.answer(f"🛑 Остановлено {count} движков.")
     else:
         await message.answer("⚠️ Бот и так не запущен.")
+
+
+# --- ТЕСТ СТРАТЕГИЙ ---
 
 from core.backtest.optimizer import StrategyOptimizer
 from core.strategies.trend_pullback import TrendPullbackStrategy
@@ -184,41 +340,42 @@ from core.strategies.breakout import BreakoutStrategy
 from core.strategies.liquidity_sweep import LiquiditySweepStrategy
 
 @router.message(F.text == "🧪 Тест Стратегий")
-async def cmd_test(message: Message, state: FSMContext):
+async def cmd_test_strategies(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer(f"⏳ Начинаю скачивание истории и бэктест для `{bot_settings['symbol']}` на `{bot_settings['timeframe']}m`...\nЭто займет около 10-15 секунд.")
     
-    # Запускаем в фоне, чтобы не блочить бота
-    asyncio.create_task(run_optimizer_and_report(message))
+    # Тестируем на первой паре из списка
+    symbol = bot_settings["symbols"][0] if bot_settings["symbols"] else "SOL_USDT"
+    tf = bot_settings["timeframe"]
+    await message.answer(
+        f"⏳ Запускаю бэктест на `{symbol}` ({tf}m)...\n"
+        "Это может занять пару минут. Ожидайте отчет.",
+        reply_markup=get_main_keyboard()
+    )
+    
+    asyncio.create_task(run_optimizer_and_report(message, symbol, tf))
 
-async def run_optimizer_and_report(message: Message):
+
+async def run_optimizer_and_report(message: Message, symbol: str, tf: int):
     import pandas as pd
     from core.data.historical import MEXCHistoricalDownloader
     
-    symbol = bot_settings['symbol']
-    tf = bot_settings['timeframe']
-    
     try:
-        # 1. Скачиваем данные
         df = await MEXCHistoricalDownloader.get_klines(symbol, tf, limit=3000)
         
-        # 2. Настраиваем сетки для оптимизатора (по одной стратегии для теста)
-        # Для скорости возьмем TrendPullback
         param_grid = {
             'rsi_threshold': [30, 40],
             'sl_atr_mult': [1.0, 1.5],
             'rr_ratio': [1.5, 2.0]
         }
         
-        optimizer = StrategyOptimizer(data=df, strategy_class=TrendPullbackStrategy, param_grid=param_grid)
-        results = optimizer.run_optimization()
+        optimizer = StrategyOptimizer(data=df, strategy_class=TrendPullbackStrategy)
+        results = optimizer.optimize(param_grid=param_grid)
         
         if not results:
             await message.answer("❌ Бэктест не нашел прибыльных параметров (сделок нет). Market is dead.")
             return
             
-        # Берем лучший по ROI
-        best = max(results, key=lambda x: x['ROI_%'])
+        best = max(results, key=lambda x: x['roi'])
         
         report = (
             f"✅ **Бэктест Завершен!**\n"
@@ -226,11 +383,11 @@ async def run_optimizer_and_report(message: Message):
             f"🏆 **Лучшая Стратегия:** `Trend Pullback`\n"
             f"⚙️ **Параметры:** `RSI={best['params']['rsi_threshold']}, SL={best['params']['sl_atr_mult']}ATR, RR={best['params']['rr_ratio']}`\n\n"
             f"📊 **Результаты (на 3000 свечей):**\n"
-            f"• Профит: `{best['ROI_%']:.2f}%`\n"
-            f"• Винрейт: `{best['WinRate_%']:.2f}%`\n"
-            f"• Сделок: `{best['Total_Trades']}`\n"
-            f"• Макс Просадка: `{best['Max_Drawdown_%']:.2f}%`\n"
-            f"• Профит Фактор: `{best['Profit_Factor']:.2f}`\n\n"
+            f"• Профит: `{best['roi']:.2f}%`\n"
+            f"• Винрейт: `{best['winrate']:.2f}%`\n"
+            f"• Сделок: `{best['total_trades']}`\n"
+            f"• Макс Просадка: `{best['max_drawdown']:.2f}%`\n"
+            f"• Профит Фактор: `{best['profit_factor']:.2f}`\n\n"
             f"💡 *Рекомендация:* Сохраните эти параметры."
         )
         
@@ -238,4 +395,4 @@ async def run_optimizer_and_report(message: Message):
         
     except Exception as e:
         logger.error(f"Ошибка бэктеста: {e}")
-        await message.answer(f"❌ Произошла ошибка при тестировании: {e}")
+        await message.answer(f"❌ Произошла ошибка при тестировании. Проверьте логи движка.", parse_mode=None)

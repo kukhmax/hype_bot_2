@@ -117,13 +117,43 @@ class BacktestEngine:
     def _print_metrics(self):
         """Вывод простой статистики."""
         total_trades = len(self.trades)
-        wins = len([t for t in self.trades if t['pnl'] > 0])
-        winrate = (wins / total_trades * 100) if total_trades > 0 else 0
+        wins = [t for t in self.trades if t['pnl'] > 0]
+        losses = [t for t in self.trades if t['pnl'] < 0]
+        
+        winrate = (len(wins) / total_trades * 100) if total_trades > 0 else 0
         roi = ((self.balance - self.initial_balance) / self.initial_balance) * 100
+        
+        # Расчет Profit Factor
+        gross_profit = sum(t['pnl'] for t in wins)
+        gross_loss = abs(sum(t['pnl'] for t in losses))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else (gross_profit if gross_profit > 0 else 0)
+        
+        # Расчет Max Drawdown (упрощенно по сделкам)
+        max_drawdown = 0.0
+        peak = self.initial_balance
+        current_balance = self.initial_balance
+        for t in self.trades:
+            current_balance += t['pnl']
+            if current_balance > peak:
+                peak = current_balance
+            dd = (peak - current_balance) / peak * 100
+            if dd > max_drawdown:
+                max_drawdown = dd
+
+        self.metrics = {
+            "total_trades": total_trades,
+            "winrate": round(winrate, 2),
+            "roi": round(roi, 2),
+            "final_balance": round(self.balance, 2),
+            "profit_factor": round(float(profit_factor), 2),
+            "max_drawdown": round(float(max_drawdown), 2)
+        }
         
         logger.info("\n--- MVP Backtest Metrics ---")
         logger.info(f"Total Trades: {total_trades}")
         logger.info(f"Winrate: {winrate:.1f}%")
         logger.info(f"Final Balance: {self.balance:.2f} USDT")
         logger.info(f"ROI: {roi:.2f}%")
+        logger.info(f"Profit Factor: {profit_factor:.2f}")
+        logger.info(f"Max Drawdown: {max_drawdown:.2f}%")
         logger.info("----------------------------\n")

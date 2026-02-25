@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   redis:
     image: redis:7-alpine
@@ -18,10 +16,13 @@ services:
       - redis
     volumes:
       - .:/app
+    env_file:
+      - .env
     environment:
       - REDIS_URL=redis://redis:6379/0
       - LOG_LEVEL=DEBUG
       - EXCHANGE=MEXC
+    command: python3 -m bot.telegram_bot
 
 volumes:
   redis_data:

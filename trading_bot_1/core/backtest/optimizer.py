@@ -42,28 +42,16 @@ class StrategyOptimizer:
             # Инициализируем стратегию
             strategy_instance = self.strategy_class(**kwargs)
             
-            # Запускаем движок (отключаем логирование каждой сделки для скорости)
-            # Чтобы не засорять логи, можно было бы сделать BacktestEngine silent, 
-            # но мы оставим, просто logger.setLevel можно менять внешне.
+            # Запускаем движок
             engine = BacktestEngine(data=self.data, strategy=strategy_instance, initial_balance=self.initial_balance)
             engine.run()
             
-            # Собираем метрики
-            total_trades = len(engine.trades)
-            wins = len([t for t in engine.trades if t['pnl'] > 0])
-            winrate = (wins / total_trades * 100) if total_trades > 0 else 0
-            roi = ((engine.balance - self.initial_balance) / self.initial_balance) * 100
-            
-            result = {
-                "params": kwargs,
-                "total_trades": total_trades,
-                "winrate": round(winrate, 2),
-                "roi": round(roi, 2),
-                "final_balance": round(engine.balance, 2)
-            }
+            # Собираем все метрики из движка
+            result = engine.metrics
+            result["params"] = kwargs
             
             self.results.append(result)
-            logger.info(f"[{idx+1}/{total_runs}] {kwargs} -> ROI: {roi:.2f}%, Trades: {total_trades}, Winrate: {winrate:.1f}%")
+            logger.info(f"[{idx+1}/{total_runs}] {kwargs} -> ROI: {result['roi']:.2f}%, Trades: {result['total_trades']}, Winrate: {result['winrate']:.1f}%")
 
         # Сортируем по ROI по убыванию
         self.results.sort(key=lambda x: x["roi"], reverse=True)
