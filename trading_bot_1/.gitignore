@@ -105,4 +105,4 @@ htmlcov/
 *.bak
 *.tmp
 temp/
-tmp/
+tmp/logs/
