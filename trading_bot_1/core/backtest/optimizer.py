@@ -15,7 +15,10 @@ class StrategyOptimizer:
     """
     
     def __init__(self, data: pd.DataFrame, strategy_class: Type[BaseStrategy], initial_balance: float = 1000.0):
-        self.original_data = data
+        # Храним только базовые OHLCV колонки, чтобы избежать загрязнения индикаторами
+        base_cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        available = [c for c in base_cols if c in data.columns]
+        self.original_data = data[available].copy(deep=True)
         self.strategy_class = strategy_class
         self.initial_balance = initial_balance
         self.results: List[Dict[str, Any]] = []
@@ -42,8 +45,8 @@ class StrategyOptimizer:
             # Инициализируем стратегию
             strategy_instance = self.strategy_class(**kwargs)
             
-            # Запускаем движок (свежая копия данных для каждого прогона)
-            data_copy = self.original_data.copy()
+            # Свежая глубокая копия чистых OHLCV данных для каждого прогона
+            data_copy = self.original_data.copy(deep=True)
             engine = BacktestEngine(data=data_copy, strategy=strategy_instance, initial_balance=self.initial_balance)
             engine.run()
             
