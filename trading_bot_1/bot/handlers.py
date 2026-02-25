@@ -71,9 +71,9 @@ async def cmd_status(message: Message, state: FSMContext):
             pos_text = f"{s['position_side']}" if s["has_position"] else "—"
             lines.append(
                 f"{pos_icon} `{s['symbol']}` | "
-                f"{s['regime']}` | "
+                f"`{s['regime']}` | "
                 f"`{s['strategy']}` | "
-                f"{s['leverage']}x | "
+                f"`{s['leverage']}x` | "
                 f"Поз: `{pos_text}`"
             )
         lines.append(f"\n⚙️ Режим: `{bot_settings['mode'].upper()}` | Риск: `{bot_settings['risk_percent']}%`")
