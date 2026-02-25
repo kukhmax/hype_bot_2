@@ -5,7 +5,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 
-from bot.states import SettingsFSM, PairFSM
+from bot.states import SettingsFSM, PairFSM, TestFSM
 from bot.settings import bot_settings
 
 logger = logging.getLogger("telegram_handlers")
@@ -30,21 +30,28 @@ def get_main_keyboard():
     )
 
 
+def _pairs_summary() -> str:
+    """Формирует строку со списком пар и их настройками."""
+    pairs = bot_settings["pairs"]
+    if not pairs:
+        return "Пары не добавлены"
+    lines = []
+    for sym, cfg in pairs.items():
+        lines.append(f"• `{sym}` — {cfg['tf']}m, {cfg['leverage']}x")
+    return "\n".join(lines)
+
+
 # --- /start ---
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    pairs_str = ", ".join(bot_settings["symbols"])
     welcome_text = (
         "👋 Добро пожаловать в **Hype Bot (v2)**!\n\n"
         "Я автономный торговый бот для фьючерсов на MEXC.\n"
         "Мой арсенал:\n"
-        "📈 *Trend Pullback*\n"
-        "⚡️ *Volatility Breakout*\n"
-        "🧲 *Liquidity Sweep Reversal*\n\n"
-        f"🔧 Текущие пары: `{pairs_str}`\n"
-        f"⚙️ Плечо: `{bot_settings['leverage']}x`\n\n"
+        "📈 *Trend Pullback* | ⚡️ *Volatility Breakout* | 🧲 *Liquidity Sweep*\n\n"
+        f"🔧 **Пары:**\n{_pairs_summary()}\n\n"
         "Используйте меню ниже для навигации."
     )
     await message.answer(welcome_text, reply_markup=get_main_keyboard())
@@ -55,39 +62,34 @@ async def cmd_start(message: Message, state: FSMContext):
 @router.message(F.text == "📊 Статус")
 async def cmd_status(message: Message, state: FSMContext):
     await state.clear()
-    
+
     if _engine_manager and _engine_manager.is_running:
         statuses = _engine_manager.get_status()
         lines = ["📊 **АКТИВНЫЕ ДВИЖКИ**\n"]
         for s in statuses:
             pos_icon = "🟢" if s["has_position"] else "⚪️"
-            pos_text = f"{s['position_side']}" if s["has_position"] else "Нет"
+            pos_text = f"{s['position_side']}" if s["has_position"] else "—"
             lines.append(
                 f"{pos_icon} `{s['symbol']}` | "
-                f"Режим: `{s['regime']}` | "
-                f"Стратегия: `{s['strategy']}` | "
-                f"Плечо: `{s['leverage']}x` | "
-                f"Позиция: `{pos_text}`"
+                f"{s['regime']}` | "
+                f"`{s['strategy']}` | "
+                f"{s['leverage']}x | "
+                f"Поз: `{pos_text}`"
             )
-        lines.append(f"\n⚙️ Режим бота: `{bot_settings['mode'].upper()}`")
-        lines.append(f"Таймфрейм: `{bot_settings['timeframe']}m`")
-        lines.append(f"Риск: `{bot_settings['risk_percent']}%`")
+        lines.append(f"\n⚙️ Режим: `{bot_settings['mode'].upper()}` | Риск: `{bot_settings['risk_percent']}%`")
         text = "\n".join(lines)
     else:
-        pairs_str = ", ".join(bot_settings["symbols"])
         text = (
             "📊 **ТЕКУЩИЙ СТАТУС**\n\n"
-            f"Статус движка: `🛑 Остановлен`\n"
-            f"Режим бота: `{bot_settings['mode'].upper()}`\n"
-            f"Пары: `{pairs_str}`\n"
-            f"Таймфрейм: `{bot_settings['timeframe']}m`\n"
-            f"Плечо: `{bot_settings['leverage']}x`\n"
-            f"Риск на сделку: `{bot_settings['risk_percent']}%`\n"
+            f"Движок: `🛑 Остановлен`\n"
+            f"Режим: `{bot_settings['mode'].upper()}`\n"
+            f"Риск: `{bot_settings['risk_percent']}%`\n\n"
+            f"**Пары:**\n{_pairs_summary()}"
         )
     await message.answer(text, reply_markup=get_main_keyboard())
 
 
-# --- НАСТРОЙКИ (FSM) ---
+# --- ГЛОБАЛЬНЫЕ НАСТРОЙКИ (режим + риск) ---
 
 @router.message(F.text == "⚙️ Настройки")
 async def cmd_settings(message: Message, state: FSMContext):
@@ -104,27 +106,9 @@ async def process_mode(message: Message, state: FSMContext):
     if mode_text not in ["paper", "live", "signals"]:
         await message.answer("Пожалуйста, выберите режим кнопкой.")
         return
-        
-    bot_settings["mode"] = mode_text
-    
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="5"), KeyboardButton(text="15")]
-    ], resize_keyboard=True)
-    await message.answer("Режим сохранен.\n\nВыберите таймфрейм (в минутах):", reply_markup=kb)
-    await state.set_state(SettingsFSM.waiting_for_timeframe)
 
-@router.message(SettingsFSM.waiting_for_timeframe)
-async def process_timeframe(message: Message, state: FSMContext):
-    try:
-        tf = int(message.text.strip())
-        if tf not in [1, 5, 15, 30, 60]:
-            raise ValueError
-    except ValueError:
-        await message.answer("Неверный формат. Выберите 5 или 15.")
-        return
-        
-    bot_settings["timeframe"] = tf
-    await message.answer("Сохранено.\n\nВведите риск на сделку в процентах (например, `2.0` для 2%):", reply_markup=ReplyKeyboardRemove())
+    bot_settings["mode"] = mode_text
+    await message.answer("Сохранено.\n\nВведите риск на сделку в % (например `2.0`):", reply_markup=ReplyKeyboardRemove())
     await state.set_state(SettingsFSM.waiting_for_risk)
 
 @router.message(SettingsFSM.waiting_for_risk)
@@ -136,18 +120,77 @@ async def process_risk(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("Некорректное значение. Введите число (например, 2.0).")
         return
-        
+
     bot_settings["risk_percent"] = risk
-    
+    await message.answer(
+        f"✅ Настройки сохранены!\n\n"
+        f"Режим: `{bot_settings['mode'].upper()}`\n"
+        f"Риск: `{risk}%`\n\n"
+        f"**Пары:**\n{_pairs_summary()}",
+        reply_markup=get_main_keyboard()
+    )
+    await state.clear()
+
+
+# --- УПРАВЛЕНИЕ ПАРАМИ (с индивидуальными TF и Leverage) ---
+
+@router.message(F.text == "➕ Добавить пару")
+async def cmd_add_pair(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        f"📝 **Текущие пары:**\n{_pairs_summary()}\n\n"
+        "Введите символ для добавления (например `BTC_USDT`):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await state.set_state(PairFSM.waiting_for_symbol)
+
+@router.message(PairFSM.waiting_for_symbol)
+async def process_pair_symbol(message: Message, state: FSMContext):
+    symbol = message.text.strip().upper()
+
+    if not symbol.endswith("USDT") and not symbol.endswith("_USDT"):
+        await message.answer("Неверный формат. Пара должна оканчиваться на USDT (напр. `SOL_USDT`).")
+        return
+
+    # Нормализуем
+    if "_" not in symbol and symbol.endswith("USDT"):
+        symbol = f"{symbol[:-4]}_USDT"
+
+    if symbol in bot_settings["pairs"]:
+        await message.answer(f"⚠️ Пара `{symbol}` уже добавлена.", reply_markup=get_main_keyboard())
+        await state.clear()
+        return
+
+    await state.update_data(new_symbol=symbol)
+
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="1"), KeyboardButton(text="5"), KeyboardButton(text="15")],
+        [KeyboardButton(text="30"), KeyboardButton(text="60")]
+    ], resize_keyboard=True)
+    await message.answer(f"Пара: `{symbol}`\n\nВыберите таймфрейм (в минутах):", reply_markup=kb)
+    await state.set_state(PairFSM.waiting_for_timeframe)
+
+@router.message(PairFSM.waiting_for_timeframe)
+async def process_pair_tf(message: Message, state: FSMContext):
+    try:
+        tf = int(message.text.strip())
+        if tf not in [1, 5, 15, 30, 60]:
+            raise ValueError
+    except ValueError:
+        await message.answer("Неверный формат. Выберите кнопкой (1, 5, 15, 30, 60).")
+        return
+
+    await state.update_data(new_tf=tf)
+
     kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="1x"), KeyboardButton(text="3x"), KeyboardButton(text="5x")],
         [KeyboardButton(text="10x"), KeyboardButton(text="20x")]
     ], resize_keyboard=True)
-    await message.answer("Сохранено.\n\nВыберите кредитное плечо:", reply_markup=kb)
-    await state.set_state(SettingsFSM.waiting_for_leverage)
+    await message.answer(f"Таймфрейм: `{tf}m`\n\nВыберите кредитное плечо:", reply_markup=kb)
+    await state.set_state(PairFSM.waiting_for_leverage)
 
-@router.message(SettingsFSM.waiting_for_leverage)
-async def process_leverage(message: Message, state: FSMContext):
+@router.message(PairFSM.waiting_for_leverage)
+async def process_pair_leverage(message: Message, state: FSMContext):
     text = message.text.strip().lower().replace("x", "")
     try:
         lev = int(text)
@@ -156,72 +199,37 @@ async def process_leverage(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("Пожалуйста, выберите плечо кнопкой.")
         return
-    
-    bot_settings["leverage"] = lev
-    pairs_str = ", ".join(bot_settings["symbols"])
+
+    data = await state.get_data()
+    symbol = data["new_symbol"]
+    tf = data["new_tf"]
+
+    bot_settings["pairs"][symbol] = {"tf": tf, "leverage": lev}
+
     await message.answer(
-        f"✅ Настройки сохранены!\n\n"
-        f"Режим: `{bot_settings['mode'].upper()}`\n"
-        f"Пары: `{pairs_str}`\n"
-        f"Таймфрейм: `{bot_settings['timeframe']}m`\n"
-        f"Риск: `{bot_settings['risk_percent']}%`\n"
-        f"Плечо: `{lev}x`",
+        f"✅ Пара `{symbol}` добавлена!\n"
+        f"Таймфрейм: `{tf}m` | Плечо: `{lev}x`\n\n"
+        f"**Все пары:**\n{_pairs_summary()}",
         reply_markup=get_main_keyboard()
     )
-    await state.clear()
-
-
-# --- УПРАВЛЕНИЕ ПАРАМИ ---
-
-@router.message(F.text == "➕ Добавить пару")
-async def cmd_add_pair(message: Message, state: FSMContext):
-    await state.clear()
-    pairs_str = ", ".join(bot_settings["symbols"])
-    await message.answer(
-        f"📝 Текущие пары: `{pairs_str}`\n\n"
-        "Введите символ для добавления (например, `BTC_USDT`):",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    await state.set_state(PairFSM.waiting_for_add_symbol)
-
-@router.message(PairFSM.waiting_for_add_symbol)
-async def process_add_symbol(message: Message, state: FSMContext):
-    symbol = message.text.strip().upper()
-    
-    if not symbol.endswith("USDT") and not symbol.endswith("_USDT"):
-        await message.answer("Неверный формат. Пара должна оканчиваться на USDT (напр. `SOL_USDT`).")
-        return
-    
-    # Нормализуем формат
-    if "_" not in symbol and symbol.endswith("USDT"):
-        symbol = f"{symbol[:-4]}_USDT"
-    
-    if symbol in bot_settings["symbols"]:
-        await message.answer(f"⚠️ Пара `{symbol}` уже в списке.", reply_markup=get_main_keyboard())
-        await state.clear()
-        return
-    
-    bot_settings["symbols"].append(symbol)
-    pairs_str = ", ".join(bot_settings["symbols"])
-    await message.answer(f"✅ Пара `{symbol}` добавлена!\n\nТекущий список: `{pairs_str}`", reply_markup=get_main_keyboard())
     await state.clear()
 
 
 @router.message(F.text == "➖ Убрать пару")
 async def cmd_remove_pair(message: Message, state: FSMContext):
     await state.clear()
-    symbols = bot_settings["symbols"]
-    
-    if len(symbols) == 0:
+    pairs = bot_settings["pairs"]
+
+    if len(pairs) == 0:
         await message.answer("⚠️ Список пар пуст.", reply_markup=get_main_keyboard())
         return
-    
-    if len(symbols) == 1:
-        await message.answer(f"⚠️ Нельзя удалить последнюю пару (`{symbols[0]}`). Добавьте другую сначала.", reply_markup=get_main_keyboard())
+
+    if len(pairs) == 1:
+        sym = list(pairs.keys())[0]
+        await message.answer(f"⚠️ Нельзя удалить последнюю пару (`{sym}`). Добавьте другую сначала.", reply_markup=get_main_keyboard())
         return
-    
-    # Создаем кнопки с символами для удаления
-    kb_buttons = [[KeyboardButton(text=f"🗑 {s}")] for s in symbols]
+
+    kb_buttons = [[KeyboardButton(text=f"🗑 {s}")] for s in pairs]
     kb_buttons.append([KeyboardButton(text="❌ Отмена")])
     kb = ReplyKeyboardMarkup(keyboard=kb_buttons, resize_keyboard=True)
     await message.answer("Выберите пару для удаления:", reply_markup=kb)
@@ -230,18 +238,19 @@ async def cmd_remove_pair(message: Message, state: FSMContext):
 @router.message(F.text.startswith("🗑 "))
 async def process_remove_pair(message: Message, state: FSMContext):
     symbol = message.text.replace("🗑 ", "").strip()
-    
-    if symbol in bot_settings["symbols"]:
-        bot_settings["symbols"].remove(symbol)
-        
-        # Если движок запущен, останавливаем эту пару
+
+    if symbol in bot_settings["pairs"]:
+        del bot_settings["pairs"][symbol]
+
         global _engine_manager
         if _engine_manager and symbol in _engine_manager.engines:
             await _engine_manager.remove_pair(symbol)
             await message.answer(f"🛑 Движок для `{symbol}` остановлен.")
-        
-        pairs_str = ", ".join(bot_settings["symbols"])
-        await message.answer(f"✅ Пара `{symbol}` удалена.\n\nОсталось: `{pairs_str}`", reply_markup=get_main_keyboard())
+
+        await message.answer(
+            f"✅ Пара `{symbol}` удалена.\n\n**Осталось:**\n{_pairs_summary()}",
+            reply_markup=get_main_keyboard()
+        )
     else:
         await message.answer("⚠️ Пара не найдена.", reply_markup=get_main_keyboard())
 
@@ -268,50 +277,45 @@ async def send_tg_notification(text: str):
 async def cmd_start_bot(message: Message, state: FSMContext):
     global _engine_manager
     await state.clear()
-    
+
     if _engine_manager and _engine_manager.is_running:
         await message.answer("⚠️ Бот УЖЕ запущен!")
         return
-        
+
     bot_settings["chat_id"] = message.chat.id
     mode = bot_settings["mode"]
-    symbols = bot_settings["symbols"]
-    tf = bot_settings["timeframe"]
-    leverage = bot_settings["leverage"]
-    
-    if not symbols:
+    pairs = bot_settings["pairs"]
+
+    if not pairs:
         await message.answer("⚠️ Список пар пуст. Добавьте хотя бы одну пару.")
         return
-    
-    pairs_str = ", ".join(symbols)
-    await message.answer(
-        f"🚀 Инициализация движков...\n"
-        f"Пары: `{pairs_str}`\n"
-        f"Таймфрейм: `{tf}m` | Плечо: `{leverage}x` | Режим: `{mode.upper()}`"
-    )
-    
+
+    lines = [f"🚀 Инициализация движков... Режим: `{mode.upper()}`\n"]
+    for sym, cfg in pairs.items():
+        lines.append(f"• `{sym}` — {cfg['tf']}m, {cfg['leverage']}x")
+    await message.answer("\n".join(lines))
+
     paper_trading = mode != "live"
     _engine_manager = EngineManager()
-    
+
     success_count = 0
-    for symbol in symbols:
+    for symbol, cfg in pairs.items():
         ok = await _engine_manager.add_pair(
             symbol=symbol,
-            timeframe=tf,
-            leverage=leverage,
+            timeframe=cfg["tf"],
+            leverage=cfg["leverage"],
             paper_trading=paper_trading,
             tg_callback=send_tg_notification
         )
         if ok:
             success_count += 1
-            await message.answer(f"✅ `{symbol}` — движок запущен")
+            await message.answer(f"✅ `{symbol}` ({cfg['tf']}m, {cfg['leverage']}x) — запущен")
         else:
             await message.answer(f"❌ `{symbol}` — ошибка инициализации")
-    
+
     if success_count > 0:
         await message.answer(
-            f"🟢 **Запущено {success_count}/{len(symbols)} движков!**\n"
-            "Слушаю потоки и жду сигналы..."
+            f"🟢 **Запущено {success_count}/{len(pairs)} движков!**\nСлушаю потоки и жду сигналы..."
         )
     else:
         await message.answer("❌ Ни один движок не запустился. Проверьте логи.")
@@ -322,7 +326,7 @@ async def cmd_start_bot(message: Message, state: FSMContext):
 async def cmd_stop_bot(message: Message, state: FSMContext):
     global _engine_manager
     await state.clear()
-    
+
     if _engine_manager and _engine_manager.is_running:
         count = len(_engine_manager.engines)
         await _engine_manager.stop_all()
@@ -332,57 +336,89 @@ async def cmd_stop_bot(message: Message, state: FSMContext):
         await message.answer("⚠️ Бот и так не запущен.")
 
 
-# --- ТЕСТ СТРАТЕГИЙ ---
+# --- ТЕСТ СТРАТЕГИЙ (выбор пары) ---
 
 from core.backtest.optimizer import StrategyOptimizer
 from core.strategies.trend_pullback import TrendPullbackStrategy
-from core.strategies.breakout import BreakoutStrategy
-from core.strategies.liquidity_sweep import LiquiditySweepStrategy
 
 @router.message(F.text == "🧪 Тест Стратегий")
 async def cmd_test_strategies(message: Message, state: FSMContext):
     await state.clear()
-    
-    # Тестируем на первой паре из списка
-    symbol = bot_settings["symbols"][0] if bot_settings["symbols"] else "SOL_USDT"
-    tf = bot_settings["timeframe"]
+    pairs = bot_settings["pairs"]
+
+    if not pairs:
+        await message.answer("⚠️ Добавьте хотя бы одну пару.", reply_markup=get_main_keyboard())
+        return
+
+    if len(pairs) == 1:
+        # Если пара одна — сразу тестим
+        symbol = list(pairs.keys())[0]
+        tf = pairs[symbol]["tf"]
+        await message.answer(
+            f"⏳ Запускаю бэктест `{symbol}` ({tf}m)...\nОжидайте отчёт.",
+            reply_markup=get_main_keyboard()
+        )
+        asyncio.create_task(run_optimizer_and_report(message, symbol, tf))
+    else:
+        # Даём выбрать пару
+        kb_buttons = [[KeyboardButton(text=f"🧪 {s}")] for s in pairs]
+        kb_buttons.append([KeyboardButton(text="❌ Отмена")])
+        kb = ReplyKeyboardMarkup(keyboard=kb_buttons, resize_keyboard=True)
+        await message.answer("Выберите пару для тестирования:", reply_markup=kb)
+        await state.set_state(TestFSM.waiting_for_pair_choice)
+
+
+@router.message(TestFSM.waiting_for_pair_choice)
+async def process_test_pair_choice(message: Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("Отменено.", reply_markup=get_main_keyboard())
+        return
+
+    symbol = message.text.replace("🧪 ", "").strip()
+    pairs = bot_settings["pairs"]
+
+    if symbol not in pairs:
+        await message.answer("⚠️ Пара не найдена. Выберите кнопкой.")
+        return
+
+    tf = pairs[symbol]["tf"]
+    await state.clear()
     await message.answer(
-        f"⏳ Запускаю бэктест на `{symbol}` ({tf}m)...\n"
-        "Это может занять пару минут. Ожидайте отчет.",
+        f"⏳ Запускаю бэктест `{symbol}` ({tf}m)...\nОжидайте отчёт.",
         reply_markup=get_main_keyboard()
     )
-    
     asyncio.create_task(run_optimizer_and_report(message, symbol, tf))
 
 
 async def run_optimizer_and_report(message: Message, symbol: str, tf: int):
-    import pandas as pd
     from core.data.historical import MEXCHistoricalDownloader
-    
+
     try:
         df = await MEXCHistoricalDownloader.get_klines(symbol, tf, limit=3000)
-        
+
         param_grid = {
             'rsi_threshold': [30, 40],
             'sl_atr_mult': [1.0, 1.5],
             'rr_ratio': [1.5, 2.0]
         }
-        
+
         optimizer = StrategyOptimizer(data=df, strategy_class=TrendPullbackStrategy)
         results = optimizer.optimize(param_grid=param_grid)
-        
+
         if not results:
-            await message.answer("❌ Бэктест не нашел прибыльных параметров (сделок нет). Market is dead.")
+            await message.answer("❌ Бэктест не нашел сделок. Рынок мёртв.")
             return
-            
+
         best = max(results, key=lambda x: x['roi'])
-        
+
         report = (
-            f"✅ **Бэктест Завершен!**\n"
+            f"✅ **Бэктест Завершён!**\n"
             f"Пара: `{symbol}` ({tf}m)\n\n"
             f"🏆 **Лучшая Стратегия:** `Trend Pullback`\n"
-            f"⚙️ **Параметры:** `RSI={best['params']['rsi_threshold']}, SL={best['params']['sl_atr_mult']}ATR, RR={best['params']['rr_ratio']}`\n\n"
-            f"📊 **Результаты (на 3000 свечей):**\n"
+            f"⚙️ **Параметры:** `RSI={best['params']['rsi_threshold']}, "
+            f"SL={best['params']['sl_atr_mult']}ATR, RR={best['params']['rr_ratio']}`\n\n"
+            f"📊 **Результаты (3000 свечей):**\n"
             f"• Профит: `{best['roi']:.2f}%`\n"
             f"• Винрейт: `{best['winrate']:.2f}%`\n"
             f"• Сделок: `{best['total_trades']}`\n"
@@ -390,9 +426,9 @@ async def run_optimizer_and_report(message: Message, symbol: str, tf: int):
             f"• Профит Фактор: `{best['profit_factor']:.2f}`\n\n"
             f"💡 *Рекомендация:* Сохраните эти параметры."
         )
-        
+
         await message.answer(report)
-        
+
     except Exception as e:
         logger.error(f"Ошибка бэктеста: {e}")
-        await message.answer(f"❌ Произошла ошибка при тестировании. Проверьте логи движка.", parse_mode=None)
+        await message.answer("❌ Произошла ошибка при тестировании. Проверьте логи.", parse_mode=None)

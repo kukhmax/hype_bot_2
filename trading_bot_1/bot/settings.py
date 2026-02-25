@@ -8,11 +8,12 @@ class BotSettings:
         if cls._instance is None:
             cls._instance = super(BotSettings, cls).__new__(cls)
             cls._instance.config: Dict[str, Any] = {
-                "mode": "paper", # paper / live / signals
-                "symbols": ["SOL_USDT"],  # Список активных пар
-                "timeframe": 15,
+                "mode": "paper",  # paper / live / signals
                 "risk_percent": 2.0,
-                "leverage": 5  # Кредитное плечо (1x, 3x, 5x, 10x, 20x)
+                # Пары с индивидуальными настройками: {symbol: {tf, leverage}}
+                "pairs": {
+                    "SOL_USDT": {"tf": 15, "leverage": 5}
+                }
             }
         return cls._instance
 
