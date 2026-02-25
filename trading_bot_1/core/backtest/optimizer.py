@@ -45,10 +45,19 @@ class StrategyOptimizer:
             # Инициализируем стратегию
             strategy_instance = self.strategy_class(**kwargs)
             
+            # DEBUG: проверяем оригинальные данные перед копированием
+            logger.debug(f"[DEBUG {idx+1}/{total_runs}] original_data id={id(self.original_data)}, cols={list(self.original_data.columns)}, shape={self.original_data.shape}")
+            
             # Свежая глубокая копия чистых OHLCV данных для каждого прогона
             data_copy = self.original_data.copy(deep=True)
+            
+            logger.debug(f"[DEBUG {idx+1}/{total_runs}] data_copy id={id(data_copy)}, cols={list(data_copy.columns)}, shape={data_copy.shape}")
+            
             engine = BacktestEngine(data=data_copy, strategy=strategy_instance, initial_balance=self.initial_balance)
             engine.run()
+            
+            # DEBUG: проверяем оригинальные данные ПОСЛЕ прогона
+            logger.debug(f"[DEBUG {idx+1}/{total_runs}] AFTER RUN original_data cols={list(self.original_data.columns)}, shape={self.original_data.shape}")
             
             # Собираем все метрики из движка
             result = engine.metrics

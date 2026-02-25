@@ -393,9 +393,14 @@ async def process_test_pair_choice(message: Message, state: FSMContext):
 
 async def run_optimizer_and_report(message: Message, symbol: str, tf: int):
     from core.data.historical import MEXCHistoricalDownloader
+    import pandas as pd
 
     try:
         df = await MEXCHistoricalDownloader.get_klines(symbol, tf, limit=3000)
+
+        # Сохраняем сырые данные как dict — полностью изолировано от pandas
+        raw_data = {col: df[col].tolist() for col in df.columns}
+        del df  # Освобождаем оригинальный DataFrame
 
         # --- Тестируем все 3 стратегии ---
         strategies_config = [
@@ -428,12 +433,13 @@ async def run_optimizer_and_report(message: Message, symbol: str, tf: int):
         all_results = []
 
         for strat_cfg in strategies_config:
-            optimizer = StrategyOptimizer(data=df.copy(), strategy_class=strat_cfg["class"])
+            # Создаём абсолютно новый DataFrame из сырых данных для каждой стратегии
+            fresh_df = pd.DataFrame(raw_data)
+            optimizer = StrategyOptimizer(data=fresh_df, strategy_class=strat_cfg["class"])
 
             if strat_cfg["grid"]:
                 results = optimizer.optimize(param_grid=strat_cfg["grid"])
             else:
-                # Стратегия без вариаций — один прогон
                 results = optimizer.optimize(param_grid={})
 
             # Фильтруем: оставляем только результаты с хотя бы 1 сделкой
