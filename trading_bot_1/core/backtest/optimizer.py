@@ -53,7 +53,7 @@ class StrategyOptimizer:
             
             logger.debug(f"[DEBUG {idx+1}/{total_runs}] data_copy id={id(data_copy)}, cols={list(data_copy.columns)}, shape={data_copy.shape}")
             
-            engine = BacktestEngine(data=data_copy, strategy=strategy_instance, initial_balance=self.initial_balance)
+            engine = BacktestEngine(data=data_copy, strategy=strategy_instance, initial_balance=self.initial_balance, verbose=False)
             engine.run()
             
             # DEBUG: проверяем оригинальные данные ПОСЛЕ прогона

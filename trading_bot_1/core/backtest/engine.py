@@ -11,11 +11,12 @@ class BacktestEngine:
     Простой скелет движка для тестирования исторических данных (векторизованно/побарно).
     Пока это MVP версия для прогона DataFrame через стратегию свеча за свечой.
     """
-    def __init__(self, data: pd.DataFrame, strategy: BaseStrategy, initial_balance: float = 1000.0):
+    def __init__(self, data: pd.DataFrame, strategy: BaseStrategy, initial_balance: float = 1000.0, verbose: bool = True):
         self.data = data
         self.strategy = strategy
         self.balance = initial_balance
         self.initial_balance = initial_balance
+        self.verbose = verbose
         
         self.positions: List[Dict[str, Any]] = []
         self.trades: List[Dict[str, Any]] = []
@@ -26,7 +27,8 @@ class BacktestEngine:
 
     def run(self):
         """Запускает цикл прохода по всем свечам."""
-        logger.info(f"Запуск бэктеста для стратегии {self.strategy.name} на {len(self.data)} свечах.")
+        if self.verbose:
+            logger.info(f"Запуск бэктеста для стратегии {self.strategy.name} на {len(self.data)} свечах.")
         
         for idx in range(len(self.data)):
             self._process_candle(idx)
@@ -91,7 +93,8 @@ class BacktestEngine:
             "time": candle["timestamp"]
         }
         self.positions.append(new_pos)
-        logger.debug(f"[{candle['timestamp']}] Открыта {signal} по {entry_price}")
+        if self.verbose:
+            logger.debug(f"[{candle['timestamp']}] Открыта {signal} по {entry_price}")
 
     def _close_position(self, pos: dict, exit_price: float, timestamp: int, reason: str):
         """Закрывает позицию и считает PnL."""
@@ -112,7 +115,8 @@ class BacktestEngine:
             "pnl": net_pnl,
             "reason": reason
         })
-        logger.debug(f"[{timestamp}] Закрыта {pos['side']} по {exit_price} ({reason}). PnL: {net_pnl:.2f}")
+        if self.verbose:
+            logger.debug(f"[{timestamp}] Закрыта {pos['side']} по {exit_price} ({reason}). PnL: {net_pnl:.2f}")
 
     def _print_metrics(self):
         """Вывод простой статистики."""
@@ -149,11 +153,12 @@ class BacktestEngine:
             "max_drawdown": round(float(max_drawdown), 2)
         }
         
-        logger.info("\n--- MVP Backtest Metrics ---")
-        logger.info(f"Total Trades: {total_trades}")
-        logger.info(f"Winrate: {winrate:.1f}%")
-        logger.info(f"Final Balance: {self.balance:.2f} USDT")
-        logger.info(f"ROI: {roi:.2f}%")
-        logger.info(f"Profit Factor: {profit_factor:.2f}")
-        logger.info(f"Max Drawdown: {max_drawdown:.2f}%")
-        logger.info("----------------------------\n")
+        if self.verbose:
+            logger.info("\n--- MVP Backtest Metrics ---")
+            logger.info(f"Total Trades: {total_trades}")
+            logger.info(f"Winrate: {winrate:.1f}%")
+            logger.info(f"Final Balance: {self.balance:.2f} USDT")
+            logger.info(f"ROI: {roi:.2f}%")
+            logger.info(f"Profit Factor: {profit_factor:.2f}")
+            logger.info(f"Max Drawdown: {max_drawdown:.2f}%")
+            logger.info("----------------------------\n")
