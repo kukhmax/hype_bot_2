@@ -24,8 +24,8 @@ class RegimeClassifier:
         close = row.get('close', 0)
         
         # Для Bollinger Width 
-        upper_bb = row.get('upper_bb', None)
-        lower_bb = row.get('lower_bb', None)
+        upper_bb = row.get('bb_upper', None)
+        lower_bb = row.get('bb_lower', None)
         bb_width_percent = 0
         if pd.notna(upper_bb) and pd.notna(lower_bb) and close:
             bb_width_percent = (upper_bb - lower_bb) / close * 100

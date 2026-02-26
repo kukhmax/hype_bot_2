@@ -172,8 +172,8 @@ class LiveEngine:
                     'bb_width_percent': 0
                 }
                 
-                upper_bb = row.get('upper_bb', None)
-                lower_bb = row.get('lower_bb', None)
+                upper_bb = row.get('bb_upper', None)
+                lower_bb = row.get('bb_lower', None)
                 if pd.notna(upper_bb) and pd.notna(lower_bb) and indicators['close']:
                     indicators['bb_width_percent'] = (upper_bb - lower_bb) / indicators['close'] * 100
                     
