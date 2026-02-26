@@ -47,13 +47,23 @@ class BaseScorer:
             Если модель не обучена — возвращает 1.0 (пропускает всё).
         """
         if not self.is_trained or self.model is None or not SKLEARN_AVAILABLE:
+            logger.debug(f"[{self.name}] predict() → fallback 1.0 (trained={self.is_trained}, sklearn={SKLEARN_AVAILABLE})")
             return 1.0
 
         try:
             X = np.array([[features.get(f, 0.0) for f in self.feature_names]])
             proba = self.model.predict_proba(X)[0]
             # Класс 1 = "хороший сигнал"
-            return float(proba[1]) if len(proba) > 1 else float(proba[0])
+            score = float(proba[1]) if len(proba) > 1 else float(proba[0])
+            
+            # Подробный лог для отслеживания
+            feature_vals = [f"{f}={features.get(f, 0.0):.3f}" for f in self.feature_names]
+            logger.debug(
+                f"[{self.name}] predict() → score={score:.4f} | "
+                f"P(loss)={proba[0]:.4f} P(win)={proba[1] if len(proba) > 1 else 'N/A'} | "
+                f"features: {', '.join(feature_vals)}"
+            )
+            return score
         except Exception as e:
             logger.warning(f"[{self.name}] Ошибка predict: {e}")
             return 1.0

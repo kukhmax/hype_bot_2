@@ -108,14 +108,18 @@ class EnsembleFilter:
         """
         # Если ни одна модель не обучена — пропускаем все
         if not self.is_ready:
+            logger.info("[ML ENSEMBLE] FALLBACK — модели не обучены, сигнал пропущен без фильтрации")
             return True, 1.0, {"fallback": True, "reason": "Модели не обучены"}
 
         # 1. Рассчитать ML-фичи
+        logger.debug(f"[ML ENSEMBLE] Расчёт фичей для {signal_direction} на индексе {current_idx}...")
         all_features = MLFeatureEngineer.compute_all(df, current_idx, signal_direction)
         if all_features is None:
+            logger.warning(f"[ML ENSEMBLE] Недостаточно данных для ML-фичей (idx={current_idx}). FALLBACK.")
             return True, 1.0, {"fallback": True, "reason": "Недостаточно данных для ML-фичей"}
 
         # 2. Получить скоры от 3 моделей
+        logger.debug("[ML ENSEMBLE] Получение скоров от 3 моделей...")
         m_score = self.momentum.predict(all_features["momentum"])
         v_score = self.volatility.predict(all_features["volatility"])
         s_score = self.structure.predict(all_features["structure"])
@@ -130,6 +134,10 @@ class EnsembleFilter:
         # 4. Динамический порог
         current_threshold = self.threshold.get_threshold()
         is_passed = ensemble_score >= current_threshold
+        margin = ensemble_score - current_threshold
+
+        # Статистика порога
+        th_stats = self.threshold.get_stats()
 
         details = {
             "momentum_score": round(m_score, 3),
@@ -137,13 +145,37 @@ class EnsembleFilter:
             "structure_score": round(s_score, 3),
             "ensemble_score": round(ensemble_score, 3),
             "threshold": round(current_threshold, 3),
+            "margin": round(margin, 3),
             "passed": is_passed,
+            "threshold_winrate": th_stats.get("winrate", 0),
+            "threshold_trades": th_stats.get("total_trades", 0),
         }
 
         action = "✅ PASS" if is_passed else "❌ BLOCK"
+        
+        # Главный лог — всегда INFO
         logger.info(
-            f"[ML ENSEMBLE] {action} | Score: {ensemble_score:.3f} vs Threshold: {current_threshold:.3f} | "
-            f"M:{m_score:.2f} V:{v_score:.2f} S:{s_score:.2f}"
+            f"[ML ENSEMBLE] {action} | {signal_direction} | "
+            f"Score: {ensemble_score:.3f} vs Threshold: {current_threshold:.3f} (margin: {margin:+.3f}) | "
+            f"M:{m_score:.3f}(w={self.weights['momentum']}) "
+            f"V:{v_score:.3f}(w={self.weights['volatility']}) "
+            f"S:{s_score:.3f}(w={self.weights['structure']})"
+        )
+        
+        # Детальный лог — DEBUG
+        logger.debug(
+            f"[ML ENSEMBLE] Threshold stats: WinRate={th_stats.get('winrate', 0):.1f}% "
+            f"Trades={th_stats.get('total_trades', 0)} "
+            f"AvgScore={th_stats.get('avg_score', 0)}"
+        )
+        
+        # Логируем какая модель "тянет вниз" или "тянет вверх"
+        scores = {"Momentum": m_score, "Volatility": v_score, "Structure": s_score}
+        weakest = min(scores, key=scores.get)
+        strongest = max(scores, key=scores.get)
+        logger.debug(
+            f"[ML ENSEMBLE] Strongest: {strongest}={scores[strongest]:.3f} | "
+            f"Weakest: {weakest}={scores[weakest]:.3f}"
         )
 
         return is_passed, ensemble_score, details

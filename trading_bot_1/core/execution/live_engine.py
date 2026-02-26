@@ -58,7 +58,10 @@ class LiveEngine:
         self._last_ml_score: Optional[float] = None  # Для отчёта в DynamicThreshold
         if settings.ENABLE_ML_FILTER:
             self.ml_filter = EnsembleFilter()
-            logger.info("ML Ensemble Filter ВКЛЮЧЁН.")
+            ml_status = "обучены" if self.ml_filter.is_ready else "FALLBACK (модели не найдены)"
+            logger.info(f"ML Ensemble Filter ВКЛЮЧЁН. Модели: {ml_status}")
+        else:
+            logger.info("ML Ensemble Filter ВЫКЛЮЧЕН (ENABLE_ML_FILTER=false)")
         
         # Состояние (df)
         self.df: pd.DataFrame = pd.DataFrame()
@@ -171,6 +174,7 @@ class LiveEngine:
                 
                 # --- ML ENSEMBLE FILTER ---
                 if self.ml_filter is not None:
+                    logger.info(f"[{self.symbol}] ML фильтр: оценка сигнала {signal_data['signal']}...")
                     ml_passed, ml_score, ml_details = self.ml_filter.evaluate(
                         self.df, current_idx, signal_data["signal"]
                     )
@@ -178,16 +182,34 @@ class LiveEngine:
                     
                     if not ml_passed:
                         await self._notify(
-                            f"🧠 **ML АНСАМБЛЬ ОТКЛОНИЛ СДЕЛКУ**\n"
-                            f"Score: `{ml_details.get('ensemble_score', 0):.3f}` < Threshold: `{ml_details.get('threshold', 0):.3f}`\n"
-                            f"M:{ml_details.get('momentum_score', 0):.2f} V:{ml_details.get('volatility_score', 0):.2f} S:{ml_details.get('structure_score', 0):.2f}"
+                            f"🧠 **ML АНСАМБЛЬ ОТКЛОНИЛ СДЕЛКУ** `{self.symbol}`\n"
+                            f"\nℹ️ *Скоры моделей:*\n"
+                            f"  • Momentum: `{ml_details.get('momentum_score', 0):.3f}`\n"
+                            f"  • Volatility: `{ml_details.get('volatility_score', 0):.3f}`\n"
+                            f"  • Structure: `{ml_details.get('structure_score', 0):.3f}`\n"
+                            f"\n🎯 Ensemble Score: `{ml_details.get('ensemble_score', 0):.3f}`\n"
+                            f"📏 Threshold: `{ml_details.get('threshold', 0):.3f}` (margin: `{ml_details.get('margin', 0):+.3f}`)\n"
+                            f"📊 WinRate: `{ml_details.get('threshold_winrate', 0):.1f}%` ({ml_details.get('threshold_trades', 0)} сделок)"
                         )
-                        logger.info(f"Сделка отклонена ML. Details: {ml_details}")
+                        logger.info(
+                            f"[{self.symbol}] Сделка {signal_data['signal']} ОТКЛОНЕНА ML. "
+                            f"Score={ml_details.get('ensemble_score', 0):.3f} < Threshold={ml_details.get('threshold', 0):.3f}. "
+                            f"M={ml_details.get('momentum_score', 0):.3f} V={ml_details.get('volatility_score', 0):.3f} S={ml_details.get('structure_score', 0):.3f}"
+                        )
                         return
                     else:
                         await self._notify(
-                            f"🧠 **ML АНСАМБЛЬ ОДОБРИЛ**\n"
-                            f"Score: `{ml_score:.3f}` ≥ Threshold: `{ml_details.get('threshold', 0):.3f}`"
+                            f"🧠 **ML АНСАМБЛЬ ОДОБРИЛ** `{self.symbol}`\n"
+                            f"\nℹ️ *Скоры:*\n"
+                            f"  M:`{ml_details.get('momentum_score', 0):.3f}` "
+                            f"V:`{ml_details.get('volatility_score', 0):.3f}` "
+                            f"S:`{ml_details.get('structure_score', 0):.3f}`\n"
+                            f"🎯 Score: `{ml_score:.3f}` ≥ Threshold: `{ml_details.get('threshold', 0):.3f}` "
+                            f"(margin: `{ml_details.get('margin', 0):+.3f}`)"
+                        )
+                        logger.info(
+                            f"[{self.symbol}] Сигнал {signal_data['signal']} ОДОБРЕН ML. "
+                            f"Score={ml_score:.3f} >= Threshold={ml_details.get('threshold', 0):.3f}"
                         )
                 
                 # --- AI VERIFICATION ---
@@ -276,6 +298,11 @@ class LiveEngine:
             # Отчёт в ML Ensemble (для адаптации Dynamic Threshold)
             if self.ml_filter is not None and self._last_ml_score is not None:
                 self.ml_filter.report_trade(self._last_ml_score, pnl)
+                result_emoji = "🟢" if pnl > 0 else "🔴"
+                logger.info(
+                    f"[{self.symbol}] ML Threshold обновлён: {result_emoji} PnL={pnl:.2f} score={self._last_ml_score:.3f} "
+                    f"новый threshold={self.ml_filter.threshold.get_threshold():.3f}"
+                )
                 self._last_ml_score = None
             await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [PAPER]**\nПара: `{self.symbol}`\nPnL: `{pnl:.2f} USDT`")
             self.current_position = None

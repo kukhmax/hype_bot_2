@@ -45,6 +45,29 @@ class MLFeatureEngineer:
             logger.warning(f"Ошибка расчёта ML-фичей на индексе {current_idx}: {e}")
             return None
 
+        # Подробный лог всех фичей для отладки
+        logger.debug(
+            f"[ML FEATURES] idx={current_idx} dir={signal_direction} | "
+            f"MOMENTUM: RSI={momentum['rsi_normalized']:.3f} RSI_d={momentum['rsi_delta']:.3f} "
+            f"EMA21s={momentum['ema_21_slope']:.3f} EMA50s={momentum['ema_50_slope']:.3f} "
+            f"vs21={momentum['close_vs_ema21']:.3f} vs200={momentum['close_vs_ema200']:.3f} "
+            f"DI={momentum['di_diff_directed']:.3f}"
+        )
+        logger.debug(
+            f"[ML FEATURES] idx={current_idx} | "
+            f"VOLATILITY: ATRn={volatility['atr_normalized']:.3f} ATRr={volatility['atr_ratio']:.3f} "
+            f"BBw={volatility['bb_width']:.4f} BBwΔ={volatility['bb_width_change']:.4f} "
+            f"BBpos={volatility['bb_position']:.3f} HLr={volatility['high_low_range']:.3f} "
+            f"Vol={volatility['volume_ratio']:.3f}"
+        )
+        logger.debug(
+            f"[ML FEATURES] idx={current_idx} | "
+            f"STRUCTURE: ADX={structure['adx_normalized']:.3f} ADXs={structure['adx_slope']:.3f} "
+            f"EMAalign={structure['ema_alignment']:.1f} BBsq={structure['bb_squeeze']:.0f} "
+            f"HH={structure['higher_highs']:.2f} LL={structure['lower_lows']:.2f} "
+            f"vsMid={structure['close_vs_range_mid']:.3f}"
+        )
+
         return {
             "momentum": momentum,
             "volatility": volatility,
