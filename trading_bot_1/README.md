@@ -1,13 +1,14 @@
-# Hype Bot (v2) - Trading Bot MVP
+# Hype Bot (v2) - Trading Bot
 
 ## Описание
 Торговый бот для алгоритмического скальпинга и интрадей-торговли на бирже MEXC (Futures / Spot). Бот построен на современной асинхронной архитектуре (`asyncio` + WebSockets) и работает внутри Docker-контейнеров с использованием Redis для кэширования тиков и состояния.
 
-Проект состоит из четырех ключевых модулей:
+Проект состоит из пяти ключевых модулей:
 1. **Data Layer**: Сбор потоковых тиков по WebSockets (`wss://contract.mexc.com/edge`) и агрегация "на лету" в свечи 1m/5m/15m через `CandleBuilder`. Для первоначального наполнения датафреймов используется загрузчик исторической даты через REST API MEXC.
 2. **Strategy & Smart Filtering**: Высокопроизводительный векторный расчет технических индикаторов на Pandas. В систему встроен **Regime Classifier** (авто-выбор стратегии под фазу рынка) и модуль **Gemini AI Verification**, выступающий вторым пилотом для фильтрации ложных сигналов.
-3. **Execution & Risk Management**: Строгие правила для защиты депозита (дневные лимиты просадок, динамический сайзинг), ATR Trailing Stop (умный безубыток) и модуль выставления торговых ордеров с криптографической подписью HMAC SHA256.
-4. **Telegram Interface**: Полное управление ботом с телефона через интерактивное меню и FSM настройки.
+3. **🧠 Ensemble ML Filter** *(NEW)*: Ансамблевый фильтр из 3 ML-моделей (Momentum / Volatility / Structure), работающий между стратегией и AI-верификацией. Модели оценивают качество сигнала с разных углов, а динамический порог адаптируется по результатам последних 100 сделок.
+4. **Execution & Risk Management**: Строгие правила для защиты депозита (дневные лимиты просадок, динамический сайзинг), ATR Trailing Stop (умный безубыток) и модуль выставления торговых ордеров с криптографической подписью HMAC SHA256.
+5. **Telegram Interface**: Полное управление ботом с телефона через интерактивное меню и FSM настройки.
 
 ---
 
@@ -15,7 +16,7 @@
 
 **Важно:** Теперь вам не нужно жестко выбирать стратегию. Модуль **Regime Classifier** анализирует индикаторы (ADX, наклон EMA, ширину Bollinger Bands) и автоматически переключает активную стратегию при каждой новой свече в зависимости от фазы рынка!
 
-В MVP встроено 3 комплементарные стратегии, заточенные под разные фазы цикла рынка:
+В систему встроено 3 комплементарные стратегии, заточенные под разные фазы цикла рынка:
 
 ### 1. Trend Pullback (Торговля по глобальному тренду на откатах)
 * **Идеальная среда:** Систематические или слабые тренды (Strong / Weak Trend).
@@ -34,18 +35,74 @@
 
 ---
 
+## 🧠 Ensemble ML — Многослойная ML-Фильтрация Сигналов
+
+Ансамблевый ML-фильтр из 3 лёгковесных моделей, анализирующих сигнал с разных углов. Каждая модель — `LogisticRegression` (scikit-learn), обученная на результатах бэктеста. Модели **не генерируют** сигналы самостоятельно, а дополнительно **фильтруют** сигналы от стратегий.
+
+### Архитектура ансамбля
+
+| Модель | Задача | Ключевые фичи |
+|--------|--------|----------------|
+| **Momentum Scorer** | Оценка силы и направления импульса | RSI, RSI delta, наклон EMA 21/50, DI+/DI- |
+| **Volatility Scorer** | Оценка благоприятности волатильности | ATR, BB Width, BB Position, Volume Ratio |
+| **Structure Scorer** | Оценка рыночной структуры | ADX, EMA alignment, BB Squeeze, Higher Highs/Lower Lows |
+
+### Пайплайн сигнала (от генерации до исполнения)
+
+```
+Стратегия (Trend Pullback / Breakout / Liquidity Sweep)
+    │  BUY / SELL
+    ▼
+🧠 Ensemble ML Filter        ← НОВЫЙ СЛОЙ
+    │  Score ≥ Threshold? → PASS
+    │  Score < Threshold? → BLOCK
+    ▼
+🤖 Gemini AI Verification
+    │  APPROVED / REJECTED
+    ▼
+💰 Execution (Paper / Live)
+```
+
+### Динамический порог (Dynamic Threshold)
+
+Порог принятия сигнала **не фиксирован**, а адаптируется по результатам последних 100 сделок:
+- **Высокий Win Rate (>60%)** → порог снижается → больше сделок проходит
+- **Низкий Win Rate (<40%)** → порог повышается → строже фильтруем
+
+### Включение / Отключение
+
+ML-фильтр **выключен по умолчанию**. Для активации:
+```bash
+# В файле .env добавить:
+ENABLE_ML_FILTER=true
+```
+Без обученных моделей фильтр работает в режиме **fallback** (пропускает все сигналы, бот работает как раньше).
+
+### Обучение моделей
+
+Модели обучаются на результатах бэктеста:
+```bash
+# Запустить обучение + сравнительный бэктест
+docker compose exec bot python3 -m tests.test_ml_backtest
+```
+
+Подробная техническая документация: [`core/ml/ENSEMBLE_ML_PLAN.md`](core/ml/ENSEMBLE_ML_PLAN.md)
+
+---
+
 ## 🛡 Риск-Менеджмент и Фильтрация
 Бок-о-бок со стратегией работает `RiskManager`, выполняющий функции предохранителя:
 - **Размер Позиции (Position Sizing):** Никаких входов "на всю котлету" (All-In). Объем сделки рассчитывается как математически строгий процент от текущего свободного баланса USDT (например, `2%`).
 - **Ограничение Дневного Убытка (Daily Drawdown Limit):** При страте алгоритм запоминает сегодняшний стартовый баланс депозита. Если суммарный накопленный убыток бота за сессию достигает предела боли (например, `-5%`), бот физически блокирует выдачу новых ордеров.
 - **Smart Exit (ATR Trailing Stop):** Как только сделка проходит расстояние, равное изначальному стоп-лоссу (достигает 1R), стоп-лосс автоматически переносится в уровень безубытка.
 - **AI Verification:** Прежде чем отправить ордер на биржу, бот шлет данные индикаторов (RSI, ADX, цену) в нейросеть `Gemini-2.5-Flash`. ИИ фильтрует очевидно плохие/опасные входы, работая как цифровой риск-менеджер.
+- **🧠 Ensemble ML Filter:** 3 ML-модели анализируют качество сигнала перед отправкой на AI. Динамический порог адаптируется по истории сделок.
 
 ---
 
 ## ⚙️ Установка и Инфраструктура (Docker)
 
-Для работы требуются `Docker` и `Docker Compose`. Все зависимости (Redis, Python, Pandas) уже запакованы в контейнеры.
+Для работы требуются `Docker` и `Docker Compose`. Все зависимости (Redis, Python, Pandas, scikit-learn) уже запакованы в контейнеры.
 
 ### 1. Подготовка конфигурации (Ключи и Токены)
 Скопируйте `Template` файл с переменными окружения:
@@ -59,6 +116,7 @@ nano .env
 - `TELEGRAM_BOT_TOKEN` - Токен вашего Telegram бота. Создается в Telegram через чат с **@BotFather** (команда `/newbot`).
 - `ADMIN_CHAT_ID` - Ваш личный Chat ID в Telegram (через бота `@getmyid_bot`).
 - `GEMINI_API_KEY` - Ключ для модуля AI Verification. Получить бесплатно можно в Google AI Studio.
+- `ENABLE_ML_FILTER` - *(Опционально)* `true` для включения Ensemble ML фильтра.
 
 ### 2. Сборка и запуск фоновых сервисов
 Для сборки образа Trading Bot и поднятия базы Redis в изолированной сети:
@@ -72,7 +130,7 @@ docker compose up -d
 
 ## 📱 Интерфейс Telegram Бота (Управление с телефона)
 
-В MVP встроено удобное управление ботом прямо из мессенджера Telegram.
+В систему встроено удобное управление ботом прямо из мессенджера Telegram.
 
 1. Откройте чат с созданным вами ботом и нажмите **START** (или введите `/start`).
 2. Внизу появится встроенная клавиатура (Reply Menu) с 4 основными кнопками:
@@ -110,6 +168,15 @@ docker compose exec bot python3 -m tests.test_risk_manager
 docker compose exec bot python3 -m tests.test_executor
 ```
 
+### Тесты Ensemble ML
+```bash
+# Unit тесты ML-компонентов (фичи, скореры, ансамбль, порог, fallback)
+docker compose exec bot python3 -m tests.test_ensemble_ml
+
+# Integration тест: бэктест → обучение ML → фильтрация → сравнение метрик
+docker compose exec bot python3 -m tests.test_ml_backtest
+```
+
 ### Моделирование и Оптимизация на Истории
 Бот умеет находить лучшие настройки стратегии методом Grid Search:
 ```bash
@@ -125,7 +192,7 @@ docker compose exec bot python3 -m tests.test_optimizer
 
 ## 💰 Торговля в Реальном Времени (Live Engine)
 
-Сердце системы — `LiveEngine`. Он объединяет потоки биржи WebSockets, нарезку свечей `CandleBuilder` и торговые алгоритмы в единый вечный цикл.
+Сердце системы — `LiveEngine`. Он объединяет потоки биржи WebSockets, нарезку свечей `CandleBuilder`, торговые алгоритмы и ML-фильтрацию в единый вечный цикл.
 
 Бот может работать в трех режимах (настраивается в Telegram или через флаги терминала):
 1. **🟢 PAPER TRADING (Симуляция):** Бот будет слушать реальные "живые" данные биржи, формировать паттерны и "на бумаге" открывать фиктивные сделки. Идеально для валидации работы на новых монетах без страха потери депозита. Вы получаете PnL отчеты в Telegram виртуально.
@@ -155,4 +222,58 @@ docker compose exec bot python3 run_bot.py --symbol SOL_USDT --tf 15 --live
 ```
 
 ---
-*Powered by `asyncio`, `pandas` & MEXC API. Trade at your own risk.*
+
+## 📁 Структура Проекта
+
+```
+trading_bot_1/
+├── bot/                          # Telegram интерфейс (aiogram)
+│   ├── handlers.py               # Обработчики команд и FSM
+│   ├── telegram_bot.py           # Точка входа Telegram бота
+│   └── states.py                 # FSM состояния
+├── core/
+│   ├── ai/                       # Gemini AI верификация
+│   │   └── gemini_client.py
+│   ├── backtest/                 # Бэктест и оптимизатор
+│   │   └── engine.py
+│   ├── data/                     # WebSocket, CandleBuilder, REST API
+│   │   ├── candle_builder.py
+│   │   ├── historical.py
+│   │   ├── mexc_client.py
+│   │   └── websocket_client.py
+│   ├── execution/                # LiveEngine, Executor
+│   │   ├── live_engine.py
+│   │   └── mexc_executor.py
+│   ├── features/                 # Расчёт индикаторов
+│   │   └── indicators.py
+│   ├── ml/                       # 🧠 Ensemble ML Filter (NEW)
+│   │   ├── features.py           # 21 ML-фича (momentum/volatility/structure)
+│   │   ├── models.py             # 3 скорера (LogisticRegression)
+│   │   ├── ensemble.py           # Оркестрация ансамбля
+│   │   ├── threshold.py          # Динамический порог (по winrate)
+│   │   ├── trainer.py            # Обучение на бэктесте → .pkl
+│   │   ├── data/                 # Сохранённые модели (.pkl)
+│   │   └── ENSEMBLE_ML_PLAN.md   # Документация архитектуры
+│   ├── regime/                   # Regime Classifier
+│   │   └── classifier.py
+│   ├── risk/                     # Risk Manager
+│   │   └── manager.py
+│   └── strategies/               # 3 торговые стратегии
+│       ├── base.py
+│       ├── trend_pullback.py
+│       ├── breakout.py
+│       └── liquidity_sweep.py
+├── tests/                        # Тесты
+│   ├── test_ensemble_ml.py       # 🧠 Unit тесты ML (6 тестов)
+│   ├── test_ml_backtest.py       # 🧠 Integration тест ML
+│   ├── test_backtest.py
+│   ├── test_optimizer.py
+│   └── ...
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+└── run_bot.py
+```
+
+---
+*Powered by `asyncio`, `pandas`, `scikit-learn` & MEXC API. Trade at your own risk.*

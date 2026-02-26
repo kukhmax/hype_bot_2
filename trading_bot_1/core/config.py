@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     
     # AI / Gemini (Required for Phase 5)
     GEMINI_API_KEY: str = ""
+    
+    # Ensemble ML Filter (Phase 6 — ML Signal Filtering)
+    ENABLE_ML_FILTER: bool = False
 
     class Config:
         env_file = ".env"

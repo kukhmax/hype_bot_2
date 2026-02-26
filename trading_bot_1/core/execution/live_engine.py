@@ -3,6 +3,7 @@ import pandas as pd
 from typing import Dict, Any, Optional
 
 from core.logger import setup_logger
+from core.config import settings
 from core.data.mexc_client import MEXCWebSocketClient
 from core.data.candle_builder import CandleBuilder
 from core.data.historical import MEXCHistoricalDownloader
@@ -13,6 +14,7 @@ from core.strategies.liquidity_sweep import LiquiditySweepStrategy
 from core.execution.mexc_executor import MEXCExecutor
 from core.risk.manager import RiskManager
 from core.regime.classifier import RegimeClassifier
+from core.ml.ensemble import EnsembleFilter
 
 logger = setup_logger("live_engine")
 
@@ -50,6 +52,13 @@ class LiveEngine:
         self.risk_manager = RiskManager()
         self.ws_client = MEXCWebSocketClient([symbol])
         self.candle_builder = CandleBuilder(symbol, timeframe_minutes)
+        
+        # ML Ensemble Filter (опционально)
+        self.ml_filter: Optional[EnsembleFilter] = None
+        self._last_ml_score: Optional[float] = None  # Для отчёта в DynamicThreshold
+        if settings.ENABLE_ML_FILTER:
+            self.ml_filter = EnsembleFilter()
+            logger.info("ML Ensemble Filter ВКЛЮЧЁН.")
         
         # Состояние (df)
         self.df: pd.DataFrame = pd.DataFrame()
@@ -160,6 +169,27 @@ class LiveEngine:
             if signal_data["signal"] != "NONE":
                 await self._notify(f"🎯 **СИГНАЛ** `{self.symbol}`\nНаправление: `{signal_data['signal']}`\nЦена: `{candle_dict['close']}`\nСтратегия: `{self.active_strategy.__class__.__name__}`")
                 
+                # --- ML ENSEMBLE FILTER ---
+                if self.ml_filter is not None:
+                    ml_passed, ml_score, ml_details = self.ml_filter.evaluate(
+                        self.df, current_idx, signal_data["signal"]
+                    )
+                    self._last_ml_score = ml_score
+                    
+                    if not ml_passed:
+                        await self._notify(
+                            f"🧠 **ML АНСАМБЛЬ ОТКЛОНИЛ СДЕЛКУ**\n"
+                            f"Score: `{ml_details.get('ensemble_score', 0):.3f}` < Threshold: `{ml_details.get('threshold', 0):.3f}`\n"
+                            f"M:{ml_details.get('momentum_score', 0):.2f} V:{ml_details.get('volatility_score', 0):.2f} S:{ml_details.get('structure_score', 0):.2f}"
+                        )
+                        logger.info(f"Сделка отклонена ML. Details: {ml_details}")
+                        return
+                    else:
+                        await self._notify(
+                            f"🧠 **ML АНСАМБЛЬ ОДОБРИЛ**\n"
+                            f"Score: `{ml_score:.3f}` ≥ Threshold: `{ml_details.get('threshold', 0):.3f}`"
+                        )
+                
                 # --- AI VERIFICATION ---
                 from core.ai.gemini_client import gemini_client
                 
@@ -243,6 +273,10 @@ class LiveEngine:
                 
         if closed:
             self.risk_manager.report_trade_result(pnl)
+            # Отчёт в ML Ensemble (для адаптации Dynamic Threshold)
+            if self.ml_filter is not None and self._last_ml_score is not None:
+                self.ml_filter.report_trade(self._last_ml_score, pnl)
+                self._last_ml_score = None
             await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [PAPER]**\nПара: `{self.symbol}`\nPnL: `{pnl:.2f} USDT`")
             self.current_position = None
 
