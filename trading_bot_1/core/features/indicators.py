@@ -107,10 +107,10 @@ class FeatureEngineer:
         df = cls.add_bollinger_bands(df, length=20, std=2)
         df = cls.add_adx(df, length=14)
         
-        # Дропаем все строки с NaN, которые появились из-за окон расчёта индикаторов (первые ~200 строк)
-        # Это нужно, чтобы бэктест не пытался брать сделки там, где индикаторов ещё нет
-        df.dropna(inplace=True)
-        df.reset_index(drop=True, inplace=True)
+        # ВАЖНО: Мы больше НЕ делаем dropna() здесь!
+        # В режиме бэктеста NaN строки просто игнорируются (сигналы начинаются с индекса 200).
+        # В live-режиме удаление NaN строк (возникших от новых свечей на стыке с окном расчета) 
+        # приводило к полному исчезновению DataFrame (баг обрезания по 19 строк).
         
-        logger.info(f"Feature Engineering завершен. Осталось строк для анализа: {len(df)}")
+        logger.debug(f"Feature Engineering завершен. Строк для анализа: {len(df)}")
         return df

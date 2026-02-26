@@ -124,12 +124,18 @@ class LiveEngine:
         # Просчитываем фичи (EMA, RSI, ATR) на новом DF используя любую стратегию (фичи общие)
         self.df = self.active_strategy.prepare_data(self.df)
         
-        # Скармливаем последний индекс стратегии
-        current_idx = len(self.df) - 1
+        # --- 4. Ограничиваем размер DataFrame (утечка памяти и замедление) ---
+        MAX_ROWS = 1000
+        if len(self.df) > MAX_ROWS:
+            self.df = self.df.iloc[-MAX_ROWS:].reset_index(drop=True)
+            current_idx = len(self.df) - 1
+            logger.debug(f"DataFrame урезан до {MAX_ROWS} строк.")
         
         # Определяем режим рынка (Regime Classifier)
         regime_info = RegimeClassifier.classify(self.df, current_idx)
         new_regime = regime_info["regime"]
+        
+        logger.debug(f"[{self.symbol}] Оценка режима: {new_regime} (ADX: {regime_info.get('adx', 0):.2f}, BBW: {regime_info.get('bb_width_percent', 0):.2f}, EMA_Slope: {regime_info.get('ema_slope', 0):.2f})")
         
         if new_regime != self.current_regime and new_regime != "unknown":
             logger.info(f"Смена режима рынка: {self.current_regime} -> {new_regime}")
@@ -147,7 +153,9 @@ class LiveEngine:
 
         # Вызываем логику стратегии для генерации сигнала
         if self.current_position is None:
+            logger.debug(f"[{self.symbol}] Проверка сигналов стратегией {self.active_strategy.__class__.__name__} на индексе {current_idx}")
             signal_data = self.active_strategy.on_ohlcv(self.df, current_idx)
+            logger.debug(f"[{self.symbol}] Результат стратегии: {signal_data}")
             
             if signal_data["signal"] != "NONE":
                 await self._notify(f"🎯 **СИГНАЛ** `{self.symbol}`\nНаправление: `{signal_data['signal']}`\nЦена: `{candle_dict['close']}`\nСтратегия: `{self.active_strategy.__class__.__name__}`")

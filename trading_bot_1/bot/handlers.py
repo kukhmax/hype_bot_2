@@ -108,6 +108,7 @@ async def process_mode(message: Message, state: FSMContext):
         return
 
     bot_settings["mode"] = mode_text
+    logger.info(f"Пользователь {message.from_user.id} изменил режим работы: {mode_text}")
     await message.answer("Сохранено.\n\nВведите риск на сделку в % (например `2.0`):", reply_markup=ReplyKeyboardRemove())
     await state.set_state(SettingsFSM.waiting_for_risk)
 
@@ -122,6 +123,7 @@ async def process_risk(message: Message, state: FSMContext):
         return
 
     bot_settings["risk_percent"] = risk
+    logger.info(f"Пользователь {message.from_user.id} установил риск: {risk}%")
     await message.answer(
         f"✅ Настройки сохранены!\n\n"
         f"Режим: `{bot_settings['mode'].upper()}`\n"
@@ -279,9 +281,11 @@ async def cmd_start_bot(message: Message, state: FSMContext):
     await state.clear()
 
     if _engine_manager and _engine_manager.is_running:
+        logger.warning(f"Пользователь {message.from_user.id} попытался запустить уже запущенного бота")
         await message.answer("⚠️ Бот УЖЕ запущен!")
         return
 
+    logger.info(f"!!! ПОЛЬЗОВАТЕЛЬ {message.from_user.id} ДАЛ КОМАНДУ НА ЗАПУСК БОТА !!!")
     bot_settings["chat_id"] = message.chat.id
     mode = bot_settings["mode"]
     pairs = bot_settings["pairs"]
@@ -328,6 +332,7 @@ async def cmd_stop_bot(message: Message, state: FSMContext):
     await state.clear()
 
     if _engine_manager and _engine_manager.is_running:
+        logger.info(f"!!! ПОЛЬЗОВАТЕЛЬ {message.from_user.id} ДАЛ КОМАНДУ СТОП !!!")
         count = len(_engine_manager.engines)
         await _engine_manager.stop_all()
         _engine_manager = None

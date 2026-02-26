@@ -57,6 +57,7 @@ class RiskManager:
                          f"Торговля остановлена.")
             return False
             
+        logger.debug(f"Дневной лимит OK. Текущий PnL: {self.current_session_pnl:.2f} (Лимит: -{max_loss_usdt:.2f})")
         return True
 
     def calculate_position_size(self, current_balance: float, entry_price: float, stop_loss: float) -> Dict[str, float]:
@@ -88,6 +89,8 @@ class RiskManager:
 
         # Базовый объем актива (например, сколько это SOL)
         base_qty = quote_qty / entry_price
+        
+        logger.debug(f"RiskManager Одобрил: Вход {entry_price}, Объем {quote_qty:.2f} USDT ({base_qty:.4f} crypto)")
         
         return {
             "quote_qty": round(quote_qty, 2), # Округляем до 2 знаков для USDT

@@ -26,6 +26,7 @@ class CandleBuilder:
         
         self.current_candle: Dict[str, Any] | None = None
         self.callbacks: List[Callable] = []
+        self._tick_count = 0  # Счётчик тиков для периодического логирования
 
     async def init_state(self):
         """Восстанавливает состояние текущей свечи из Redis, если скрипт перезапустился."""
@@ -58,6 +59,10 @@ class CandleBuilder:
         else:
             # Обновляем текущую свечу
             self._update_candle(self.current_candle, price, volume)
+
+        self._tick_count += 1
+        if self._tick_count % 100 == 0:
+            logger.debug(f"[{self.symbol}] Обработано {self._tick_count} тиков. Текущая свеча (незакрытая): {self.current_candle}")
 
         # Сохраняем промежуточное состояние в Redis (чтобы не потерять при падении)
         try:
