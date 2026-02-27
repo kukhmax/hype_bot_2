@@ -278,8 +278,8 @@ async def process_cancel(message: Message, state: FSMContext):
 
 async def send_tg_notification(text: str):
     """Callback для LiveEngine, чтобы он мог писать в Telegram"""
-    from bot.telegram_bot import get_bot_instance
-    bot = get_bot_instance()
+    bot = bot_settings.get("bot_instance")
+    
     if bot and bot_settings.get("chat_id"):
         try:
             await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode="Markdown")

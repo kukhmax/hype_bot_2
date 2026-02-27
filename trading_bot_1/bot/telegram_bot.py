@@ -12,21 +12,18 @@ from core.config import settings
 from core.logger import setup_logger
 from bot.handlers import router as main_router
 
+from bot.settings import bot_settings
+
 logger = setup_logger("telegram_bot")
 
-_bot_instance = None
-
-def get_bot_instance():
-    return _bot_instance
-
 async def main():
-    global _bot_instance
     if not settings.TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN не установлен в .env! Выход.")
         return
 
     # Инициализация бота и диспетчера
-    _bot_instance = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode='Markdown'))
+    bot_instance = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode='Markdown'))
+    bot_settings["bot_instance"] = bot_instance
     dp = Dispatcher()
     
     # Подключаем роутеры (обработчики команд)
@@ -40,13 +37,13 @@ async def main():
     try:
         # Уведомляем админа о старте
         if settings.ADMIN_CHAT_ID:
-            await _bot_instance.send_message(chat_id=settings.ADMIN_CHAT_ID, text="🤖 Telegram интерфейс Hype Bot запущен и готов к работе!")
+            await bot_instance.send_message(chat_id=settings.ADMIN_CHAT_ID, text="🤖 Telegram интерфейс Hype Bot запущен и готов к работе!")
             
-        await dp.start_polling(_bot_instance)
+        await dp.start_polling(bot_instance)
     except Exception as e:
         logger.error(f"Ошибка Polling: {e}")
     finally:
-        await _bot_instance.session.close()
+        await bot_instance.session.close()
 
 if __name__ == "__main__":
     try:
