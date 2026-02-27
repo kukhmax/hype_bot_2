@@ -283,8 +283,13 @@ async def send_tg_notification(text: str):
     if bot and bot_settings.get("chat_id"):
         try:
             await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode="Markdown")
-        except Exception:
-            pass
+        except Exception as e:
+            # Fallback: отправляем без Markdown если парсинг сломался
+            logger.error(f"Ошибка отправки в Telegram (Markdown): {e}")
+            try:
+                await bot.send_message(chat_id=bot_settings["chat_id"], text=text)
+            except Exception as e2:
+                logger.error(f"Ошибка отправки в Telegram (plain): {e2}")
 
 
 @router.message(F.text == "🚀 ЗАПУСК БОТА")
