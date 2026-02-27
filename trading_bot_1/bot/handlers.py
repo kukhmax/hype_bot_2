@@ -2,8 +2,10 @@ import logging
 import asyncio
 from aiogram import Router, F
 from aiogram.filters import CommandStart
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from contextlib import suppress
+from aiogram.exceptions import TelegramBadRequest
 
 from bot.states import SettingsFSM, PairFSM, TestFSM, StrategyFSM
 from bot.settings import bot_settings
@@ -41,6 +43,31 @@ def get_main_keyboard():
     )
 
 
+def get_delete_kb():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="❌ Скрыть", callback_data="delete_msg")]]
+    )
+
+@router.callback_query(F.data == "delete_msg")
+async def process_delete_msg(callback: CallbackQuery):
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    await callback.answer()
+
+async def delete_user_msg(message: Message):
+    with suppress(TelegramBadRequest):
+        await message.delete()
+
+async def delete_previous_prompt(message: Message, state: FSMContext):
+    data = await state.get_data()
+    prompt_id = data.get("prompt_msg_id")
+    if prompt_id:
+        with suppress(TelegramBadRequest):
+            await message.bot.delete_message(chat_id=message.chat.id, message_id=prompt_id)
+
+async def save_prompt_id(msg: Message, state: FSMContext):
+    await state.update_data(prompt_msg_id=msg.message_id)
+
 def _pairs_summary() -> str:
     """Формирует строку со списком пар и их настройками."""
     pairs = bot_settings["pairs"]
@@ -56,7 +83,13 @@ def _pairs_summary() -> str:
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
+    await delete_user_msg(message)
     await state.clear()
+    
+    # Сначала отправляем клавиатуру и сразу ее удаляем, чтобы восстановить нижнее меню
+    kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
+    await delete_user_msg(kb_msg)
+    
     welcome_text = (
         "👋 Добро пожаловать в **Hype Bot (v2)**!\n\n"
         "Я автономный торговый бот для фьючерсов на MEXC.\n"
@@ -65,13 +98,14 @@ async def cmd_start(message: Message, state: FSMContext):
         f"🔧 **Пары:**\n{_pairs_summary()}\n\n"
         "Используйте меню ниже для навигации."
     )
-    await message.answer(welcome_text, reply_markup=get_main_keyboard())
+    await message.answer(welcome_text, reply_markup=get_delete_kb())
 
 
 # --- СТАТУС ---
 
 @router.message(F.text == "📊 Статус")
 async def cmd_status(message: Message, state: FSMContext):
+    await delete_user_msg(message)
     await state.clear()
 
     if _engine_manager and _engine_manager.is_running:
@@ -105,50 +139,68 @@ async def cmd_status(message: Message, state: FSMContext):
             f"Риск: `{bot_settings['risk_percent']}%`\n\n"
             f"**Пары:**\n{_pairs_summary()}"
         )
-    await message.answer(text, reply_markup=get_main_keyboard())
+    # Отправляем сообщение со статусом и кнопкой Скрыть
+    await message.answer(text, reply_markup=get_delete_kb())
 
 
 # --- ГЛОБАЛЬНЫЕ НАСТРОЙКИ (режим + риск) ---
 
 @router.message(F.text == "⚙️ Настройки")
 async def cmd_settings(message: Message, state: FSMContext):
+    await delete_user_msg(message)
     kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="PAPER (Тест)"), KeyboardButton(text="LIVE (Бой)")],
         [KeyboardButton(text="SIGNALS (Только сигналы)")]
     ], resize_keyboard=True)
-    await message.answer("🛠 *НАСТРОЙКИ*\n\nВыберите Режим работы бота:", reply_markup=kb)
+    msg = await message.answer("🛠 *НАСТРОЙКИ*\n\nВыберите Режим работы бота:", reply_markup=kb)
     await state.set_state(SettingsFSM.waiting_for_mode)
+    await save_prompt_id(msg, state)
 
 @router.message(SettingsFSM.waiting_for_mode)
 async def process_mode(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
     mode_text = message.text.split()[0].lower()
     if mode_text not in ["paper", "live", "signals"]:
-        await message.answer("Пожалуйста, выберите режим кнопкой.")
+        msg = await message.answer("Пожалуйста, выберите режим кнопкой.")
+        await save_prompt_id(msg, state)
         return
 
     bot_settings["mode"] = mode_text
     logger.info(f"Пользователь {message.from_user.id} изменил режим работы: {mode_text}")
-    await message.answer("Сохранено.\n\nВведите риск на сделку в % (например `2.0`):", reply_markup=ReplyKeyboardRemove())
+    msg = await message.answer("Сохранено.\n\nВведите риск на сделку в % (например `2.0`):", reply_markup=ReplyKeyboardRemove())
     await state.set_state(SettingsFSM.waiting_for_risk)
+    await save_prompt_id(msg, state)
 
 @router.message(SettingsFSM.waiting_for_risk)
 async def process_risk(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
     try:
         risk = float(message.text.strip())
         if risk <= 0 or risk > 100:
             raise ValueError
     except ValueError:
-        await message.answer("Некорректное значение. Введите число (например, 2.0).")
+        msg = await message.answer("Некорректное значение. Введите число (например, 2.0).")
+        await save_prompt_id(msg, state)
         return
 
     bot_settings["risk_percent"] = risk
     logger.info(f"Пользователь {message.from_user.id} установил риск: {risk}%")
+    
+    # Сначала восстановим клавиатуру отдельным пустым сообщением и сразу удалим, 
+    # чтобы основное сообщение "Настройки сохранены" было с Inline-кнопкой
+    kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
+    await delete_user_msg(kb_msg)
+    
     await message.answer(
         f"✅ Настройки сохранены!\n\n"
         f"Режим: `{bot_settings['mode'].upper()}`\n"
         f"Риск: `{risk}%`\n\n"
         f"**Пары:**\n{_pairs_summary()}",
-        reply_markup=get_main_keyboard()
+        reply_markup=get_delete_kb()
     )
     await state.clear()
 
@@ -157,20 +209,26 @@ async def process_risk(message: Message, state: FSMContext):
 
 @router.message(F.text == "➕ Добавить пару")
 async def cmd_add_pair(message: Message, state: FSMContext):
+    await delete_user_msg(message)
     await state.clear()
-    await message.answer(
+    msg = await message.answer(
         f"📝 **Текущие пары:**\n{_pairs_summary()}\n\n"
         "Введите символ для добавления (например `BTC_USDT`):",
         reply_markup=ReplyKeyboardRemove()
     )
     await state.set_state(PairFSM.waiting_for_symbol)
+    await save_prompt_id(msg, state)
 
 @router.message(PairFSM.waiting_for_symbol)
 async def process_pair_symbol(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
     symbol = message.text.strip().upper()
 
     if not symbol.endswith("USDT") and not symbol.endswith("_USDT"):
-        await message.answer("Неверный формат. Пара должна оканчиваться на USDT (напр. `SOL_USDT`).")
+        msg = await message.answer("Неверный формат. Пара должна оканчиваться на USDT (напр. `SOL_USDT`).")
+        await save_prompt_id(msg, state)
         return
 
     # Нормализуем
@@ -178,7 +236,9 @@ async def process_pair_symbol(message: Message, state: FSMContext):
         symbol = f"{symbol[:-4]}_USDT"
 
     if symbol in bot_settings["pairs"]:
-        await message.answer(f"⚠️ Пара `{symbol}` уже добавлена.", reply_markup=get_main_keyboard())
+        kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
+        await delete_user_msg(kb_msg)
+        await message.answer(f"⚠️ Пара `{symbol}` уже добавлена.", reply_markup=get_delete_kb())
         await state.clear()
         return
 
@@ -188,17 +248,22 @@ async def process_pair_symbol(message: Message, state: FSMContext):
         [KeyboardButton(text="1"), KeyboardButton(text="5"), KeyboardButton(text="15")],
         [KeyboardButton(text="30"), KeyboardButton(text="60")]
     ], resize_keyboard=True)
-    await message.answer(f"Пара: `{symbol}`\n\nВыберите таймфрейм (в минутах):", reply_markup=kb)
+    msg = await message.answer(f"Пара: `{symbol}`\n\nВыберите таймфрейм (в минутах):", reply_markup=kb)
     await state.set_state(PairFSM.waiting_for_timeframe)
+    await save_prompt_id(msg, state)
 
 @router.message(PairFSM.waiting_for_timeframe)
 async def process_pair_tf(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
     try:
         tf = int(message.text.strip())
         if tf not in [1, 5, 15, 30, 60]:
             raise ValueError
     except ValueError:
-        await message.answer("Неверный формат. Выберите кнопкой (1, 5, 15, 30, 60).")
+        msg = await message.answer("Неверный формат. Выберите кнопкой (1, 5, 15, 30, 60).")
+        await save_prompt_id(msg, state)
         return
 
     await state.update_data(new_tf=tf)
@@ -207,18 +272,23 @@ async def process_pair_tf(message: Message, state: FSMContext):
         [KeyboardButton(text="1x"), KeyboardButton(text="3x"), KeyboardButton(text="5x")],
         [KeyboardButton(text="10x"), KeyboardButton(text="20x")]
     ], resize_keyboard=True)
-    await message.answer(f"Таймфрейм: `{tf}m`\n\nВыберите кредитное плечо:", reply_markup=kb)
+    msg = await message.answer(f"Таймфрейм: `{tf}m`\n\nВыберите кредитное плечо:", reply_markup=kb)
     await state.set_state(PairFSM.waiting_for_leverage)
+    await save_prompt_id(msg, state)
 
 @router.message(PairFSM.waiting_for_leverage)
 async def process_pair_leverage(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
     text = message.text.strip().lower().replace("x", "")
     try:
         lev = int(text)
         if lev not in [1, 3, 5, 10, 20]:
             raise ValueError
     except ValueError:
-        await message.answer("Пожалуйста, выберите плечо кнопкой.")
+        msg = await message.answer("Пожалуйста, выберите плечо кнопкой.")
+        await save_prompt_id(msg, state)
         return
 
     data = await state.get_data()
@@ -227,38 +297,51 @@ async def process_pair_leverage(message: Message, state: FSMContext):
 
     bot_settings["pairs"][symbol] = {"tf": tf, "leverage": lev}
 
+    kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
+    await delete_user_msg(kb_msg)
+
     await message.answer(
         f"✅ Пара `{symbol}` добавлена!\n"
         f"Таймфрейм: `{tf}m` | Плечо: `{lev}x`\n\n"
         f"**Все пары:**\n{_pairs_summary()}",
-        reply_markup=get_main_keyboard()
+        reply_markup=get_delete_kb()
     )
     await state.clear()
 
 
 @router.message(F.text == "➖ Убрать пару")
 async def cmd_remove_pair(message: Message, state: FSMContext):
+    await delete_user_msg(message)
     await state.clear()
     pairs = bot_settings["pairs"]
 
     if len(pairs) == 0:
-        await message.answer("⚠️ Список пар пуст.", reply_markup=get_main_keyboard())
+        msg = await message.answer("⚠️ Список пар пуст.", reply_markup=get_delete_kb())
         return
 
     if len(pairs) == 1:
         sym = list(pairs.keys())[0]
-        await message.answer(f"⚠️ Нельзя удалить последнюю пару (`{sym}`). Добавьте другую сначала.", reply_markup=get_main_keyboard())
+        msg = await message.answer(f"⚠️ Нельзя удалить последнюю пару (`{sym}`). Добавьте другую сначала.", reply_markup=get_delete_kb())
         return
 
     kb_buttons = [[KeyboardButton(text=f"🗑 {s}")] for s in pairs]
     kb_buttons.append([KeyboardButton(text="❌ Отмена")])
     kb = ReplyKeyboardMarkup(keyboard=kb_buttons, resize_keyboard=True)
-    await message.answer("Выберите пару для удаления:", reply_markup=kb)
+    msg = await message.answer("Выберите пару для удаления:", reply_markup=kb)
+    await state.set_state(PairFSM.waiting_for_symbol) # Переиспользуем состояние, чтобы знать, что мы удаляем
+    # (На самом деле мы просто ждем сообщение, начинающееся с 🗑, но State поможет нам удалить prompt)
+    await save_prompt_id(msg, state)
 
 
 @router.message(F.text.startswith("🗑 "))
 async def process_remove_pair(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
     symbol = message.text.replace("🗑 ", "").strip()
+
+    kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
+    await delete_user_msg(kb_msg)
 
     if symbol in bot_settings["pairs"]:
         del bot_settings["pairs"][symbol]
@@ -266,19 +349,25 @@ async def process_remove_pair(message: Message, state: FSMContext):
         global _engine_manager
         if _engine_manager and symbol in _engine_manager.engines:
             await _engine_manager.remove_pair(symbol)
-            await message.answer(f"🛑 Движок для `{symbol}` остановлен.")
+            await message.answer(f"🛑 Движок для `{symbol}` остановлен.", reply_markup=get_delete_kb())
 
         await message.answer(
             f"✅ Пара `{symbol}` удалена.\n\n**Осталось:**\n{_pairs_summary()}",
-            reply_markup=get_main_keyboard()
+            reply_markup=get_delete_kb()
         )
     else:
-        await message.answer("⚠️ Пара не найдена.", reply_markup=get_main_keyboard())
+        await message.answer("⚠️ Пара не найдена.", reply_markup=get_delete_kb())
+    await state.clear()
 
 @router.message(F.text == "❌ Отмена")
 async def process_cancel(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
     await state.clear()
-    await message.answer("Отменено.", reply_markup=get_main_keyboard())
+    
+    kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
+    await delete_user_msg(kb_msg)
+    await message.answer("Отменено.", reply_markup=get_delete_kb())
 
 
 # --- ЗАПУСК / СТОП ---
@@ -289,13 +378,13 @@ async def send_tg_notification(text: str):
     
     if bot and bot_settings.get("chat_id"):
         try:
-            await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode="Markdown")
+            await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode="Markdown", reply_markup=get_delete_kb())
         except Exception as e:
             # Fallback: отправляем без Markdown если парсинг сломался
             logger.error(f"Ошибка отправки в Telegram (Markdown): {e}")
             try:
                 # Обязательно указываем parse_mode=None, иначе применится дефолтный Markdown из telegram_bot.py
-                await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode=None)
+                await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode=None, reply_markup=get_delete_kb())
             except Exception as e2:
                 logger.error(f"Ошибка отправки в Telegram (plain): {e2}")
     else:
@@ -304,12 +393,13 @@ async def send_tg_notification(text: str):
 
 @router.message(F.text == "🚀 ЗАПУСК БОТА")
 async def cmd_start_bot(message: Message, state: FSMContext):
+    await delete_user_msg(message)
     global _engine_manager
     await state.clear()
 
     if _engine_manager and _engine_manager.is_running:
         logger.warning(f"Пользователь {message.from_user.id} попытался запустить уже запущенного бота")
-        await message.answer("⚠️ Бот УЖЕ запущен!")
+        await message.answer("⚠️ Бот УЖЕ запущен!", reply_markup=get_delete_kb())
         return
 
     logger.info(f"!!! ПОЛЬЗОВАТЕЛЬ {message.from_user.id} ДАЛ КОМАНДУ НА ЗАПУСК БОТА !!!")
@@ -318,13 +408,13 @@ async def cmd_start_bot(message: Message, state: FSMContext):
     pairs = bot_settings["pairs"]
 
     if not pairs:
-        await message.answer("⚠️ Список пар пуст. Добавьте хотя бы одну пару.")
+        await message.answer("⚠️ Список пар пуст. Добавьте хотя бы одну пару.", reply_markup=get_delete_kb())
         return
 
     lines = [f"🚀 Инициализация движков... Режим: `{mode.upper()}`\n"]
     for sym, cfg in pairs.items():
         lines.append(f"• `{sym}` — {cfg['tf']}m, {cfg['leverage']}x")
-    await message.answer("\n".join(lines))
+    await message.answer("\n".join(lines), reply_markup=get_delete_kb())
 
     paper_trading = mode != "live"
     _engine_manager = EngineManager()
@@ -341,21 +431,22 @@ async def cmd_start_bot(message: Message, state: FSMContext):
         )
         if ok:
             success_count += 1
-            await message.answer(f"✅ `{symbol}` ({cfg['tf']}m, {cfg['leverage']}x) — запущен")
+            await message.answer(f"✅ `{symbol}` ({cfg['tf']}m, {cfg['leverage']}x) — запущен", reply_markup=get_delete_kb())
         else:
-            await message.answer(f"❌ `{symbol}` — ошибка инициализации")
+            await message.answer(f"❌ `{symbol}` — ошибка инициализации", reply_markup=get_delete_kb())
 
     if success_count > 0:
         await message.answer(
-            f"🟢 **Запущено {success_count}/{len(pairs)} движков!**\nСлушаю потоки и жду сигналы..."
+            f"🟢 **Запущено {success_count}/{len(pairs)} движков!**\nСлушаю потоки и жду сигналы...", reply_markup=get_delete_kb()
         )
     else:
-        await message.answer("❌ Ни один движок не запустился. Проверьте логи.")
+        await message.answer("❌ Ни один движок не запустился. Проверьте логи.", reply_markup=get_delete_kb())
         _engine_manager = None
 
 
 @router.message(F.text == "🛑 СТОП")
 async def cmd_stop_bot(message: Message, state: FSMContext):
+    await delete_user_msg(message)
     global _engine_manager
     await state.clear()
 
@@ -364,9 +455,9 @@ async def cmd_stop_bot(message: Message, state: FSMContext):
         count = len(_engine_manager.engines)
         await _engine_manager.stop_all()
         _engine_manager = None
-        await message.answer(f"🛑 Остановлено {count} движков.")
+        await message.answer(f"🛑 Остановлено {count} движков.", reply_markup=get_delete_kb())
     else:
-        await message.answer("⚠️ Бот и так не запущен.")
+        await message.answer("⚠️ Бот и так не запущен.", reply_markup=get_delete_kb())
 
 
 from core.backtest.optimizer import StrategyOptimizer
@@ -376,50 +467,63 @@ from core.strategies.liquidity_sweep import LiquiditySweepStrategy
 
 @router.message(F.text == "🧪 Тест Стратегий")
 async def cmd_test_strategies(message: Message, state: FSMContext):
+    await delete_user_msg(message)
     await state.clear()
     pairs = bot_settings["pairs"]
 
     if not pairs:
-        await message.answer("⚠️ Добавьте хотя бы одну пару.", reply_markup=get_main_keyboard())
+        msg = await message.answer("⚠️ Добавьте хотя бы одну пару.", reply_markup=get_delete_kb())
         return
 
     if len(pairs) == 1:
         symbol = list(pairs.keys())[0]
         tf = pairs[symbol]["tf"]
-        await message.answer(
+        msg = await message.answer(
             f"⏳ Запускаю полный бэктест `{symbol}` ({tf}m)...\n"
             "Тестирую 3 стратегии. Это займёт 1-2 минуты.",
-            reply_markup=get_main_keyboard()
+            reply_markup=get_delete_kb()
         )
         asyncio.create_task(run_optimizer_and_report(message, symbol, tf))
     else:
         kb_buttons = [[KeyboardButton(text=f"🧪 {s}")] for s in pairs]
         kb_buttons.append([KeyboardButton(text="❌ Отмена")])
         kb = ReplyKeyboardMarkup(keyboard=kb_buttons, resize_keyboard=True)
-        await message.answer("Выберите пару для тестирования:", reply_markup=kb)
+        msg = await message.answer("Выберите пару для тестирования:", reply_markup=kb)
         await state.set_state(TestFSM.waiting_for_pair_choice)
+        await save_prompt_id(msg, state)
 
 
 @router.message(TestFSM.waiting_for_pair_choice)
 async def process_test_pair_choice(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
     if message.text == "❌ Отмена":
         await state.clear()
-        await message.answer("Отменено.", reply_markup=get_main_keyboard())
+        
+        kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
+        await delete_user_msg(kb_msg)
+        await message.answer("Отменено.", reply_markup=get_delete_kb())
         return
 
     symbol = message.text.replace("🧪 ", "").strip()
     pairs = bot_settings["pairs"]
 
     if symbol not in pairs:
-        await message.answer("⚠️ Пара не найдена. Выберите кнопкой.")
+        msg = await message.answer("⚠️ Пара не найдена. Выберите кнопкой.")
+        await save_prompt_id(msg, state)
         return
 
     tf = pairs[symbol]["tf"]
     await state.clear()
+    
+    kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
+    await delete_user_msg(kb_msg)
+    
     await message.answer(
         f"⏳ Запускаю полный бэктест `{symbol}` ({tf}m)...\n"
         "Тестирую 3 стратегии. Это займёт 1-2 минуты.",
-        reply_markup=get_main_keyboard()
+        reply_markup=get_delete_kb()
     )
     asyncio.create_task(run_optimizer_and_report(message, symbol, tf))
 
@@ -485,7 +589,8 @@ async def run_optimizer_and_report(message: Message, symbol: str, tf: int):
             await message.answer(
                 f"❌ **Бэктест `{symbol}` ({tf}m)**\n\n"
                 "Ни одна стратегия не нашла сигналов на данных 3000 свечей.\n"
-                "Попробуйте другой таймфрейм или монету."
+                "Попробуйте другой таймфрейм или монету.",
+                reply_markup=get_delete_kb()
             )
             return
 
@@ -522,11 +627,11 @@ async def run_optimizer_and_report(message: Message, symbol: str, tf: int):
                     f"Сделок: `{r['total_trades']}`\n"
                 )
 
-        await message.answer(report)
+        await message.answer(report, reply_markup=get_delete_kb())
 
     except Exception as e:
         logger.error(f"Ошибка бэктеста: {e}", exc_info=True)
-        await message.answer("❌ Произошла ошибка при тестировании. Проверьте логи.", parse_mode=None)
+        await message.answer("❌ Произошла ошибка при тестировании. Проверьте логи.", parse_mode=None, reply_markup=get_delete_kb())
 
 
 # --- НАСТРОЙКИ СТРАТЕГИЙ ---
@@ -543,6 +648,7 @@ def _strategy_params_summary() -> str:
 
 @router.message(F.text == "🎯 Стратегии")
 async def cmd_strategy_settings(message: Message, state: FSMContext):
+    await delete_user_msg(message)
     await state.clear()
     
     text = (
@@ -560,17 +666,24 @@ async def cmd_strategy_settings(message: Message, state: FSMContext):
     buttons.append([KeyboardButton(text="🔙 Назад")])
     
     kb = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-    await message.answer(text, reply_markup=kb)
+    msg = await message.answer(text, reply_markup=kb)
     await state.set_state(StrategyFSM.waiting_for_param_choice)
+    await save_prompt_id(msg, state)
 
 
 @router.message(StrategyFSM.waiting_for_param_choice)
 async def process_strategy_param_choice(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
     text = message.text.strip()
     
     if text == "🔙 Назад":
         await state.clear()
-        await message.answer("Главное меню.", reply_markup=get_main_keyboard())
+        
+        kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
+        await delete_user_msg(kb_msg)
+        await message.answer("Главное меню.", reply_markup=get_delete_kb())
         return
     
     # Ищем параметр по label
@@ -581,14 +694,15 @@ async def process_strategy_param_choice(message: Message, state: FSMContext):
             break
     
     if not chosen_key:
-        await message.answer("Выберите параметр кнопкой.")
+        msg = await message.answer("Выберите параметр кнопкой.")
+        await save_prompt_id(msg, state)
         return
     
     label, desc = STRATEGY_PARAM_LABELS[chosen_key]
     current = bot_settings.get("strategy_params", {}).get(chosen_key, 0)
     
     await state.update_data(editing_param=chosen_key)
-    await message.answer(
+    msg = await message.answer(
         f"✏️ **{label}**\n\n"
         f"{desc}\n\n"
         f"Текущее значение: `{current}`\n"
@@ -596,16 +710,21 @@ async def process_strategy_param_choice(message: Message, state: FSMContext):
         reply_markup=ReplyKeyboardRemove()
     )
     await state.set_state(StrategyFSM.waiting_for_value)
+    await save_prompt_id(msg, state)
 
 
 @router.message(StrategyFSM.waiting_for_value)
 async def process_strategy_param_value(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
     try:
         value = float(message.text.strip())
         if value <= 0:
             raise ValueError
     except ValueError:
-        await message.answer("Некорректное значение. Введите положительное число (например, `45` или `0.025`).")
+        msg = await message.answer("Некорректное значение. Введите положительное число (например, `45` или `0.025`).")
+        await save_prompt_id(msg, state)
         return
     
     data = await state.get_data()
@@ -613,7 +732,10 @@ async def process_strategy_param_value(message: Message, state: FSMContext):
     
     if not param_key or param_key not in STRATEGY_PARAM_LABELS:
         await state.clear()
-        await message.answer("Ошибка. Попробуйте снова.", reply_markup=get_main_keyboard())
+        
+        kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
+        await delete_user_msg(kb_msg)
+        await message.answer("Ошибка. Попробуйте снова.", reply_markup=get_delete_kb())
         return
     
     # Сохраняем
@@ -626,9 +748,13 @@ async def process_strategy_param_value(message: Message, state: FSMContext):
     logger.info(f"Пользователь {message.from_user.id} изменил {param_key}: {old_value} → {value}")
     
     await state.clear()
+    
+    kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
+    await delete_user_msg(kb_msg)
+    
     await message.answer(
         f"✅ **{label}** изменён: `{old_value}` → `{value}`\n\n"
         f"📋 Текущие параметры:\n{_strategy_params_summary()}\n\n"
         f"⚠️ Изменения применятся при следующем **🚀 ЗАПУСК БОТА**.",
-        reply_markup=get_main_keyboard()
+        reply_markup=get_delete_kb()
     )

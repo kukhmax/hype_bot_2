@@ -15,6 +15,7 @@ from core.execution.mexc_executor import MEXCExecutor
 from core.risk.manager import RiskManager
 from core.regime.classifier import RegimeClassifier
 from core.ml.ensemble import EnsembleFilter
+from core.data.trade_logger import TradeLogger
 
 logger = setup_logger("live_engine")
 
@@ -345,12 +346,16 @@ class LiveEngine:
                     await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (LONG) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']}`")
                     
             if candle["low"] <= pos["stop_loss"]:
-                pnl = (pos["stop_loss"] - pos["entry_price"]) * pos["qty"]
-                logger.info(f"[-PAPER-] Сработал SL по BUY ({pos['stop_loss']}). PnL: {pnl:.2f}")
+                close_price = pos["stop_loss"]
+                close_reason = "SL"
+                pnl = (close_price - pos["entry_price"]) * pos["qty"]
+                logger.info(f"[-PAPER-] Сработал SL по BUY ({close_price}). PnL: {pnl:.2f}")
                 closed = True
             elif pos.get("take_profit") and candle["high"] >= pos["take_profit"]:
-                pnl = (pos["take_profit"] - pos["entry_price"]) * pos["qty"]
-                logger.info(f"[+PAPER+] Сработал TP по BUY ({pos['take_profit']}). PnL: {pnl:.2f}")
+                close_price = pos["take_profit"]
+                close_reason = "TP"
+                pnl = (close_price - pos["entry_price"]) * pos["qty"]
+                logger.info(f"[+PAPER+] Сработал TP по BUY ({close_price}). PnL: {pnl:.2f}")
                 closed = True
                 
         elif pos["side"] == "SELL":
@@ -362,15 +367,33 @@ class LiveEngine:
                     await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']}`")
 
             if candle["high"] >= pos["stop_loss"]:
-                pnl = (pos["entry_price"] - pos["stop_loss"]) * pos["qty"] # Шорт: цена выросла = убыток
-                logger.info(f"[-PAPER-] Сработал SL по SELL ({pos['stop_loss']}). PnL: {pnl:.2f}")
+                close_price = pos["stop_loss"]
+                close_reason = "SL"
+                pnl = (pos["entry_price"] - close_price) * pos["qty"] # Шорт: цена выросла = убыток
+                logger.info(f"[-PAPER-] Сработал SL по SELL ({close_price}). PnL: {pnl:.2f}")
                 closed = True
             elif pos.get("take_profit") and candle["low"] <= pos["take_profit"]:
-                pnl = (pos["entry_price"] - pos["take_profit"]) * pos["qty"]
-                logger.info(f"[+PAPER+] Сработал TP по SELL ({pos['take_profit']}). PnL: {pnl:.2f}")
+                close_price = pos["take_profit"]
+                close_reason = "TP"
+                pnl = (pos["entry_price"] - close_price) * pos["qty"]
+                logger.info(f"[+PAPER+] Сработал TP по SELL ({close_price}). PnL: {pnl:.2f}")
                 closed = True
                 
         if closed:
+            # Логируем сделку в CSV
+            TradeLogger.log_trade(
+                symbol=self.symbol,
+                mode="PAPER" if self.paper_trading else "LIVE",
+                side=pos["side"],
+                entry_price=pos["entry_price"],
+                close_price=close_price,
+                qty=pos["qty"],
+                pnl=pnl,
+                strategy_name=self.active_strategy.__class__.__name__,
+                regime=self.current_regime,
+                reason=close_reason
+            )
+            
             self.risk_manager.report_trade_result(pnl)
             # Отчёт в ML Ensemble (для адаптации Dynamic Threshold)
             if self.ml_filter is not None and self._last_ml_score is not None:
