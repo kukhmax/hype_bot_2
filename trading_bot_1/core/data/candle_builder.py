@@ -64,11 +64,17 @@ class CandleBuilder:
         if self._tick_count % 100 == 0:
             logger.debug(f"[{self.symbol}] Обработано {self._tick_count} тиков. Текущая свеча (незакрытая): {self.current_candle}")
 
-        # Сохраняем промежуточное состояние в Redis (чтобы не потерять при падении)
-        try:
-            await self.redis.set(self.redis_key, json.dumps(self.current_candle))
-        except Exception as e:
-            logger.error(f"Ошибка записи в Redis: {e}")
+        # Сохраняем промежуточное состояние в Redis каждые 10 тиков
+        if self._tick_count % 10 == 0:
+            try:
+                await self.redis.set(self.redis_key, json.dumps(self.current_candle))
+            except Exception as e:
+                # Логируем только каждую 100-ю ошибку, чтобы не спамить
+                if not hasattr(self, '_redis_err_count'):
+                    self._redis_err_count = 0
+                self._redis_err_count += 1
+                if self._redis_err_count <= 1 or self._redis_err_count % 100 == 0:
+                    logger.warning(f"Ошибка записи в Redis (#{self._redis_err_count}): {e}")
 
     def _create_new_candle(self, timestamp: int, price: float, volume: float) -> dict:
         return {

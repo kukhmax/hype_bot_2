@@ -41,7 +41,7 @@ class LiveEngine:
         
         # Параметры стратегий (из Telegram настроек или дефолтные)
         sp = strategy_params or {}
-        rsi_th = sp.get("rsi_threshold", 50)  # Был 45, увеличен для коротких TF
+        rsi_th = sp.get("rsi_threshold", 55)  # Был 50, увеличен для 1m/5m TF
         bb_th = sp.get("bb_width_threshold", 0.025)
         adx_th = sp.get("adx_threshold", 20)
         sl_atr = sp.get("sl_atr_mult", 1.5)
