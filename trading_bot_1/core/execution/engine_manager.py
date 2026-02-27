@@ -81,7 +81,7 @@ class EngineManager:
         self._start_ws_if_needed()
         
         # Подписываемся на символ (если WS уже подключён)
-        if ws_client.ws and not ws_client.ws.closed:
+        if ws_client.ws and ws_client.ws.close_code is None:
             await ws_client.subscribe_symbol(symbol)
         
         logger.info(f"Движок для {symbol} успешно запущен (Leverage: {leverage}x)")

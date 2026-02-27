@@ -92,7 +92,7 @@ class BaseWebSocketClient:
         try:
             while self.is_running and self.ws:
                 await asyncio.sleep(self.ping_interval)
-                if self.ws and not self.ws.closed:
+                if self.ws and self.ws.close_code is None:
                     try:
                         await self.ws.send(json.dumps({"method": "ping"}))
                         logger.debug("Ping отправлен")
