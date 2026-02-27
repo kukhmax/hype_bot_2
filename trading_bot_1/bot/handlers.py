@@ -80,8 +80,9 @@ async def cmd_status(message: Message, state: FSMContext):
         for s in statuses:
             if s["has_position"]:
                 pnl = s.get("pnl", 0.0)
+                pnl_pct = s.get("pnl_percent", 0.0)
                 pos_icon = "🟢" if pnl >= 0 else "🔴"
-                pos_text = f"{s['position_side']} | {pos_icon} {pnl:.2f} USDT"
+                pos_text = f"{s['position_side']} | {pos_icon} {pnl:.2f} USDT ({pnl_pct:+.2f}%)"
             else:
                 pos_icon = "⚪️"
                 pos_text = "—"

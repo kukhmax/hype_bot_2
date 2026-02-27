@@ -128,6 +128,7 @@ class EngineManager:
         statuses = []
         for symbol, engine in self.engines.items():
             pos_pnl = 0.0
+            pnl_percent = 0.0
             if engine.current_position:
                 pos = engine.current_position
                 current_price = None
@@ -142,6 +143,11 @@ class EngineManager:
                         pos_pnl = (current_price - pos["entry_price"]) * pos["qty"]
                     elif pos["side"] == "SELL":
                         pos_pnl = (pos["entry_price"] - current_price) * pos["qty"]
+                        
+                    # Расчет PnL в процентах с учетом плеча
+                    position_value = pos["entry_price"] * pos["qty"]
+                    if position_value > 0:
+                        pnl_percent = (pos_pnl / position_value) * 100 * engine.leverage
 
             statuses.append({
                 "symbol": symbol,
@@ -152,6 +158,7 @@ class EngineManager:
                 "has_position": engine.current_position is not None,
                 "position_side": engine.current_position["side"] if engine.current_position else None,
                 "pnl": pos_pnl,
+                "pnl_percent": pnl_percent,
                 "running": True  # Если в engines — значит работает
             })
         return statuses
