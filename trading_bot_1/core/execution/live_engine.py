@@ -30,7 +30,8 @@ class LiveEngine:
                  timeframe_minutes: int, 
                  paper_trading: bool = True,
                  leverage: int = 1,
-                 tg_callback: 'Callable[[str], Awaitable[None]]' = None):
+                 tg_callback: 'Callable[[str], Awaitable[None]]' = None,
+                 ws_client: 'MEXCWebSocketClient' = None):
         
         self.symbol = symbol
         self.timeframe_minutes = timeframe_minutes
@@ -50,7 +51,8 @@ class LiveEngine:
         # Компоненты системы
         self.executor = MEXCExecutor()
         self.risk_manager = RiskManager()
-        self.ws_client = MEXCWebSocketClient([symbol])
+        # WS клиент — общий, передаётся из EngineManager
+        self.ws_client = ws_client
         self.candle_builder = CandleBuilder(symbol, timeframe_minutes)
         
         # ML Ensemble Filter (опционально)
@@ -92,8 +94,12 @@ class LiveEngine:
         await self.candle_builder.init_state()
         self.candle_builder.callbacks.append(self._on_candle_closed)
         
-        # 3. Привязываем WS клиент к строителю свечей
-        self.ws_client.callbacks.append(self._on_ws_message)
+        # 3. Привязываем per-symbol callback в shared WS клиент
+        if self.ws_client:
+            self.ws_client.add_symbol_callback(self.symbol, self._on_ws_message)
+            logger.info(f"[{self.symbol}] Зарегистрирован в общем WebSocket клиенте")
+        else:
+            logger.warning(f"[{self.symbol}] WS клиент не передан — тики не будут приходить")
         
         # 4. Проверяем баланс и стартуем сессию Риск-Менеджера
         initial_balance = await self.executor.get_balance("USDT")
@@ -383,19 +389,5 @@ class LiveEngine:
             else:
                 logger.error(f"[LIVE TRADING] Ошибка открытия ордера: {result}")
 
-    async def run_forever(self):
-        if not self.is_ready:
-            logger.error("Live Engine не инициализирован!")
-            return
-            
-        logger.info(f"Запуск WebSockets для {self.symbol}...")
-        # Запускает бесконечный цикл слушания сокетов
-        while True:
-            try:
-                await self.ws_client.connect()
-                await self.ws_client.receive_messages()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Live Engine WebSocket Error: {e}")
-                await asyncio.sleep(5)
+    # WebSocket управляется EngineManager — run_forever() больше не нужен.
+    # Движок получает тики через callback, зарегистрированный в shared WS клиенте.

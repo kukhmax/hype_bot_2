@@ -15,6 +15,7 @@ class BaseWebSocketClient:
     Реализует логику:
     - Подключения и удержания соединения
     - Автоматического реконнекта с экспоненциальной задержкой (Exponential Backoff)
+    - Ping/pong keepalive для поддержания соединения
     - Маршрутизации входящих JSON-сообщений через callbacks
     """
 
@@ -23,10 +24,14 @@ class BaseWebSocketClient:
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.is_running = False
         self.callbacks: List[Callable[[Dict[str, Any]], Any]] = []
+        self._ping_task: Optional[asyncio.Task] = None
         
         # Настройки реконнекта
         self.reconnect_delay = 1.0  # Начальная задержка (сек)
         self.max_reconnect_delay = 60.0  # Максимальная задержка (сек)
+        
+        # Настройки keepalive
+        self.ping_interval = 20  # Секунд между ping-сообщениями
         
     def add_callback(self, callback: Callable[[Dict[str, Any]], Any]):
         """Добавляет функцию-обработчик для входящих JSON сообщений."""
@@ -40,35 +45,67 @@ class BaseWebSocketClient:
         while self.is_running:
             try:
                 logger.info(f"Подключение к {self.url}...")
-                async with websockets.connect(self.url) as ws:
+                async with websockets.connect(
+                    self.url,
+                    ping_interval=None,  # Отключаем встроенный ping — используем свой
+                    ping_timeout=None,
+                    close_timeout=5,
+                ) as ws:
                     self.ws = ws
                     logger.info("Успешно подключились к WebSocket.")
                     
                     # Сбрасываем задержку после успешного подключения
                     self.reconnect_delay = 1.0
                     
-                    # Хук для отправки сообщений сразу после подключения (например, подписки на каналы)
+                    # Хук для отправки сообщений сразу после подключения (подписки)
                     await self.on_connect()
                     
-                    await self._listen()
+                    # Запускаем keepalive ping
+                    self._ping_task = asyncio.create_task(self._keepalive_ping())
+                    
+                    try:
+                        await self._listen()
+                    finally:
+                        # Останавливаем ping при любом выходе из listen
+                        if self._ping_task and not self._ping_task.done():
+                            self._ping_task.cancel()
+                            try:
+                                await self._ping_task
+                            except asyncio.CancelledError:
+                                pass
                     
             except ConnectionClosed as e:
-                logger.error(f"Соединение закрыто: {e}")
+                logger.warning(f"WebSocket соединение закрыто: code={e.code} reason={e.reason}")
             except Exception as e:
-                logger.error(f"Ошибка WebSocket: {e}")
+                logger.error(f"Ошибка WebSocket: {type(e).__name__}: {e}")
                 
             if not self.is_running:
                 break
                 
-            logger.info(f"Переподключение через {self.reconnect_delay} секунд...")
+            logger.info(f"Переподключение через {self.reconnect_delay:.0f} секунд...")
             await asyncio.sleep(self.reconnect_delay)
             # Экспоненциальное увеличение задержки
             self.reconnect_delay = min(self.reconnect_delay * 2, self.max_reconnect_delay)
 
+    async def _keepalive_ping(self):
+        """Периодически отправляет ping для поддержания соединения."""
+        try:
+            while self.is_running and self.ws:
+                await asyncio.sleep(self.ping_interval)
+                if self.ws and not self.ws.closed:
+                    try:
+                        await self.ws.send(json.dumps({"method": "ping"}))
+                        logger.debug("Ping отправлен")
+                    except Exception as e:
+                        logger.warning(f"Ошибка при отправке ping: {e}")
+                        break
+        except asyncio.CancelledError:
+            pass
+
     async def on_connect(self):
         """
         Метод для переопределения в дочерних классах (для конкретной биржи). 
-        Вызывается сразу после успешного подключения (например, для отправки { 'method': 'SUBSCRIBE', ... }).
+        Вызывается сразу после успешного подключения.
         """
         pass
 
@@ -88,7 +125,6 @@ class BaseWebSocketClient:
             data = json.loads(message)
             for callback in self.callbacks:
                 try:
-                    # Запускаем callback асинхронно или синхронно в зависимости от его сигнатуры
                     if asyncio.iscoroutinefunction(callback):
                         await callback(data)
                     else:
@@ -111,6 +147,8 @@ class BaseWebSocketClient:
     async def stop(self):
         """Остановка клиента."""
         self.is_running = False
+        if self._ping_task and not self._ping_task.done():
+            self._ping_task.cancel()
         if self.ws:
             await self.ws.close()
             logger.info("WebSocket соединение закрыто.")
