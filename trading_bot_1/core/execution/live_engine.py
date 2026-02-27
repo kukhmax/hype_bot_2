@@ -169,6 +169,9 @@ class LiveEngine:
             self.current_regime = new_regime
             if new_regime in self.strategies:
                 self.active_strategy = self.strategies[new_regime]
+                # Пересчитываем prepare_data для новой стратегии
+                # (например LiquiditySweep добавляет local_low/local_high)
+                self.df = self.active_strategy.prepare_data(self.df)
                 await self._notify(f"🔄 **СМЕНА РЕЖИМА**\nНовый режим: `{new_regime}`\nВключена стратегия: `{self.active_strategy.__class__.__name__}`")
         
         # --- Симуляция проверки Stop Loss / Take Profit (т.к. лимитки мы ставим на бирже, мы просто ждем их срабатывания) ---
