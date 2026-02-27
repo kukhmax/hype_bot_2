@@ -352,7 +352,12 @@ class LiveEngine:
         stop_loss = signal["stop_loss"]
         take_profit = signal.get("take_profit", None)
         
-        current_balance = await self.executor.get_balance("USDT")
+        # В paper trading берём баланс из risk_manager (виртуальный),
+        # в live — запрашиваем реальный с биржи
+        if self.paper_trading:
+            current_balance = self.risk_manager.session_start_balance
+        else:
+            current_balance = await self.executor.get_balance("USDT")
         logger.info(f"Обработка сигнала {side}. Текущий баланс: {current_balance} USDT. Плечо: {self.leverage}x")
         
         # Рассчитываем размер через риск-менеджера
