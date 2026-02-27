@@ -150,6 +150,14 @@ class LiveEngine:
 
     async def _on_candle_closed(self, candle_dict: dict):
         """Срабатывает при закрытии 1m / 15m свечи."""
+        try:
+            await self._process_candle(candle_dict)
+        except Exception as e:
+            logger.error(f"[{self.symbol}] ОШИБКА при обработке свечи: {type(e).__name__}: {e}", exc_info=True)
+            await self._notify(f"⚠️ Ошибка обработки свечи `{self.symbol}`: {e}")
+
+    async def _process_candle(self, candle_dict: dict):
+        """Внутренняя логика обработки закрытой свечи."""
         logger.info(f"Свеча закрыта: {candle_dict['timestamp']} Close: {candle_dict['close']}")
         
         # Добавляем свечу в наш DataFrame
@@ -159,7 +167,10 @@ class LiveEngine:
         # Просчитываем фичи (EMA, RSI, ATR) на новом DF используя любую стратегию (фичи общие)
         self.df = self.active_strategy.prepare_data(self.df)
         
-        # --- 4. Ограничиваем размер DataFrame (утечка памяти и замедление) ---
+        # Текущий индекс — ВСЕГДА последняя строка
+        current_idx = len(self.df) - 1
+        
+        # --- Ограничиваем размер DataFrame (утечка памяти и замедление) ---
         MAX_ROWS = 1000
         if len(self.df) > MAX_ROWS:
             self.df = self.df.iloc[-MAX_ROWS:].reset_index(drop=True)
@@ -182,10 +193,7 @@ class LiveEngine:
                 self.df = self.active_strategy.prepare_data(self.df)
                 await self._notify(f"🔄 **СМЕНА РЕЖИМА**\nНовый режим: `{new_regime}`\nВключена стратегия: `{self.active_strategy.__class__.__name__}`")
         
-        # --- Симуляция проверки Stop Loss / Take Profit (т.к. лимитки мы ставим на бирже, мы просто ждем их срабатывания) ---
-        # В реальной торговле мы бы периодически запрашивали статус ордеров (GET /api/v3/openOrders), 
-        # но для MVP мы можем просто симулировать закрытие локально, если мы в Paper Trading,
-        # либо доверять бирже (если ордера реально стоят на MEXC)
+        # --- Симуляция проверки Stop Loss / Take Profit ---
         if self.paper_trading and self.current_position:
             await self._check_paper_stops(candle_dict)
 
