@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     # Ensemble ML Filter (Phase 6 — ML Signal Filtering)
     ENABLE_ML_FILTER: bool = False
 
+    # AI Gemini Verification
+    # Минимальный таймфрейм для AI верификации (в минутах).
+    # На таймфреймах ниже этого порога AI пропускается,
+    # т.к. EMA 200 и ADX не информативны на 1m данных.
+    AI_VERIFY_MIN_TIMEFRAME: int = 5
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

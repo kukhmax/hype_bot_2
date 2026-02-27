@@ -213,36 +213,49 @@ class LiveEngine:
                         )
                 
                 # --- AI VERIFICATION ---
-                from core.ai.gemini_client import gemini_client
-                
-                row = self.df.iloc[current_idx]
-                indicators = {
-                    'close': candle_dict['close'],
-                    'rsi': row.get('rsi', 0),
-                    'adx': row.get('adx', 0),
-                    'ema_200': row.get('ema_200', 0),
-                    'bb_width_percent': 0
-                }
-                
-                upper_bb = row.get('bb_upper', None)
-                lower_bb = row.get('bb_lower', None)
-                if pd.notna(upper_bb) and pd.notna(lower_bb) and indicators['close']:
-                    indicators['bb_width_percent'] = (upper_bb - lower_bb) / indicators['close'] * 100
-                    
-                await self._notify("🤖 Запрашиваю 'Второе мнение' у ИИ Gemini...")
-                is_approved, reasoning = await gemini_client.verify_signal(
-                    self.symbol, 
-                    self.timeframe_minutes, 
-                    signal_data["signal"], 
-                    indicators
-                )
-                
-                if is_approved:
-                    await self._notify(f"✅ **ИИ ОДОБРИЛ СДЕЛКУ**\n`{reasoning}`")
+                # На коротких таймфреймах AI может быть слишком консервативным
+                # (EMA 200 и ADX не информативны на 1m). Пропускаем AI если TF < порога.
+                if self.timeframe_minutes < settings.AI_VERIFY_MIN_TIMEFRAME:
+                    logger.info(
+                        f"[{self.symbol}] AI верификация ПРОПУЩЕНА "
+                        f"(TF={self.timeframe_minutes}m < порог {settings.AI_VERIFY_MIN_TIMEFRAME}m)"
+                    )
+                    await self._notify(
+                        f"⚡ **AI ПРОПУЩЕН** (скальпинг {self.timeframe_minutes}m)\n"
+                        f"Сигнал `{signal_data['signal']}` направлен напрямую в исполнение."
+                    )
                     await self._execute_signal(signal_data, candle_dict["close"])
                 else:
-                    await self._notify(f"❌ **ИИ ОТКЛОНИЛ СДЕЛКУ**\n`{reasoning}`")
-                    logger.info(f"Сделка отклонена ИИ. Причина: {reasoning}")
+                    from core.ai.gemini_client import gemini_client
+                    
+                    row = self.df.iloc[current_idx]
+                    indicators = {
+                        'close': candle_dict['close'],
+                        'rsi': row.get('rsi', 0),
+                        'adx': row.get('adx', 0),
+                        'ema_200': row.get('ema_200', 0),
+                        'bb_width_percent': 0
+                    }
+                    
+                    upper_bb = row.get('bb_upper', None)
+                    lower_bb = row.get('bb_lower', None)
+                    if pd.notna(upper_bb) and pd.notna(lower_bb) and indicators['close']:
+                        indicators['bb_width_percent'] = (upper_bb - lower_bb) / indicators['close'] * 100
+                        
+                    await self._notify("🤖 Запрашиваю 'Второе мнение' у ИИ Gemini...")
+                    is_approved, reasoning = await gemini_client.verify_signal(
+                        self.symbol, 
+                        self.timeframe_minutes, 
+                        signal_data["signal"], 
+                        indicators
+                    )
+                    
+                    if is_approved:
+                        await self._notify(f"✅ **ИИ ОДОБРИЛ СДЕЛКУ**\n`{reasoning}`")
+                        await self._execute_signal(signal_data, candle_dict["close"])
+                    else:
+                        await self._notify(f"❌ **ИИ ОТКЛОНИЛ СДЕЛКУ**\n`{reasoning}`")
+                        logger.info(f"[{self.symbol}] Сделка отклонена ИИ. Причина: {reasoning}")
 
     async def _check_paper_stops(self, candle: dict):
         """Только для Paper Trading: закрытие сделки если цена коснулась SL/TP."""
