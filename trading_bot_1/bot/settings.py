@@ -13,6 +13,14 @@ class BotSettings:
                 # Пары с индивидуальными настройками: {symbol: {tf, leverage}}
                 "pairs": {
                     "SOL_USDT": {"tf": 15, "leverage": 5}
+                },
+                # Параметры стратегий (можно менять из Telegram)
+                "strategy_params": {
+                    "rsi_threshold": 45,        # RSI для отката (TrendPullback). Дефолт 40 → 45
+                    "bb_width_threshold": 0.025, # BB Width сжатие (Breakout). Дефолт 0.015 → 0.025
+                    "adx_threshold": 20,         # ADX мин. сила тренда (Breakout)
+                    "sl_atr_mult": 1.5,          # SL = N * ATR
+                    "rr_ratio": 2.0,             # Risk/Reward ratio
                 }
             }
         return cls._instance

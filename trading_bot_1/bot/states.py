@@ -11,3 +11,7 @@ class PairFSM(StatesGroup):
 
 class TestFSM(StatesGroup):
     waiting_for_pair_choice = State()
+
+class StrategyFSM(StatesGroup):
+    waiting_for_param_choice = State()
+    waiting_for_value = State()

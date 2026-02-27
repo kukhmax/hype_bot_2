@@ -5,7 +5,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 
-from bot.states import SettingsFSM, PairFSM, TestFSM
+from bot.states import SettingsFSM, PairFSM, TestFSM, StrategyFSM
 from bot.settings import bot_settings
 
 logger = logging.getLogger("telegram_handlers")
@@ -18,12 +18,23 @@ from core.execution.engine_manager import EngineManager
 _engine_manager: EngineManager = None
 
 
+# Описания параметров стратегий (для отображения в Telegram)
+STRATEGY_PARAM_LABELS = {
+    "rsi_threshold": ("RSI Порог", "Порог RSI для откатов (TrendPullback). Чем выше — тем чаще сигналы."),
+    "bb_width_threshold": ("BB Width", "Порог сжатия Боллинджера (Breakout). Чем выше — тем чаще сигналы."),
+    "adx_threshold": ("ADX Порог", "Мин. сила тренда для Breakout. Чем ниже — тем чаще сигналы."),
+    "sl_atr_mult": ("SL × ATR", "Множитель ATR для Stop Loss. Больше = шире стоп."),
+    "rr_ratio": ("R:R Ratio", "Risk/Reward. Больше = дальше TP, но реже достигается."),
+}
+
+
 def get_main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📊 Статус")],
-            [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="🧪 Тест Стратегий")],
+            [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="🎯 Стратегии")],
             [KeyboardButton(text="➕ Добавить пару"), KeyboardButton(text="➖ Убрать пару")],
+            [KeyboardButton(text="🧪 Тест Стратегий")],
             [KeyboardButton(text="🚀 ЗАПУСК БОТА"), KeyboardButton(text="🛑 СТОП")]
         ],
         resize_keyboard=True
@@ -310,7 +321,8 @@ async def cmd_start_bot(message: Message, state: FSMContext):
             timeframe=cfg["tf"],
             leverage=cfg["leverage"],
             paper_trading=paper_trading,
-            tg_callback=send_tg_notification
+            tg_callback=send_tg_notification,
+            strategy_params=bot_settings.get("strategy_params", {})
         )
         if ok:
             success_count += 1
@@ -500,3 +512,108 @@ async def run_optimizer_and_report(message: Message, symbol: str, tf: int):
     except Exception as e:
         logger.error(f"Ошибка бэктеста: {e}", exc_info=True)
         await message.answer("❌ Произошла ошибка при тестировании. Проверьте логи.", parse_mode=None)
+
+
+# --- НАСТРОЙКИ СТРАТЕГИЙ ---
+
+def _strategy_params_summary() -> str:
+    """Формирует строку с текущими параметрами стратегий."""
+    sp = bot_settings.get("strategy_params", {})
+    lines = []
+    for key, (label, _desc) in STRATEGY_PARAM_LABELS.items():
+        val = sp.get(key, "—")
+        lines.append(f"• **{label}**: `{val}`")
+    return "\n".join(lines)
+
+
+@router.message(F.text == "🎯 Стратегии")
+async def cmd_strategy_settings(message: Message, state: FSMContext):
+    await state.clear()
+    
+    text = (
+        "🎯 **ПАРАМЕТРЫ СТРАТЕГИЙ**\n\n"
+        f"{_strategy_params_summary()}\n\n"
+        "Выберите параметр для изменения:"
+    )
+    
+    # Генерируем кнопки для каждого параметра
+    buttons = []
+    sp = bot_settings.get("strategy_params", {})
+    for key, (label, _desc) in STRATEGY_PARAM_LABELS.items():
+        val = sp.get(key, 0)
+        buttons.append([KeyboardButton(text=f"{label} [{val}]")])
+    buttons.append([KeyboardButton(text="🔙 Назад")])
+    
+    kb = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    await message.answer(text, reply_markup=kb)
+    await state.set_state(StrategyFSM.waiting_for_param_choice)
+
+
+@router.message(StrategyFSM.waiting_for_param_choice)
+async def process_strategy_param_choice(message: Message, state: FSMContext):
+    text = message.text.strip()
+    
+    if text == "🔙 Назад":
+        await state.clear()
+        await message.answer("Главное меню.", reply_markup=get_main_keyboard())
+        return
+    
+    # Ищем параметр по label
+    chosen_key = None
+    for key, (label, desc) in STRATEGY_PARAM_LABELS.items():
+        if text.startswith(label):
+            chosen_key = key
+            break
+    
+    if not chosen_key:
+        await message.answer("Выберите параметр кнопкой.")
+        return
+    
+    label, desc = STRATEGY_PARAM_LABELS[chosen_key]
+    current = bot_settings.get("strategy_params", {}).get(chosen_key, 0)
+    
+    await state.update_data(editing_param=chosen_key)
+    await message.answer(
+        f"✏️ **{label}**\n\n"
+        f"{desc}\n\n"
+        f"Текущее значение: `{current}`\n"
+        f"Введите новое значение:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await state.set_state(StrategyFSM.waiting_for_value)
+
+
+@router.message(StrategyFSM.waiting_for_value)
+async def process_strategy_param_value(message: Message, state: FSMContext):
+    try:
+        value = float(message.text.strip())
+        if value <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("Некорректное значение. Введите положительное число (например, `45` или `0.025`).")
+        return
+    
+    data = await state.get_data()
+    param_key = data.get("editing_param")
+    
+    if not param_key or param_key not in STRATEGY_PARAM_LABELS:
+        await state.clear()
+        await message.answer("Ошибка. Попробуйте снова.", reply_markup=get_main_keyboard())
+        return
+    
+    # Сохраняем
+    sp = bot_settings.get("strategy_params", {})
+    old_value = sp.get(param_key, 0)
+    sp[param_key] = value
+    bot_settings["strategy_params"] = sp
+    
+    label, _ = STRATEGY_PARAM_LABELS[param_key]
+    logger.info(f"Пользователь {message.from_user.id} изменил {param_key}: {old_value} → {value}")
+    
+    await state.clear()
+    await message.answer(
+        f"✅ **{label}** изменён: `{old_value}` → `{value}`\n\n"
+        f"📋 Текущие параметры:\n{_strategy_params_summary()}\n\n"
+        f"⚠️ Изменения применятся при следующем **🚀 ЗАПУСК БОТА**.",
+        reply_markup=get_main_keyboard()
+    )

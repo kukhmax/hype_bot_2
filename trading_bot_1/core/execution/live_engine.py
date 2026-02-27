@@ -31,19 +31,28 @@ class LiveEngine:
                  paper_trading: bool = True,
                  leverage: int = 1,
                  tg_callback: 'Callable[[str], Awaitable[None]]' = None,
-                 ws_client: 'MEXCWebSocketClient' = None):
+                 ws_client: 'MEXCWebSocketClient' = None,
+                 strategy_params: dict = None):
         
         self.symbol = symbol
         self.timeframe_minutes = timeframe_minutes
         self.paper_trading = paper_trading
         self.leverage = leverage
         
+        # Параметры стратегий (из Telegram настроек или дефолтные)
+        sp = strategy_params or {}
+        rsi_th = sp.get("rsi_threshold", 45)
+        bb_th = sp.get("bb_width_threshold", 0.025)
+        adx_th = sp.get("adx_threshold", 20)
+        sl_atr = sp.get("sl_atr_mult", 1.5)
+        rr = sp.get("rr_ratio", 2.0)
+        
         # Стратегии для разных режимов
         self.strategies = {
-            "strong_trend": TrendPullbackStrategy(rsi_threshold=40, sl_atr_mult=1.5, rr_ratio=2.0),
-            "weak_trend": TrendPullbackStrategy(rsi_threshold=35, sl_atr_mult=1.5, rr_ratio=1.5),
-            "high_volatility": BreakoutStrategy(bb_width_threshold=0.015, adx_threshold=20),
-            "range": LiquiditySweepStrategy()
+            "strong_trend": TrendPullbackStrategy(rsi_threshold=rsi_th, sl_atr_mult=sl_atr, rr_ratio=rr),
+            "weak_trend": TrendPullbackStrategy(rsi_threshold=rsi_th + 5, sl_atr_mult=sl_atr, rr_ratio=rr - 0.5),
+            "high_volatility": BreakoutStrategy(bb_width_threshold=bb_th, adx_threshold=adx_th, sl_atr_mult=sl_atr - 0.5, rr_ratio=rr - 0.5),
+            "range": LiquiditySweepStrategy(rsi_ob_os=rsi_th, sl_atr_mult=sl_atr - 0.5, rr_ratio=rr)
         }
         self.active_strategy = self.strategies["weak_trend"]
         self.current_regime = "unknown"

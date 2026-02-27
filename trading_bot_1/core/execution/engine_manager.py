@@ -51,7 +51,8 @@ class EngineManager:
         timeframe: int, 
         leverage: int = 1,
         paper_trading: bool = True,
-        tg_callback: Optional[Callable[[str], Awaitable[None]]] = None
+        tg_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        strategy_params: dict = None
     ) -> bool:
         """Добавляет пару и запускает для неё движок."""
         if symbol in self.engines:
@@ -67,7 +68,8 @@ class EngineManager:
             paper_trading=paper_trading,
             leverage=leverage,
             tg_callback=tg_callback,
-            ws_client=ws_client  # Передаём shared WS клиент
+            ws_client=ws_client,
+            strategy_params=strategy_params
         )
         
         is_ready = await engine.initialize()
