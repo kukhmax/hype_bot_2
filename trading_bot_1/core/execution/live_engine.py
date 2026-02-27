@@ -191,13 +191,14 @@ class LiveEngine:
                 # Пересчитываем prepare_data для новой стратегии
                 # (например LiquiditySweep добавляет local_low/local_high)
                 self.df = self.active_strategy.prepare_data(self.df)
-                await self._notify(f"🔄 **СМЕНА РЕЖИМА**\nНовый режим: `{new_regime}`\nВключена стратегия: `{self.active_strategy.__class__.__name__}`")
+                await self._notify(f"🔄 *СМЕНА РЕЖИМА*\nНовый режим: `{new_regime}`\nВключена стратегия: `{self.active_strategy.__class__.__name__}`")
         
         # --- Симуляция проверки Stop Loss / Take Profit ---
         if self.paper_trading and self.current_position:
             await self._check_paper_stops(candle_dict)
 
         # Вызываем логику стратегии для генерации сигнала
+        logger.warning(f"[{self.symbol}] STATE DEBUG: current_position={self.current_position}")
         if self.current_position is None:
             logger.debug(f"[{self.symbol}] Проверка сигналов стратегией {self.active_strategy.__class__.__name__} на индексе {current_idx}")
             signal_data = self.active_strategy.on_ohlcv(self.df, current_idx)
@@ -231,19 +232,19 @@ class LiveEngine:
                 # 📊 ПОЛНЫЙ СЕТАП — отправляется ВСЕГДА
                 # ═══════════════════════════════════════════
                 setup_msg = (
-                    f"{'🟢' if direction == 'BUY' else '🔴'} **СИГНАЛ {direction}** `{self.symbol}`\n"
+                    f"{'🟢' if direction == 'BUY' else '🔴'} *СИГНАЛ {direction}* `{self.symbol}`\n"
                     f"\n"
-                    f"📊 **Сетап:**\n"
+                    f"📊 *Сетап:*\n"
                     f"  Стратегия: `{strategy_name}`\n"
                     f"  Режим: `{self.current_regime}`\n"
                     f"  Таймфрейм: `{self.timeframe_minutes}m`\n"
                     f"\n"
-                    f"💰 **Цена:**\n"
+                    f"💰 *Цена:*\n"
                     f"  Close: `{close}`\n"
                     f"  SL: `{sl:.2f}` | TP: `{tp:.2f}`\n"
                     f"  R:R = `1:{((tp - close) / (close - sl)) if direction == 'BUY' and close != sl else ((close - tp) / (sl - close)) if direction == 'SELL' and sl != close else 0:.1f}`\n"
                     f"\n"
-                    f"📈 **Индикаторы:**\n"
+                    f"📈 *Индикаторы:*\n"
                     f"  RSI: `{rsi:.1f}` | ADX: `{adx:.1f}`\n"
                     f"  EMA21: `{ema_21:.2f}` | EMA50: `{ema_50:.2f}`\n"
                     f"  EMA200: `{ema_200:.2f}` ({ema_pos})\n"
@@ -264,7 +265,7 @@ class LiveEngine:
                     ml_emoji = "✅" if ml_passed else "❌"
                     ml_verdict = "ОДОБРИЛ" if ml_passed else "ОТКЛОНИЛ"
                     await self._notify(
-                        f"🧠 **ML АНСАМБЛЬ {ml_verdict}** `{self.symbol}` {direction}\n"
+                        f"🧠 *ML АНСАМБЛЬ {ml_verdict}* `{self.symbol}` {direction}\n"
                         f"\n"
                         f"  Momentum: `{ml_details.get('momentum_score', 0):.3f}`\n"
                         f"  Volatility: `{ml_details.get('volatility_score', 0):.3f}`\n"
@@ -293,7 +294,7 @@ class LiveEngine:
                         f"(TF={self.timeframe_minutes}m < порог {settings.AI_VERIFY_MIN_TIMEFRAME}m)"
                     )
                     await self._notify(
-                        f"⚡ **AI ПРОПУЩЕН** (скальпинг {self.timeframe_minutes}m)\n"
+                        f"⚡ *AI ПРОПУЩЕН* (скальпинг {self.timeframe_minutes}m)\n"
                         f"Сигнал `{direction}` направлен напрямую в исполнение."
                     )
                     await self._execute_signal(signal_data, close)
@@ -314,10 +315,10 @@ class LiveEngine:
                     )
                     
                     if is_approved:
-                        await self._notify(f"✅ **ИИ ОДОБРИЛ** `{self.symbol}` {direction}\n`{reasoning}`")
+                        await self._notify(f"✅ *ИИ ОДОБРИЛ* `{self.symbol}` {direction}\n`{reasoning}`")
                         await self._execute_signal(signal_data, close)
                     else:
-                        await self._notify(f"❌ **ИИ ОТКЛОНИЛ** `{self.symbol}` {direction}\n`{reasoning}`")
+                        await self._notify(f"❌ *ИИ ОТКЛОНИЛ* `{self.symbol}` {direction}\n`{reasoning}`")
                         logger.info(f"[{self.symbol}] Сделка отклонена ИИ. Причина: {reasoning}")
 
     async def _check_paper_stops(self, candle: dict):
@@ -341,7 +342,7 @@ class LiveEngine:
                 if pos["stop_loss"] < pos["entry_price"]:
                     pos["stop_loss"] = pos["entry_price"]
                     logger.info(f"Trailing Stop (LONG): Стоп переведен в безубыток ({pos['stop_loss']})")
-                    await self._notify(f"🛡 **ATR TRAILING**\nСделка `{self.symbol}` (LONG) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']}`")
+                    await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (LONG) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']}`")
                     
             if candle["low"] <= pos["stop_loss"]:
                 pnl = (pos["stop_loss"] - pos["entry_price"]) * pos["qty"]
@@ -358,7 +359,7 @@ class LiveEngine:
                 if pos["stop_loss"] > pos["entry_price"]:
                     pos["stop_loss"] = pos["entry_price"]
                     logger.info(f"Trailing Stop (SHORT): Стоп переведен в безубыток ({pos['stop_loss']})")
-                    await self._notify(f"🛡 **ATR TRAILING**\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']}`")
+                    await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']}`")
 
             if candle["high"] >= pos["stop_loss"]:
                 pnl = (pos["entry_price"] - pos["stop_loss"]) * pos["qty"] # Шорт: цена выросла = убыток
@@ -411,19 +412,22 @@ class LiveEngine:
         
         if self.paper_trading:
             logger.info(f"[PAPER TRADING] Открываем {side} на сумму {quote_qty} USDT. Entry: {current_price}, SL: {stop_loss}, TP: {take_profit}")
-            await self._notify(f"🟢 **ПОЗИЦИЯ ОТКРЫТА [PAPER]**\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`\nSL: `{stop_loss}`\nTP: `{take_profit}`")
+            await self._notify(f"🟢 *ПОЗИЦИЯ ОТКРЫТА [PAPER]*\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`\nSL: `{stop_loss}`\nTP: `{take_profit}`")
             self.current_position = {
                 "side": side,
                 "entry_price": current_price,
                 "qty": base_qty,
                 "stop_loss": stop_loss,
-                "take_profit": take_profit
+                "take_profit": take_profit,
+                "leverage": self.leverage
             }
+            
+            await self._notify(f"📄 *PAPER TRADING: ПОЗИЦИЯ ОТКРЫТА*\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{base_qty:.4f}` монет\nSL: `{stop_loss:.4f}` | TP: `{take_profit:.4f}`")
         else:
             # REAL TRADING (Отправка рыночного ордера)
             # 1. Кидаем Market Order на вход
             result = await self.executor.place_market_order(self.symbol, side, quote_qty)
-            if "orderId" in result:
+            if result.get("orderId"):
                 # 2. Нужно выставить Limit ордера (TP и SL). 
                 # На MEXC Spot нет прямого OCO ордера (One Cancels the Other) через простое API.
                 # Поэтому в MVP мы просто можем кинуть Stop-Limit или просто надеяться, что
@@ -432,12 +436,13 @@ class LiveEngine:
                 
                 # Запишем инфу о позе для контроля SL скриптом (Semi-Auto)
                 self.current_position = {
+                    "orderId": result["orderId"],
                     "side": side,
                     "entry_price": current_price,
                     "qty": base_qty,  # В идеале нужно парсить fact_qty из ответа Market Order-а
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
-                    "entry_order_id": result["orderId"]
+                    "leverage": self.leverage
                 }
                 
                 if take_profit:
@@ -447,7 +452,7 @@ class LiveEngine:
                          self.current_position["tp_order_id"] = tp_res["orderId"]
                          
                 logger.info(f"[LIVE TRADING] Успешно открыта позиция {side}. Результат: {result}")
-                await self._notify(f"🔴 **ПОЗИЦИЯ ОТКРЫТА [LIVE]**\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`")
+                await self._notify(f"🔴 *ПОЗИЦИЯ ОТКРЫТА [LIVE]*\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`")
             else:
                 logger.error(f"[LIVE TRADING] Ошибка открытия ордера: {result}")
 
