@@ -127,6 +127,22 @@ class EngineManager:
         """Возвращает статус всех активных движков."""
         statuses = []
         for symbol, engine in self.engines.items():
+            pos_pnl = 0.0
+            if engine.current_position:
+                pos = engine.current_position
+                current_price = None
+                # Пытаемся получить текущую цену из свечей
+                if getattr(engine, 'candle_builder', None) and engine.candle_builder.current_candle:
+                    current_price = engine.candle_builder.current_candle["close"]
+                elif hasattr(engine, 'df') and not engine.df.empty:
+                    current_price = engine.df.iloc[-1]["close"]
+                
+                if current_price and "entry_price" in pos and "qty" in pos:
+                    if pos["side"] == "BUY":
+                        pos_pnl = (current_price - pos["entry_price"]) * pos["qty"]
+                    elif pos["side"] == "SELL":
+                        pos_pnl = (pos["entry_price"] - current_price) * pos["qty"]
+
             statuses.append({
                 "symbol": symbol,
                 "tf": engine.timeframe_minutes,
@@ -135,6 +151,7 @@ class EngineManager:
                 "leverage": engine.leverage,
                 "has_position": engine.current_position is not None,
                 "position_side": engine.current_position["side"] if engine.current_position else None,
+                "pnl": pos_pnl,
                 "running": True  # Если в engines — значит работает
             })
         return statuses

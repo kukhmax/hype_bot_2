@@ -78,8 +78,14 @@ async def cmd_status(message: Message, state: FSMContext):
         statuses = _engine_manager.get_status()
         lines = ["📊 **АКТИВНЫЕ ДВИЖКИ**\n"]
         for s in statuses:
-            pos_icon = "🟢" if s["has_position"] else "⚪️"
-            pos_text = f"{s['position_side']}" if s["has_position"] else "—"
+            if s["has_position"]:
+                pnl = s.get("pnl", 0.0)
+                pos_icon = "🟢" if pnl >= 0 else "🔴"
+                pos_text = f"{s['position_side']} | {pos_icon} {pnl:.2f} USDT"
+            else:
+                pos_icon = "⚪️"
+                pos_text = "—"
+                
             lines.append(
                 f"{pos_icon} `{s['symbol']}` | "
                 f"`{s['tf']}m` | "
