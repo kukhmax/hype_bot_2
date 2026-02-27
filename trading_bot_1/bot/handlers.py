@@ -287,7 +287,8 @@ async def send_tg_notification(text: str):
             # Fallback: отправляем без Markdown если парсинг сломался
             logger.error(f"Ошибка отправки в Telegram (Markdown): {e}")
             try:
-                await bot.send_message(chat_id=bot_settings["chat_id"], text=text)
+                # Обязательно указываем parse_mode=None, иначе применится дефолтный Markdown из telegram_bot.py
+                await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode=None)
             except Exception as e2:
                 logger.error(f"Ошибка отправки в Telegram (plain): {e2}")
 

@@ -1,0 +1,92 @@
+# Внедрение Ensemble ML в trading_bot_1
+
+## Описание
+Добавить ансамблевый ML-фильтр из 3 моделей (Momentum / Volatility / Structure) в пайплайн сигналов бота. ML-фильтр встраивается **между** стратегией и Gemini AI как дополнительный слой фильтрации. Подробный технический план: [ENSEMBLE_ML_PLAN.md](file:///home/m/Projects/hype_bot_2/trading_bot_1/core/ml/ENSEMBLE_ML_PLAN.md).
+
+## Ресурсы Сервера
+
+| Ресурс | Текущий бот | + Ensemble ML | Итого |
+|--------|-------------|---------------|-------|
+| RAM    | ~100 MB     | +30-50 MB     | ~150 MB |
+| CPU    | ~1-3%       | +0.01%        | ~1-3% |
+| Диск   | ~200 MB     | +50 MB        | ~250 MB |
+| Latency| —           | +1-5 мс       | Незаметно |
+
+> [!IMPORTANT]
+> Влияние на ресурсы **минимально**. Модели (LogisticRegression) предсказывают за 1-5мс, не требуют GPU. Единственный заметный эффект — +50 MB Docker image из-за scikit-learn.
+
+## Proposed Changes
+
+### ML Models (`core/ml/`)
+
+Все файлы **новые** — ничего из существующего кода не ломается.
+
+#### [NEW] [features.py](file:///home/m/Projects/hype_bot_2/trading_bot_1/core/ml/features.py)
+ML-специфичные фичи поверх базовых индикаторов: slopes, ratios, deltas, bb_position, volume_ratio.
+
+#### [NEW] [models.py](file:///home/m/Projects/hype_bot_2/trading_bot_1/core/ml/models.py)
+3 скорера — `MomentumScorer`, `VolatilityScorer`, `StructureScorer`. Каждый обёрнут в единый интерфейс `BaseScorer.predict(df, idx) → float`.
+
+#### [NEW] [ensemble.py](file:///home/m/Projects/hype_bot_2/trading_bot_1/core/ml/ensemble.py)
+`EnsembleFilter` — собирает скоры от 3 моделей, считает взвешенное среднее, сравнивает с порогом.
+
+#### [NEW] [threshold.py](file:///home/m/Projects/hype_bot_2/trading_bot_1/core/ml/threshold.py)
+`DynamicThreshold` — адаптирует порог по winrate последних 100 сделок.
+
+#### [NEW] [trainer.py](file:///home/m/Projects/hype_bot_2/trading_bot_1/core/ml/trainer.py)
+Обучение моделей на результатах бэктеста. Сохранение/загрузка `.pkl` файлов.
+
+---
+
+### Интеграция в существующий код
+
+#### [MODIFY] [live_engine.py](file:///home/m/Projects/hype_bot_2/trading_bot_1/core/execution/live_engine.py)
+- Добавить импорт `EnsembleFilter`
+- Инициализация в [__init__](file:///home/m/Projects/hype_bot_2/trading_bot_1/core/execution/live_engine.py#26-61) с загрузкой моделей
+- Вставка `filter.evaluate()` в [_on_candle_closed()](file:///home/m/Projects/hype_bot_2/trading_bot_1/core/execution/live_engine.py#116-194) между strategy и Gemini AI
+- Отчёт результата сделки обратно в `DynamicThreshold`
+
+#### [MODIFY] [config.py](file:///home/m/Projects/hype_bot_2/trading_bot_1/core/config.py)
+- Добавить `ENABLE_ML_FILTER: bool = False` (выключено по умолчанию)
+
+#### [MODIFY] [requirements.txt](file:///home/m/Projects/hype_bot_2/trading_bot_1/requirements.txt)
+- Добавить `scikit-learn>=1.4.0`
+- Добавить `joblib>=1.3.0` (для сериализации моделей)
+
+---
+
+### Тесты
+
+#### [NEW] [test_ensemble_ml.py](file:///home/m/Projects/hype_bot_2/trading_bot_1/tests/test_ensemble_ml.py)
+Unit тесты: каждый скорер на синтетических данных, ансамбль, threshold, fallback.
+
+#### [NEW] [test_ml_backtest.py](file:///home/m/Projects/hype_bot_2/trading_bot_1/tests/test_ml_backtest.py)
+Integration: бэктест → обучение → фильтрация → сравнение метрик.
+
+## Verification Plan
+
+### Automated Tests
+
+1. **Unit тесты ML компонентов:**
+```bash
+docker compose exec bot python3 -m tests.test_ensemble_ml
+```
+Проверяет: каждый скорер возвращает float ∈ [0,1], ансамбль корректно агрегирует, threshold адаптируется, fallback работает без моделей.
+
+2. **Integration тест (backtest + ML):**
+```bash
+docker compose exec bot python3 -m tests.test_ml_backtest
+```
+Прогоняет бэктест → обучает модели → прогоняет бэктест с фильтром → сравнивает WinRate / ROI.
+
+3. **Существующие тесты (регрессия):**
+```bash
+docker compose exec bot python3 -m pytest tests/ -v
+```
+Все текущие тесты должны проходить без изменений.
+
+### Manual Verification
+- Включить `ENABLE_ML_FILTER=true` в [.env](file:///home/m/Projects/hype_bot_2/trading_bot_1/.env)
+- Запустить бот в режиме SIGNALS через Telegram
+- Проверить в логах (`bot.log`) появление строк: `[ML ENSEMBLE]`, `ensemble_score`, `dynamic_threshold`
+- Убедиться что без обученных моделей бот работает (fallback mode — пропускает все сигналы)
