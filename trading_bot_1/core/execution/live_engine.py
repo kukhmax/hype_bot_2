@@ -196,51 +196,89 @@ class LiveEngine:
             logger.debug(f"[{self.symbol}] Результат стратегии: {signal_data}")
             
             if signal_data["signal"] != "NONE":
-                await self._notify(f"🎯 **СИГНАЛ** `{self.symbol}`\nНаправление: `{signal_data['signal']}`\nЦена: `{candle_dict['close']}`\nСтратегия: `{self.active_strategy.__class__.__name__}`")
+                row = self.df.iloc[current_idx]
+                close = candle_dict['close']
+                rsi = row.get('rsi', 0)
+                adx = row.get('adx', 0)
+                ema_21 = row.get('ema_21', 0)
+                ema_50 = row.get('ema_50', 0)
+                ema_200 = row.get('ema_200', 0)
+                atr = row.get('atr', 0)
                 
-                # --- ML ENSEMBLE FILTER ---
+                upper_bb = row.get('bb_upper', 0)
+                lower_bb = row.get('bb_lower', 0)
+                bb_width_pct = 0
+                if pd.notna(upper_bb) and pd.notna(lower_bb) and close:
+                    bb_width_pct = (upper_bb - lower_bb) / close * 100
+                
+                sl = signal_data.get('stop_loss', 0)
+                tp = signal_data.get('take_profit', 0)
+                direction = signal_data['signal']
+                strategy_name = self.active_strategy.__class__.__name__
+                
+                # Позиция цены относительно EMA
+                ema_pos = "выше" if close > ema_200 else "ниже"
+                
+                # ═══════════════════════════════════════════
+                # 📊 ПОЛНЫЙ СЕТАП — отправляется ВСЕГДА
+                # ═══════════════════════════════════════════
+                setup_msg = (
+                    f"{'🟢' if direction == 'BUY' else '🔴'} **СИГНАЛ {direction}** `{self.symbol}`\n"
+                    f"\n"
+                    f"📊 **Сетап:**\n"
+                    f"  Стратегия: `{strategy_name}`\n"
+                    f"  Режим: `{self.current_regime}`\n"
+                    f"  Таймфрейм: `{self.timeframe_minutes}m`\n"
+                    f"\n"
+                    f"💰 **Цена:**\n"
+                    f"  Close: `{close}`\n"
+                    f"  SL: `{sl:.2f}` | TP: `{tp:.2f}`\n"
+                    f"  R:R = `1:{((tp - close) / (close - sl)) if direction == 'BUY' and close != sl else ((close - tp) / (sl - close)) if direction == 'SELL' and sl != close else 0:.1f}`\n"
+                    f"\n"
+                    f"📈 **Индикаторы:**\n"
+                    f"  RSI: `{rsi:.1f}` | ADX: `{adx:.1f}`\n"
+                    f"  EMA21: `{ema_21:.2f}` | EMA50: `{ema_50:.2f}`\n"
+                    f"  EMA200: `{ema_200:.2f}` ({ema_pos})\n"
+                    f"  BB Width: `{bb_width_pct:.2f}%` | ATR: `{atr:.4f}`"
+                )
+                await self._notify(setup_msg)
+                
+                # ═══════════════════════════════════════════
+                # 🧠 ML ENSEMBLE FILTER
+                # ═══════════════════════════════════════════
                 if self.ml_filter is not None:
-                    logger.info(f"[{self.symbol}] ML фильтр: оценка сигнала {signal_data['signal']}...")
+                    logger.info(f"[{self.symbol}] ML фильтр: оценка сигнала {direction}...")
                     ml_passed, ml_score, ml_details = self.ml_filter.evaluate(
-                        self.df, current_idx, signal_data["signal"]
+                        self.df, current_idx, direction
                     )
                     self._last_ml_score = ml_score
                     
+                    ml_emoji = "✅" if ml_passed else "❌"
+                    ml_verdict = "ОДОБРИЛ" if ml_passed else "ОТКЛОНИЛ"
+                    await self._notify(
+                        f"🧠 **ML АНСАМБЛЬ {ml_verdict}** `{self.symbol}` {direction}\n"
+                        f"\n"
+                        f"  Momentum: `{ml_details.get('momentum_score', 0):.3f}`\n"
+                        f"  Volatility: `{ml_details.get('volatility_score', 0):.3f}`\n"
+                        f"  Structure: `{ml_details.get('structure_score', 0):.3f}`\n"
+                        f"\n"
+                        f"🎯 Score: `{ml_details.get('ensemble_score', 0):.3f}` "
+                        f"{'≥' if ml_passed else '<'} "
+                        f"Threshold: `{ml_details.get('threshold', 0):.3f}` "
+                        f"(margin: `{ml_details.get('margin', 0):+.3f}`)"
+                    )
+                    logger.info(
+                        f"[{self.symbol}] {direction} {ml_verdict} ML. "
+                        f"Score={ml_details.get('ensemble_score', 0):.3f} "
+                        f"Threshold={ml_details.get('threshold', 0):.3f}"
+                    )
+                    
                     if not ml_passed:
-                        await self._notify(
-                            f"🧠 **ML АНСАМБЛЬ ОТКЛОНИЛ СДЕЛКУ** `{self.symbol}`\n"
-                            f"\nℹ️ *Скоры моделей:*\n"
-                            f"  • Momentum: `{ml_details.get('momentum_score', 0):.3f}`\n"
-                            f"  • Volatility: `{ml_details.get('volatility_score', 0):.3f}`\n"
-                            f"  • Structure: `{ml_details.get('structure_score', 0):.3f}`\n"
-                            f"\n🎯 Ensemble Score: `{ml_details.get('ensemble_score', 0):.3f}`\n"
-                            f"📏 Threshold: `{ml_details.get('threshold', 0):.3f}` (margin: `{ml_details.get('margin', 0):+.3f}`)\n"
-                            f"📊 WinRate: `{ml_details.get('threshold_winrate', 0):.1f}%` ({ml_details.get('threshold_trades', 0)} сделок)"
-                        )
-                        logger.info(
-                            f"[{self.symbol}] Сделка {signal_data['signal']} ОТКЛОНЕНА ML. "
-                            f"Score={ml_details.get('ensemble_score', 0):.3f} < Threshold={ml_details.get('threshold', 0):.3f}. "
-                            f"M={ml_details.get('momentum_score', 0):.3f} V={ml_details.get('volatility_score', 0):.3f} S={ml_details.get('structure_score', 0):.3f}"
-                        )
                         return
-                    else:
-                        await self._notify(
-                            f"🧠 **ML АНСАМБЛЬ ОДОБРИЛ** `{self.symbol}`\n"
-                            f"\nℹ️ *Скоры:*\n"
-                            f"  M:`{ml_details.get('momentum_score', 0):.3f}` "
-                            f"V:`{ml_details.get('volatility_score', 0):.3f}` "
-                            f"S:`{ml_details.get('structure_score', 0):.3f}`\n"
-                            f"🎯 Score: `{ml_score:.3f}` ≥ Threshold: `{ml_details.get('threshold', 0):.3f}` "
-                            f"(margin: `{ml_details.get('margin', 0):+.3f}`)"
-                        )
-                        logger.info(
-                            f"[{self.symbol}] Сигнал {signal_data['signal']} ОДОБРЕН ML. "
-                            f"Score={ml_score:.3f} >= Threshold={ml_details.get('threshold', 0):.3f}"
-                        )
                 
-                # --- AI VERIFICATION ---
-                # На коротких таймфреймах AI может быть слишком консервативным
-                # (EMA 200 и ADX не информативны на 1m). Пропускаем AI если TF < порога.
+                # ═══════════════════════════════════════════
+                # 🤖 AI VERIFICATION (Gemini)
+                # ═══════════════════════════════════════════
                 if self.timeframe_minutes < settings.AI_VERIFY_MIN_TIMEFRAME:
                     logger.info(
                         f"[{self.symbol}] AI верификация ПРОПУЩЕНА "
@@ -248,39 +286,30 @@ class LiveEngine:
                     )
                     await self._notify(
                         f"⚡ **AI ПРОПУЩЕН** (скальпинг {self.timeframe_minutes}m)\n"
-                        f"Сигнал `{signal_data['signal']}` направлен напрямую в исполнение."
+                        f"Сигнал `{direction}` направлен напрямую в исполнение."
                     )
-                    await self._execute_signal(signal_data, candle_dict["close"])
+                    await self._execute_signal(signal_data, close)
                 else:
                     from core.ai.gemini_client import gemini_client
                     
-                    row = self.df.iloc[current_idx]
                     indicators = {
-                        'close': candle_dict['close'],
-                        'rsi': row.get('rsi', 0),
-                        'adx': row.get('adx', 0),
-                        'ema_200': row.get('ema_200', 0),
-                        'bb_width_percent': 0
+                        'close': close, 'rsi': rsi, 'adx': adx,
+                        'ema_200': ema_200, 'bb_width_percent': bb_width_pct
                     }
                     
-                    upper_bb = row.get('bb_upper', None)
-                    lower_bb = row.get('bb_lower', None)
-                    if pd.notna(upper_bb) and pd.notna(lower_bb) and indicators['close']:
-                        indicators['bb_width_percent'] = (upper_bb - lower_bb) / indicators['close'] * 100
-                        
                     await self._notify("🤖 Запрашиваю 'Второе мнение' у ИИ Gemini...")
                     is_approved, reasoning = await gemini_client.verify_signal(
                         self.symbol, 
                         self.timeframe_minutes, 
-                        signal_data["signal"], 
+                        direction, 
                         indicators
                     )
                     
                     if is_approved:
-                        await self._notify(f"✅ **ИИ ОДОБРИЛ СДЕЛКУ**\n`{reasoning}`")
-                        await self._execute_signal(signal_data, candle_dict["close"])
+                        await self._notify(f"✅ **ИИ ОДОБРИЛ** `{self.symbol}` {direction}\n`{reasoning}`")
+                        await self._execute_signal(signal_data, close)
                     else:
-                        await self._notify(f"❌ **ИИ ОТКЛОНИЛ СДЕЛКУ**\n`{reasoning}`")
+                        await self._notify(f"❌ **ИИ ОТКЛОНИЛ** `{self.symbol}` {direction}\n`{reasoning}`")
                         logger.info(f"[{self.symbol}] Сделка отклонена ИИ. Причина: {reasoning}")
 
     async def _check_paper_stops(self, candle: dict):
