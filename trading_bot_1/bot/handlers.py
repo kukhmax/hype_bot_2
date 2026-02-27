@@ -291,6 +291,8 @@ async def send_tg_notification(text: str):
                 await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode=None)
             except Exception as e2:
                 logger.error(f"Ошибка отправки в Telegram (plain): {e2}")
+    else:
+        logger.warning(f"ПРОПУСК ОТПРАВКИ ТГ: bot={bot is not None}, chat_id={bot_settings.get('chat_id')}. Message preview: {text[:50]}")
 
 
 @router.message(F.text == "🚀 ЗАПУСК БОТА")
