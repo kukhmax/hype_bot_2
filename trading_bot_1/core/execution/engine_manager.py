@@ -127,6 +127,7 @@ class EngineManager:
         for symbol, engine in self.engines.items():
             statuses.append({
                 "symbol": symbol,
+                "tf": engine.timeframe_minutes,
                 "regime": engine.current_regime,
                 "strategy": engine.active_strategy.__class__.__name__,
                 "leverage": engine.leverage,
