@@ -111,7 +111,12 @@ class LiveEngine:
             logger.warning(f"[{self.symbol}] WS клиент не передан — тики не будут приходить")
         
         # 4. Проверяем баланс и стартуем сессию Риск-Менеджера
-        initial_balance = await self.executor.get_balance("USDT")
+        if self.paper_trading:
+            # В paper/signals режиме используем виртуальный баланс
+            initial_balance = 10000.0
+            logger.info(f"Paper Trading: виртуальный баланс {initial_balance} USDT")
+        else:
+            initial_balance = await self.executor.get_balance("USDT")
         self.risk_manager.start_session(initial_balance)
         
         self.is_ready = True
