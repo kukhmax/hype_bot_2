@@ -41,18 +41,21 @@ class LiveEngine:
         
         # Параметры стратегий (из Telegram настроек или дефолтные)
         sp = strategy_params or {}
-        rsi_th = sp.get("rsi_threshold", 45)
+        rsi_th = sp.get("rsi_threshold", 50)  # Был 45, увеличен для коротких TF
         bb_th = sp.get("bb_width_threshold", 0.025)
         adx_th = sp.get("adx_threshold", 20)
         sl_atr = sp.get("sl_atr_mult", 1.5)
         rr = sp.get("rr_ratio", 2.0)
         
         # Стратегии для разных режимов
+        # ВАЖНО: high_volatility -> LiquiditySweep (не Breakout!)
+        # Breakout требует сжатие (low BBW), что противоречит high_volatility.
+        # Range -> Breakout: при сжатии (range) ожидаем пробой.
         self.strategies = {
             "strong_trend": TrendPullbackStrategy(rsi_threshold=rsi_th, sl_atr_mult=sl_atr, rr_ratio=rr),
             "weak_trend": TrendPullbackStrategy(rsi_threshold=rsi_th + 5, sl_atr_mult=sl_atr, rr_ratio=rr - 0.5),
-            "high_volatility": BreakoutStrategy(bb_width_threshold=bb_th, adx_threshold=adx_th, sl_atr_mult=sl_atr - 0.5, rr_ratio=rr - 0.5),
-            "range": LiquiditySweepStrategy(rsi_ob_os=rsi_th, sl_atr_mult=sl_atr - 0.5, rr_ratio=rr)
+            "high_volatility": LiquiditySweepStrategy(rsi_ob_os=rsi_th, sl_atr_mult=sl_atr - 0.5, rr_ratio=rr),
+            "range": BreakoutStrategy(bb_width_threshold=bb_th, adx_threshold=adx_th, sl_atr_mult=sl_atr - 0.5, rr_ratio=rr - 0.5)
         }
         self.active_strategy = self.strategies["weak_trend"]
         self.current_regime = "unknown"
