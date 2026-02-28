@@ -151,11 +151,15 @@ class LiveEngine:
 
     async def _on_candle_closed(self, candle_dict: dict):
         """Срабатывает при закрытии 1m / 15m свечи."""
-        try:
-            await self._process_candle(candle_dict)
-        except Exception as e:
-            logger.error(f"[{self.symbol}] ОШИБКА при обработке свечи: {type(e).__name__}: {e}", exc_info=True)
-            await self._notify(f"⚠️ Ошибка обработки свечи `{self.symbol}`: {e}")
+        if not hasattr(self, "_process_lock"):
+            self._process_lock = asyncio.Lock()
+            
+        async with self._process_lock:
+            try:
+                await self._process_candle(candle_dict)
+            except Exception as e:
+                logger.error(f"[{self.symbol}] ОШИБКА при обработке свечи: {type(e).__name__}: {e}", exc_info=True)
+                await self._notify(f"⚠️ Ошибка обработки свечи `{self.symbol}`: {e}")
 
     async def _process_candle(self, candle_dict: dict):
         """Внутренняя логика обработки закрытой свечи."""

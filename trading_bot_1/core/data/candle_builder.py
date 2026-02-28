@@ -54,8 +54,9 @@ class CandleBuilder:
             self.current_candle = self._create_new_candle(candle_start_time, price, volume)
         elif candle_start_time > self.current_candle["timestamp"]:
             # Время вышло за пределы текущей свечи -> закрываем её
-            await self._emit_candle(self.current_candle)
+            candle_to_emit = self.current_candle
             self.current_candle = self._create_new_candle(candle_start_time, price, volume)
+            await self._emit_candle(candle_to_emit)
         else:
             # Обновляем текущую свечу
             self._update_candle(self.current_candle, price, volume)
