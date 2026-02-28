@@ -160,28 +160,22 @@ async def cmd_status(message: Message, state: FSMContext):
 @router.message(F.text == "⚙️ Настройки")
 async def cmd_settings(message: Message, state: FSMContext):
     await delete_user_msg(message)
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="PAPER (Тест)"), KeyboardButton(text="LIVE (Бой)")],
-        [KeyboardButton(text="SIGNALS (Только сигналы)")]
-    ], resize_keyboard=True)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="PAPER (Тест)", callback_data="mode_paper"), InlineKeyboardButton(text="LIVE (Бой)", callback_data="mode_live")],
+        [InlineKeyboardButton(text="SIGNALS (Только сигналы)", callback_data="mode_signals")]
+    ])
     msg = await message.answer("🛠 *НАСТРОЙКИ*\n\nВыберите Режим работы бота:", reply_markup=kb)
     await state.set_state(SettingsFSM.waiting_for_mode)
     await save_prompt_id(msg, state)
 
-@router.message(SettingsFSM.waiting_for_mode)
-async def process_mode(message: Message, state: FSMContext):
-    await delete_user_msg(message)
-    await delete_previous_prompt(message, state)
+@router.callback_query(SettingsFSM.waiting_for_mode, F.data.startswith("mode_"))
+async def process_mode(callback: CallbackQuery, state: FSMContext):
+    await delete_previous_prompt(callback.message, state)
     
-    mode_text = message.text.split()[0].lower()
-    if mode_text not in ["paper", "live", "signals"]:
-        msg = await message.answer("Пожалуйста, выберите режим кнопкой.")
-        await save_prompt_id(msg, state)
-        return
-
+    mode_text = callback.data.replace("mode_", "")
     bot_settings["mode"] = mode_text
-    logger.info(f"Пользователь {message.from_user.id} изменил режим работы: {mode_text}")
-    msg = await message.answer("Сохранено.\n\nВведите риск на сделку в % (например `2.0`):", reply_markup=ReplyKeyboardRemove())
+    logger.info(f"Пользователь {callback.from_user.id} изменил режим работы: {mode_text}")
+    msg = await callback.message.answer(f"⏳ Режим: `{mode_text.upper()}`\n\nВведите риск на сделку в % (например `2.0`):")
     await state.set_state(SettingsFSM.waiting_for_risk)
     await save_prompt_id(msg, state)
 
@@ -207,7 +201,7 @@ async def process_risk(message: Message, state: FSMContext):
         f"Режим: `{bot_settings['mode'].upper()}`\n"
         f"Риск: `{risk}%`\n\n"
         f"**Пары:**\n{_pairs_summary()}",
-        reply_markup=get_main_keyboard()
+        reply_markup=get_delete_kb()
     )
     await state.clear()
 
@@ -220,8 +214,7 @@ async def cmd_add_pair(message: Message, state: FSMContext):
     await state.clear()
     msg = await message.answer(
         f"📝 **Текущие пары:**\n{_pairs_summary()}\n\n"
-        "Введите символ для добавления (например `BTC_USDT`):",
-        reply_markup=ReplyKeyboardRemove()
+        "Введите символ для добавления (например `BTC_USDT`):"
     )
     await state.set_state(PairFSM.waiting_for_symbol)
     await save_prompt_id(msg, state)
@@ -249,52 +242,34 @@ async def process_pair_symbol(message: Message, state: FSMContext):
 
     await state.update_data(new_symbol=symbol)
 
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="1"), KeyboardButton(text="5"), KeyboardButton(text="15")],
-        [KeyboardButton(text="30"), KeyboardButton(text="60")]
-    ], resize_keyboard=True)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1", callback_data="tf_1"), InlineKeyboardButton(text="5", callback_data="tf_5"), InlineKeyboardButton(text="15", callback_data="tf_15")],
+        [InlineKeyboardButton(text="30", callback_data="tf_30"), InlineKeyboardButton(text="60", callback_data="tf_60")]
+    ])
     msg = await message.answer(f"Пара: `{symbol}`\n\nВыберите таймфрейм (в минутах):", reply_markup=kb)
     await state.set_state(PairFSM.waiting_for_timeframe)
     await save_prompt_id(msg, state)
 
-@router.message(PairFSM.waiting_for_timeframe)
-async def process_pair_tf(message: Message, state: FSMContext):
-    await delete_user_msg(message)
-    await delete_previous_prompt(message, state)
+@router.callback_query(PairFSM.waiting_for_timeframe, F.data.startswith("tf_"))
+async def process_pair_tf(callback: CallbackQuery, state: FSMContext):
+    await delete_previous_prompt(callback.message, state)
     
-    try:
-        tf = int(message.text.strip())
-        if tf not in [1, 5, 15, 30, 60]:
-            raise ValueError
-    except ValueError:
-        msg = await message.answer("Неверный формат. Выберите кнопкой (1, 5, 15, 30, 60).")
-        await save_prompt_id(msg, state)
-        return
-
+    tf = int(callback.data.replace("tf_", ""))
     await state.update_data(new_tf=tf)
 
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="1x"), KeyboardButton(text="3x"), KeyboardButton(text="5x")],
-        [KeyboardButton(text="10x"), KeyboardButton(text="20x")]
-    ], resize_keyboard=True)
-    msg = await message.answer(f"Таймфрейм: `{tf}m`\n\nВыберите кредитное плечо:", reply_markup=kb)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1x", callback_data="lev_1"), InlineKeyboardButton(text="3x", callback_data="lev_3"), InlineKeyboardButton(text="5x", callback_data="lev_5")],
+        [InlineKeyboardButton(text="10x", callback_data="lev_10"), InlineKeyboardButton(text="20x", callback_data="lev_20")]
+    ])
+    msg = await callback.message.answer(f"Таймфрейм: `{tf}m`\n\nВыберите кредитное плечо:", reply_markup=kb)
     await state.set_state(PairFSM.waiting_for_leverage)
     await save_prompt_id(msg, state)
 
-@router.message(PairFSM.waiting_for_leverage)
-async def process_pair_leverage(message: Message, state: FSMContext):
-    await delete_user_msg(message)
-    await delete_previous_prompt(message, state)
+@router.callback_query(PairFSM.waiting_for_leverage, F.data.startswith("lev_"))
+async def process_pair_leverage(callback: CallbackQuery, state: FSMContext):
+    await delete_previous_prompt(callback.message, state)
     
-    text = message.text.strip().lower().replace("x", "")
-    try:
-        lev = int(text)
-        if lev not in [1, 3, 5, 10, 20]:
-            raise ValueError
-    except ValueError:
-        msg = await message.answer("Пожалуйста, выберите плечо кнопкой.")
-        await save_prompt_id(msg, state)
-        return
+    lev = int(callback.data.replace("lev_", ""))
 
     data = await state.get_data()
     symbol = data["new_symbol"]
@@ -302,11 +277,11 @@ async def process_pair_leverage(message: Message, state: FSMContext):
 
     bot_settings["pairs"][symbol] = {"tf": tf, "leverage": lev}
 
-    await message.answer(
+    await callback.message.answer(
         f"✅ Пара `{symbol}` добавлена!\n"
         f"Таймфрейм: `{tf}m` | Плечо: `{lev}x`\n\n"
         f"**Все пары:**\n{_pairs_summary()}",
-        reply_markup=get_main_keyboard()
+        reply_markup=get_delete_kb()
     )
     await state.clear()
 
@@ -326,21 +301,28 @@ async def cmd_remove_pair(message: Message, state: FSMContext):
         msg = await message.answer(f"⚠️ Нельзя удалить последнюю пару (`{sym}`). Добавьте другую сначала.", reply_markup=get_delete_kb())
         return
 
-    kb_buttons = [[KeyboardButton(text=f"🗑 {s}")] for s in pairs]
-    kb_buttons.append([KeyboardButton(text="❌ Отмена")])
-    kb = ReplyKeyboardMarkup(keyboard=kb_buttons, resize_keyboard=True)
+    kb_buttons = []
+    for s in pairs:
+        kb_buttons.append([InlineKeyboardButton(text=f"🗑 {s}", callback_data=f"delpair_{s}")])
+    kb_buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="delpair_cancel")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
     msg = await message.answer("Выберите пару для удаления:", reply_markup=kb)
-    await state.set_state(PairFSM.waiting_for_symbol) # Переиспользуем состояние, чтобы знать, что мы удаляем
-    # (На самом деле мы просто ждем сообщение, начинающееся с 🗑, но State поможет нам удалить prompt)
+    await state.set_state(PairFSM.waiting_for_symbol)
     await save_prompt_id(msg, state)
 
 
-@router.message(F.text.startswith("🗑 "))
-async def process_remove_pair(message: Message, state: FSMContext):
-    await delete_user_msg(message)
-    await delete_previous_prompt(message, state)
+@router.callback_query(PairFSM.waiting_for_symbol, F.data.startswith("delpair_"))
+async def process_remove_pair(callback: CallbackQuery, state: FSMContext):
+    await delete_previous_prompt(callback.message, state)
     
-    symbol = message.text.replace("🗑 ", "").strip()
+    action = callback.data.replace("delpair_", "")
+    
+    if action == "cancel":
+        await state.clear()
+        await callback.message.answer("Отменено.", reply_markup=get_delete_kb())
+        return
+
+    symbol = action
 
     if symbol in bot_settings["pairs"]:
         del bot_settings["pairs"][symbol]
@@ -348,23 +330,15 @@ async def process_remove_pair(message: Message, state: FSMContext):
         global _engine_manager
         if _engine_manager and symbol in _engine_manager.engines:
             await _engine_manager.remove_pair(symbol)
-            await message.answer(f"🛑 Движок для `{symbol}` остановлен.")
+            await callback.message.answer(f"🛑 Движок для `{symbol}` остановлен.")
 
-        await message.answer(
+        await callback.message.answer(
             f"✅ Пара `{symbol}` удалена.\n\n**Осталось:**\n{_pairs_summary()}",
-            reply_markup=get_main_keyboard()
+            reply_markup=get_delete_kb()
         )
     else:
-        await message.answer("⚠️ Пара не найдена.", reply_markup=get_delete_kb())
+        await callback.message.answer("⚠️ Пара не найдена.", reply_markup=get_delete_kb())
     await state.clear()
-
-@router.message(F.text == "❌ Отмена")
-async def process_cancel(message: Message, state: FSMContext):
-    await delete_user_msg(message)
-    await delete_previous_prompt(message, state)
-    await state.clear()
-    
-    await message.answer("Отменено.", reply_markup=get_main_keyboard())
 
 
 # --- ЗАПУСК / СТОП ---
@@ -482,47 +456,45 @@ async def cmd_test_strategies(message: Message, state: FSMContext):
         )
         asyncio.create_task(run_optimizer_and_report(message, symbol, tf))
     else:
-        kb_buttons = [[KeyboardButton(text=f"🧪 {s}")] for s in pairs]
-        kb_buttons.append([KeyboardButton(text="❌ Отмена")])
-        kb = ReplyKeyboardMarkup(keyboard=kb_buttons, resize_keyboard=True)
+        kb_buttons = []
+        for s in pairs:
+            kb_buttons.append([InlineKeyboardButton(text=f"🧪 {s}", callback_data=f"test_{s}")])
+        kb_buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="test_cancel")])
+        kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
         msg = await message.answer("Выберите пару для тестирования:", reply_markup=kb)
         await state.set_state(TestFSM.waiting_for_pair_choice)
         await save_prompt_id(msg, state)
 
 
-@router.message(TestFSM.waiting_for_pair_choice)
-async def process_test_pair_choice(message: Message, state: FSMContext):
-    await delete_user_msg(message)
-    await delete_previous_prompt(message, state)
+@router.callback_query(TestFSM.waiting_for_pair_choice, F.data.startswith("test_"))
+async def process_test_pair_choice(callback: CallbackQuery, state: FSMContext):
+    await delete_previous_prompt(callback.message, state)
     
-    if message.text == "❌ Отмена":
+    action = callback.data.replace("test_", "")
+    
+    if action == "cancel":
         await state.clear()
         
-        kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
-        await delete_user_msg(kb_msg)
-        await message.answer("Отменено.", reply_markup=get_delete_kb())
+        await callback.message.answer("Отменено.", reply_markup=get_delete_kb())
         return
 
-    symbol = message.text.replace("🧪 ", "").strip()
+    symbol = action
     pairs = bot_settings["pairs"]
 
     if symbol not in pairs:
-        msg = await message.answer("⚠️ Пара не найдена. Выберите кнопкой.")
+        msg = await callback.message.answer("⚠️ Пара не найдена. Выберите кнопкой.")
         await save_prompt_id(msg, state)
         return
 
     tf = pairs[symbol]["tf"]
     await state.clear()
     
-    kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
-    await delete_user_msg(kb_msg)
-    
-    await message.answer(
+    await callback.message.answer(
         f"⏳ Запускаю полный бэктест `{symbol}` ({tf}m)...\n"
         "Тестирую 3 стратегии. Это займёт 1-2 минуты.",
         reply_markup=get_delete_kb()
     )
-    asyncio.create_task(run_optimizer_and_report(message, symbol, tf))
+    asyncio.create_task(run_optimizer_and_report(callback.message, symbol, tf))
 
 
 async def run_optimizer_and_report(message: Message, symbol: str, tf: int):
@@ -659,39 +631,31 @@ async def cmd_strategy_settings(message: Message, state: FSMContext):
     sp = bot_settings.get("strategy_params", {})
     for key, (label, _desc) in STRATEGY_PARAM_LABELS.items():
         val = sp.get(key, 0)
-        buttons.append([KeyboardButton(text=f"{label} [{val}]")])
-    buttons.append([KeyboardButton(text="🔙 Назад")])
+        buttons.append([InlineKeyboardButton(text=f"{label} [{val}]", callback_data=f"strat_{key}")])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="strat_back")])
     
-    kb = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     msg = await message.answer(text, reply_markup=kb)
     await state.set_state(StrategyFSM.waiting_for_param_choice)
     await save_prompt_id(msg, state)
 
 
-@router.message(StrategyFSM.waiting_for_param_choice)
-async def process_strategy_param_choice(message: Message, state: FSMContext):
-    await delete_user_msg(message)
-    await delete_previous_prompt(message, state)
+@router.callback_query(StrategyFSM.waiting_for_param_choice, F.data.startswith("strat_"))
+async def process_strategy_param_choice(callback: CallbackQuery, state: FSMContext):
+    await delete_previous_prompt(callback.message, state)
     
-    text = message.text.strip()
+    action = callback.data.replace("strat_", "")
     
-    if text == "🔙 Назад":
+    if action == "back":
         await state.clear()
         
-        kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
-        await delete_user_msg(kb_msg)
-        await message.answer("Главное меню.", reply_markup=get_delete_kb())
+        await callback.message.answer("Главное меню.", reply_markup=get_delete_kb())
         return
     
-    # Ищем параметр по label
-    chosen_key = None
-    for key, (label, desc) in STRATEGY_PARAM_LABELS.items():
-        if text.startswith(label):
-            chosen_key = key
-            break
+    chosen_key = action
     
-    if not chosen_key:
-        msg = await message.answer("Выберите параметр кнопкой.")
+    if chosen_key not in STRATEGY_PARAM_LABELS:
+        msg = await callback.message.answer("Выберите параметр кнопкой.")
         await save_prompt_id(msg, state)
         return
     
@@ -699,12 +663,11 @@ async def process_strategy_param_choice(message: Message, state: FSMContext):
     current = bot_settings.get("strategy_params", {}).get(chosen_key, 0)
     
     await state.update_data(editing_param=chosen_key)
-    msg = await message.answer(
+    msg = await callback.message.answer(
         f"✏️ **{label}**\n\n"
         f"{desc}\n\n"
         f"Текущее значение: `{current}`\n"
-        f"Введите новое значение:",
-        reply_markup=ReplyKeyboardRemove()
+        f"Введите новое значение:"
     )
     await state.set_state(StrategyFSM.waiting_for_value)
     await save_prompt_id(msg, state)
@@ -729,9 +692,6 @@ async def process_strategy_param_value(message: Message, state: FSMContext):
     
     if not param_key or param_key not in STRATEGY_PARAM_LABELS:
         await state.clear()
-        
-        kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
-        await delete_user_msg(kb_msg)
         await message.answer("Ошибка. Попробуйте снова.", reply_markup=get_delete_kb())
         return
     
@@ -745,9 +705,6 @@ async def process_strategy_param_value(message: Message, state: FSMContext):
     logger.info(f"Пользователь {message.from_user.id} изменил {param_key}: {old_value} → {value}")
     
     await state.clear()
-    
-    kb_msg = await message.answer("🔄", reply_markup=get_main_keyboard())
-    await delete_user_msg(kb_msg)
     
     await message.answer(
         f"✅ **{label}** изменён: `{old_value}` → `{value}`\n\n"
