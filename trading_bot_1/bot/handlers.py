@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from contextlib import suppress
 from aiogram.exceptions import TelegramBadRequest
 
-from bot.states import SettingsFSM, PairFSM, TestFSM, StrategyFSM
+from bot.states import SettingsFSM, PairFSM, TestFSM, StrategyFSM, TrainMLFSM
 from bot.settings import bot_settings
 
 logger = logging.getLogger("telegram_handlers")
@@ -37,7 +37,7 @@ def get_main_keyboard():
             [KeyboardButton(text="📊 Статус"), KeyboardButton(text="📥 Скачать сделки")],
             [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="🎯 Стратегии")],
             [KeyboardButton(text="➕ Добавить пару"), KeyboardButton(text="➖ Убрать пару")],
-            [KeyboardButton(text="🧪 Тест Стратегий")],
+            [KeyboardButton(text="🧪 Тест Стратегий"), KeyboardButton(text="🧠 Обучить ML")],
             [KeyboardButton(text="🚀 ЗАПУСК БОТА"), KeyboardButton(text="🛑 СТОП")]
         ],
         resize_keyboard=True
@@ -601,6 +601,117 @@ async def run_optimizer_and_report(message: Message, symbol: str, tf: int):
     except Exception as e:
         logger.error(f"Ошибка бэктеста: {e}", exc_info=True)
         await message.answer("❌ Произошла ошибка при тестировании. Проверьте логи.", parse_mode=None, reply_markup=get_delete_kb())
+
+
+# --- ОБУЧЕНИЕ ML ---
+
+@router.message(F.text == "🧠 Обучить ML")
+async def cmd_train_ml(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await state.clear()
+    pairs = bot_settings.get("pairs", {})
+
+    if not pairs:
+        msg = await message.answer("⚠️ Добавьте хотя бы одну пару для обучения.", reply_markup=get_delete_kb())
+        return
+
+    if len(pairs) == 1:
+        symbol = list(pairs.keys())[0]
+        tf = pairs[symbol]["tf"]
+        msg = await message.answer(
+            f"⏳ Скачиваю данные и запускаю обучение ML на `{symbol}` ({tf}m)...\n"
+            "Это может занять 10-20 секунд.",
+            reply_markup=get_delete_kb()
+        )
+        asyncio.create_task(run_ml_trainer_and_report(message, symbol, tf))
+    else:
+        kb_buttons = []
+        for s in pairs:
+            kb_buttons.append([InlineKeyboardButton(text=f"🧠 {s}", callback_data=f"train_{s}")])
+        kb_buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="train_cancel")])
+        kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
+        msg = await message.answer("Выберите пару для обучения моделей (источник данных):", reply_markup=kb)
+        await state.set_state(TrainMLFSM.waiting_for_pair_choice)
+        await save_prompt_id(msg, state)
+
+
+@router.callback_query(TrainMLFSM.waiting_for_pair_choice, F.data.startswith("train_"))
+async def process_train_ml_choice(callback: CallbackQuery, state: FSMContext):
+    await delete_previous_prompt(callback.message, state)
+    
+    action = callback.data.replace("train_", "")
+    
+    if action == "cancel":
+        await state.clear()
+        await callback.message.answer("Отменено.", reply_markup=get_delete_kb())
+        return
+
+    symbol = action
+    pairs = bot_settings.get("pairs", {})
+
+    if symbol not in pairs:
+        msg = await callback.message.answer("⚠️ Пара не найдена. Выберите кнопкой.")
+        await save_prompt_id(msg, state)
+        return
+
+    tf = pairs[symbol]["tf"]
+    await state.clear()
+    
+    await callback.message.answer(
+        f"⏳ Скачиваю данные и запускаю обучение ML на `{symbol}` ({tf}m)...\n"
+        "Это может занять 10-20 секунд.",
+        reply_markup=get_delete_kb()
+    )
+    asyncio.create_task(run_ml_trainer_and_report(callback.message, symbol, tf))
+
+
+async def run_ml_trainer_and_report(message: Message, symbol: str, tf: int):
+    from core.data.historical import MEXCHistoricalDownloader
+    from core.ml.trainer import EnsembleTrainer
+    from core.strategies.trend_pullback import TrendPullbackStrategy
+    
+    try:
+        # Скачиваем 4000 свечей для хорошей выборки
+        df = await MEXCHistoricalDownloader.get_klines(symbol, tf, limit=4000)
+        
+        # Параметры берем из текущих настроек пользователя
+        sp = bot_settings.get("strategy_params", {})
+        rsi_th = sp.get("rsi_threshold", 40.0)
+        sl_mult = sp.get("sl_atr_mult", 1.5)
+        rr = sp.get("rr_ratio", 2.0)
+        
+        strategy = TrendPullbackStrategy(rsi_threshold=rsi_th, sl_atr_mult=sl_mult, rr_ratio=rr)
+        trainer = EnsembleTrainer(strategy=strategy)
+        
+        ensemble = trainer.train_from_data(df)
+        
+        if ensemble is None:
+            await message.answer(
+                f"❌ **ОШИБКА ОБУЧЕНИЯ**\n"
+                f"Недостаточно данных/сделок для обучения на паре `{symbol}` ({tf}m).\n"
+                "Система не смогла собрать минимум 20 исторических входов и выходов.",
+                reply_markup=get_delete_kb()
+            )
+            return
+            
+        trained_count = sum([
+            ensemble.momentum.is_trained,
+            ensemble.volatility.is_trained,
+            ensemble.structure.is_trained,
+        ])
+        
+        await message.answer(
+            f"✅ **ОБУЧЕНИЕ ЗАВЕРШЕНО!**\n\n"
+            f"🧠 Обучено моделей: `{trained_count}/3`\n"
+            f"📊 На паре: `{symbol}` ({tf}m)\n"
+            f"⚙️ Разметка по: `TrendPullback (RSI {rsi_th}, SL {sl_mult}x)`\n\n"
+            f"Модели успешно сохранены. Новые сделки будут проходить настоящую ML-фильтрацию (без Fallback)!",
+            reply_markup=get_delete_kb()
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка обучения ML: {e}", exc_info=True)
+        await message.answer("❌ Произошла ошибка при обучении ML. Проверьте логи сервера.", parse_mode=None, reply_markup=get_delete_kb())
 
 
 # --- НАСТРОЙКИ СТРАТЕГИЙ ---

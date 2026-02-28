@@ -269,18 +269,26 @@ class LiveEngine:
                     
                     ml_emoji = "✅" if ml_passed else "❌"
                     ml_verdict = "ОДОБРИЛ" if ml_passed else "ОТКЛОНИЛ"
-                    await self._notify(
-                        f"🧠 *ML АНСАМБЛЬ {ml_verdict}* `{self.symbol}` {direction}\n"
-                        f"\n"
-                        f"  Momentum: `{ml_details.get('momentum_score', 0):.3f}`\n"
-                        f"  Volatility: `{ml_details.get('volatility_score', 0):.3f}`\n"
-                        f"  Structure: `{ml_details.get('structure_score', 0):.3f}`\n"
-                        f"\n"
-                        f"🎯 Score: `{ml_details.get('ensemble_score', 0):.3f}` "
-                        f"{'≥' if ml_passed else '<'} "
-                        f"Threshold: `{ml_details.get('threshold', 0):.3f}` "
-                        f"(margin: `{ml_details.get('margin', 0):+.3f}`)"
-                    )
+                    
+                    if ml_details.get("fallback"):
+                        ml_text = (
+                            f"🧠 *ML АНСАМБЛЬ {ml_verdict}* `{self.symbol}` {direction}\n\n"
+                            f"⚠️ *Обучение не завершено*\n"
+                            f"Сигнал одобрен автоматически (Fallback-режим)."
+                        )
+                    else:
+                        ml_text = (
+                            f"🧠 *ML АНСАМБЛЬ {ml_verdict}* `{self.symbol}` {direction}\n\n"
+                            f"  Momentum: `{ml_details.get('momentum_score', 0):.3f}`\n"
+                            f"  Volatility: `{ml_details.get('volatility_score', 0):.3f}`\n"
+                            f"  Structure: `{ml_details.get('structure_score', 0):.3f}`\n\n"
+                            f"🎯 Score: `{ml_details.get('ensemble_score', 0):.3f}` "
+                            f"{'≥' if ml_passed else '<'} "
+                            f"Threshold: `{ml_details.get('threshold', 0):.3f}` "
+                            f"(margin: `{ml_details.get('margin', 0):+.3f}`)"
+                        )
+                        
+                    await self._notify(ml_text)
                     logger.info(
                         f"[{self.symbol}] {direction} {ml_verdict} ML. "
                         f"Score={ml_details.get('ensemble_score', 0):.3f} "
