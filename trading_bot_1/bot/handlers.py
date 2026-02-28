@@ -34,7 +34,7 @@ STRATEGY_PARAM_LABELS = {
 def get_main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📊 Статус")],
+            [KeyboardButton(text="📊 Статус"), KeyboardButton(text="📥 Скачать сделки")],
             [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="🎯 Стратегии")],
             [KeyboardButton(text="➕ Добавить пару"), KeyboardButton(text="➖ Убрать пару")],
             [KeyboardButton(text="🧪 Тест Стратегий")],
@@ -87,9 +87,7 @@ async def cmd_start(message: Message, state: FSMContext):
     await delete_user_msg(message)
     await state.clear()
     
-    # Отправляем клавиатуру и оставляем сообщение, чтобы меню не пропадало
-    await message.answer("🕹 **Меню активно 👇**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
-    
+    # Убираем отдельное сообщение "Меню активно" и прикрепляем клавиатуру сразу к приветствию
     welcome_text = (
         "👋 Добро пожаловать в **Hype Bot (v2)**!\n\n"
         "Я автономный торговый бот для фьючерсов на MEXC.\n"
@@ -98,12 +96,13 @@ async def cmd_start(message: Message, state: FSMContext):
         f"🔧 **Пары:**\n{_pairs_summary()}\n\n"
         "Используйте меню ниже для навигации."
     )
-    await message.answer(welcome_text, reply_markup=get_delete_kb())
+    await message.answer(welcome_text, reply_markup=get_main_keyboard())
 
 
 # --- СКАЧАТЬ СДЕЛКИ ---
 
 @router.message(Command("trades"))
+@router.message(F.text == "📥 Скачать сделки")
 async def cmd_download_trades(message: Message):
     await delete_user_msg(message)
     csv_path = "trades_history.csv"
@@ -203,15 +202,12 @@ async def process_risk(message: Message, state: FSMContext):
     bot_settings["risk_percent"] = risk
     logger.info(f"Пользователь {message.from_user.id} установил риск: {risk}%")
     
-    # Восстанавливаем клавиатуру, не удаляя сообщение
-    await message.answer("🕹 **Меню обновлено 👇**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
-    
     await message.answer(
         f"✅ Настройки сохранены!\n\n"
         f"Режим: `{bot_settings['mode'].upper()}`\n"
         f"Риск: `{risk}%`\n\n"
         f"**Пары:**\n{_pairs_summary()}",
-        reply_markup=get_delete_kb()
+        reply_markup=get_main_keyboard()
     )
     await state.clear()
 
@@ -247,8 +243,7 @@ async def process_pair_symbol(message: Message, state: FSMContext):
         symbol = f"{symbol[:-4]}_USDT"
 
     if symbol in bot_settings["pairs"]:
-        await message.answer("🕹 **Меню обновлено 👇**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
-        await message.answer(f"⚠️ Пара `{symbol}` уже добавлена.", reply_markup=get_delete_kb())
+        await message.answer(f"⚠️ Пара `{symbol}` уже добавлена.", reply_markup=get_main_keyboard())
         await state.clear()
         return
 
@@ -307,13 +302,11 @@ async def process_pair_leverage(message: Message, state: FSMContext):
 
     bot_settings["pairs"][symbol] = {"tf": tf, "leverage": lev}
 
-    await message.answer("🕹 **Меню обновлено 👇**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
-
     await message.answer(
         f"✅ Пара `{symbol}` добавлена!\n"
         f"Таймфрейм: `{tf}m` | Плечо: `{lev}x`\n\n"
         f"**Все пары:**\n{_pairs_summary()}",
-        reply_markup=get_delete_kb()
+        reply_markup=get_main_keyboard()
     )
     await state.clear()
 
@@ -349,19 +342,17 @@ async def process_remove_pair(message: Message, state: FSMContext):
     
     symbol = message.text.replace("🗑 ", "").strip()
 
-    await message.answer("🕹 **Меню обновлено 👇**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
-
     if symbol in bot_settings["pairs"]:
         del bot_settings["pairs"][symbol]
 
         global _engine_manager
         if _engine_manager and symbol in _engine_manager.engines:
             await _engine_manager.remove_pair(symbol)
-            await message.answer(f"🛑 Движок для `{symbol}` остановлен.", reply_markup=get_delete_kb())
+            await message.answer(f"🛑 Движок для `{symbol}` остановлен.")
 
         await message.answer(
             f"✅ Пара `{symbol}` удалена.\n\n**Осталось:**\n{_pairs_summary()}",
-            reply_markup=get_delete_kb()
+            reply_markup=get_main_keyboard()
         )
     else:
         await message.answer("⚠️ Пара не найдена.", reply_markup=get_delete_kb())
@@ -373,8 +364,7 @@ async def process_cancel(message: Message, state: FSMContext):
     await delete_previous_prompt(message, state)
     await state.clear()
     
-    await message.answer("🕹 **Меню активно 👇**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
-    await message.answer("Отменено.", reply_markup=get_delete_kb())
+    await message.answer("Отменено.", reply_markup=get_main_keyboard())
 
 
 # --- ЗАПУСК / СТОП ---
