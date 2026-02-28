@@ -51,9 +51,9 @@ def get_delete_kb():
 
 @router.callback_query(F.data == "delete_msg")
 async def process_delete_msg(callback: CallbackQuery):
-    with suppress(TelegramBadRequest):
+    with suppress(TelegramBadRequest, Exception):
         await callback.message.delete()
-    await callback.answer()
+        await callback.answer()
 
 async def delete_user_msg(message: Message):
     with suppress(TelegramBadRequest):
