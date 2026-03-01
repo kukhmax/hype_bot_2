@@ -18,6 +18,7 @@ from engines.market_engine import MarketEngine, CandleBuffer
 from engines.strategy_engine import StrategyEngine
 from engines.risk_engine import RiskEngine
 from services.chart_service import chart_service
+from services.telegram_bot import telegram_service
 
 # Инициализация логгера
 setup_logger(
@@ -79,8 +80,11 @@ async def on_candle(symbol: str, timeframe: str, buffer: CandleBuffer):
         # Для Telegram бота нам понадобится путь к файлу, сохраним его в объекте:
         signal.chart_path = chart_path
 
+    # Шаг 7 — Signal Formatter → Telegram
+    # Отправляем сигнал асинхронно
+    asyncio.create_task(telegram_service.broadcast_signal(signal))
+
     # TODO: Шаг 8 — ML Engine
-    # TODO: Шаг 7 — Signal Formatter → Telegram
 
 
 async def main():
@@ -120,7 +124,8 @@ async def main():
         on_candle=on_candle,
     )
 
-    # TODO: Шаг 7 — инициализация Telegram Bot
+    # Шаг 7 — инициализация Telegram Bot (запуск поллинга в фоне)
+    asyncio.create_task(telegram_service.start())
 
     logger.info("✅ Все компоненты инициализированы. Запуск...")
 
@@ -129,6 +134,7 @@ async def main():
     except asyncio.CancelledError:
         logger.info("🛑 Fibo Bot остановлен.")
     finally:
+        await telegram_service.stop()
         await market_engine.stop()
         await redis_manager.disconnect()
         await db_manager.disconnect()
