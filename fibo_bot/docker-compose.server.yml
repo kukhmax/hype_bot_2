@@ -1,0 +1,48 @@
+services:
+  fibo_bot:
+    build: .
+    container_name: fibo_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./ml/models:/app/ml/models
+      - ./charts:/app/charts
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
+  redis:
+    image: redis:7-alpine
+    container_name: fibo_bot_redis
+    restart: unless-stopped
+    # Порты убраны для сервера (используется внутренняя сеть Docker)
+    volumes:
+      - redis_data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: fibo_bot_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fibo_bot
+      POSTGRES_USER: fibo_bot
+      POSTGRES_PASSWORD: fibo_bot_secret
+    # Порты убраны для сервера
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U fibo_bot" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_data:
+  postgres_data:

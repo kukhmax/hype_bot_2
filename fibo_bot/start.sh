@@ -22,15 +22,15 @@ if ! command -v docker-compose &> /dev/null; then
 fi
 
 echo "📦 Инициализация базы данных и кэша..."
-docker-compose up -d redis postgres
+docker compose up -d redis postgres
 
 echo "⏳ Ожидание запуска базы данных..."
 sleep 5
 
 echo "🛠️ Запуск Telegram бота и торгового движка..."
-docker-compose up -d fibo_bot
+docker compose up -d fibo_bot
 
 echo "✅ Fibo Bot успешно запущен в фоновом режиме."
 echo "   Чтобы посмотреть логи, используйте команду:"
-echo "   docker-compose logs -f fibo_bot"
+echo "   docker compose logs -f fibo_bot"
 echo "======================================"
