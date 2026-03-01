@@ -97,8 +97,8 @@ class TelegramService:
     # ─── Хэндлеры команд ──────────────────────────────────────────────────
 
     async def _check_admin(self, message: types.Message) -> bool:
-        """Проверка, что команду вызвал админ."""
-        if message.from_user.id != self.admin_id:
+        """Проверка, что команду вызвал админ (проверка по всему списку)."""
+        if message.from_user.id not in self.admin_ids:
             logger.warning(f"Unauthorized access from USER {message.from_user.id}")
             await message.reply("У вас нет доступа к управлению ботом.")
             return False
