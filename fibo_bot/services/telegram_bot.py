@@ -11,6 +11,8 @@ import os
 from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, ReplyKeyboardMarkup, KeyboardButton
 
@@ -29,13 +31,18 @@ class TelegramService:
     def __init__(self):
         self.bot = None
         self.dp = None
-        self.admin_id = int(config.telegram.admin_id) if config.telegram.admin_id else 0
+        # admin_ids в конфиге - это список строк
+        self.admin_ids = [int(aid) for aid in config.telegram.admin_ids if aid]
+        self.admin_id = self.admin_ids[0] if self.admin_ids else 0
 
         if not config.telegram.token:
             logger.warning("[Telegram] Токен не настроен! Уведомления отключены.")
             return
 
-        self.bot = Bot(token=config.telegram.token, parse_mode="HTML")
+        self.bot = Bot(
+            token=config.telegram.token,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+        )
         self.dp = Dispatcher()
 
         # Регистрация хэндлеров
