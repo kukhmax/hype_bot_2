@@ -5,8 +5,8 @@ Fibo Bot — PostgreSQL Database Manager.
 Асинхронный менеджер через asyncpg.
 """
 
-from typing import Optional, Dict, Any, List
-from datetime import datetime
+from typing import Dict, Any, List, Optional
+from datetime import datetime, timedelta
 
 import asyncpg
 
@@ -236,15 +236,16 @@ class DatabaseManager:
         try:
             async with self._pool.acquire() as conn:
                 # Удаляем результаты
+                interval = timedelta(days=days)
                 res_del = await conn.execute(
                     "DELETE FROM signal_results WHERE exit_time < NOW() - $1::interval OR (exit_time IS NULL AND pnl_percent IS NULL AND signal_id IN (SELECT id FROM signals WHERE created_at < NOW() - $1::interval))",
-                    f"{days} days"
+                    interval
                 )
                 
                 # Удаляем сигналы
                 sig_del = await conn.execute(
                     "DELETE FROM signals WHERE created_at < NOW() - $1::interval",
-                    f"{days} days"
+                    interval
                 )
                 
             logger.info(f"[DB] Очистка старых данных (> {days} дней): {sig_del} signals, {res_del} results")
