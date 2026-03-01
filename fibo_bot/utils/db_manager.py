@@ -225,6 +225,32 @@ class DatabaseManager:
             )
             return [dict(r) for r in rows]
 
+    async def delete_old_records(self, days: int = 60):
+        """
+        Удаление старых сигналов и их результатов для экономии места (Rolling Window).
+        Удаляет записи старше `days` дней.
+        """
+        if not self._pool:
+            return
+
+        try:
+            async with self._pool.acquire() as conn:
+                # Удаляем результаты
+                res_del = await conn.execute(
+                    "DELETE FROM signal_results WHERE exit_time < NOW() - $1::interval OR (exit_time IS NULL AND pnl_percent IS NULL AND signal_id IN (SELECT id FROM signals WHERE created_at < NOW() - $1::interval))",
+                    f"{days} days"
+                )
+                
+                # Удаляем сигналы
+                sig_del = await conn.execute(
+                    "DELETE FROM signals WHERE created_at < NOW() - $1::interval",
+                    f"{days} days"
+                )
+                
+            logger.info(f"[DB] Очистка старых данных (> {days} дней): {sig_del} signals, {res_del} results")
+        except Exception as e:
+            logger.error(f"[DB] Ошибка при очистке старых данных: {e}", exc_info=True)
+
 
 # Глобальный экземпляр
 db_manager = DatabaseManager()

@@ -96,6 +96,18 @@ async def on_candle(symbol: str, timeframe: str, buffer: CandleBuffer):
     asyncio.create_task(telegram_service.broadcast_signal(signal))
 
 
+async def db_cleanup_task(days: int = 60):
+    """Фоновая задача очистки старых записей БД."""
+    while True:
+        try:
+            logger.info("[Main] Запуск плановой очистки БД...")
+            await db_manager.delete_old_records(days=days)
+        except Exception as e:
+            logger.error(f"[Main] Ошибка очистки БД: {e}")
+        # Запуск раз в 24 часа
+        await asyncio.sleep(24 * 3600)
+
+
 async def main():
     """Главный цикл приложения."""
     logger.info("=" * 60)
@@ -135,6 +147,9 @@ async def main():
 
     # Шаг 7 — инициализация Telegram Bot (запуск поллинга в фоне)
     asyncio.create_task(telegram_service.start())
+
+    # Периодическая очистка БД (храним 60 дней)
+    asyncio.create_task(db_cleanup_task(days=60))
 
     logger.info("✅ Все компоненты инициализированы. Запуск...")
 
