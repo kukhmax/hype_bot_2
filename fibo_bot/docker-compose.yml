@@ -11,7 +11,10 @@ services:
       - ./logs:/app/logs
       - ./ml/models:/app/ml/models
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
 
   redis:
     image: redis:7-alpine
@@ -22,5 +25,24 @@ services:
     volumes:
       - redis_data:/data
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: fibo_bot_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fibo_bot
+      POSTGRES_USER: fibo_bot
+      POSTGRES_PASSWORD: fibo_bot_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U fibo_bot" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   redis_data:
+  postgres_data:

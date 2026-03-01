@@ -2,6 +2,7 @@
 Fibo Bot — Конфигурация.
 
 Все настройки загружаются из переменных окружения (.env файл).
+Биржа: MEXC (spot + futures).
 """
 
 import os
@@ -15,11 +16,18 @@ load_dotenv()
 
 @dataclass
 class ExchangeConfig:
-    """Настройки подключения к бирже."""
-    ws_url: str = "wss://fstream.binance.com/ws"
-    rest_url: str = "https://fapi.binance.com"
+    """Настройки подключения к MEXC."""
+    # WebSocket
+    ws_spot_url: str = "wss://wbs.mexc.com/ws"
+    ws_futures_url: str = "wss://contract.mexc.com/edge"
+    # REST API
+    rest_spot_url: str = "https://api.mexc.com/api/v3/klines"
+    rest_futures_url: str = "https://contract.mexc.com/api/v1/contract/kline"
+    # API ключи
     api_key: str = ""
     api_secret: str = ""
+    # Тип рынка: spot / futures
+    market_type: str = "futures"
 
 
 @dataclass
@@ -37,13 +45,36 @@ class RedisConfig:
     port: int = 6379
     db: int = 0
     password: str = ""
+    url: str = ""  # redis://host:port/db
+
+    def get_url(self) -> str:
+        if self.url:
+            return self.url
+        auth = f":{self.password}@" if self.password else ""
+        return f"redis://{auth}{self.host}:{self.port}/{self.db}"
+
+
+@dataclass
+class PostgresConfig:
+    """Настройки PostgreSQL."""
+    host: str = "localhost"
+    port: int = 5432
+    database: str = "fibo_bot"
+    user: str = "fibo_bot"
+    password: str = ""
+    url: str = ""  # postgresql://user:pass@host:port/db
+
+    def get_url(self) -> str:
+        if self.url:
+            return self.url
+        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
 
 
 @dataclass
 class TradingConfig:
     """Параметры торговой стратегии."""
-    # Торговая пара по умолчанию
-    default_symbol: str = "BTCUSDT"
+    # Торговая пара по умолчанию (MEXC futures формат)
+    default_symbol: str = "BTC_USDT"
     # Основной таймфрейм
     default_timeframe: str = "5m"
     # Таймфреймы для анализа
@@ -72,12 +103,31 @@ class TradingConfig:
     chart_dpi: int = 150               # DPI графика
 
 
+# Маппинг таймфреймов для MEXC
+TF_MAP_MEXC_FUTURES = {
+    "1m": "Min1", "5m": "Min5", "15m": "Min15",
+    "30m": "Min30", "1h": "Min60", "4h": "Hour4", "1d": "Day1",
+}
+
+TF_MAP_MEXC_SPOT = {
+    "1m": "1m", "5m": "5m", "15m": "15m",
+    "30m": "30m", "1h": "60m", "4h": "4h", "1d": "1d",
+}
+
+# Таймфреймы → секунды
+TF_SECONDS = {
+    "1m": 60, "5m": 300, "15m": 900,
+    "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400,
+}
+
+
 @dataclass
 class Config:
     """Главная конфигурация приложения."""
     exchange: ExchangeConfig = field(default_factory=ExchangeConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
+    postgres: PostgresConfig = field(default_factory=PostgresConfig)
     trading: TradingConfig = field(default_factory=TradingConfig)
 
     # Общие настройки
@@ -90,24 +140,36 @@ class Config:
         """Загрузка конфигурации из переменных окружения."""
         config = cls()
 
-        # Exchange
-        config.exchange.api_key = os.getenv("BINANCE_API_KEY", "")
-        config.exchange.api_secret = os.getenv("BINANCE_API_SECRET", "")
+        # Exchange (MEXC)
+        config.exchange.api_key = os.getenv("MEXC_API_KEY", "")
+        config.exchange.api_secret = os.getenv("MEXC_API_SECRET", "")
+        config.exchange.market_type = os.getenv("MARKET_TYPE", "futures")
 
         # Telegram
         config.telegram.token = os.getenv("TELEGRAM_BOT_TOKEN", "")
         config.telegram.chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
         admin_ids_str = os.getenv("TELEGRAM_ADMIN_IDS", "")
         if admin_ids_str:
-            config.telegram.admin_ids = [int(x.strip()) for x in admin_ids_str.split(",")]
+            config.telegram.admin_ids = [
+                int(x.strip()) for x in admin_ids_str.split(",") if x.strip()
+            ]
 
         # Redis
         config.redis.host = os.getenv("REDIS_HOST", "localhost")
         config.redis.port = int(os.getenv("REDIS_PORT", "6379"))
         config.redis.password = os.getenv("REDIS_PASSWORD", "")
+        config.redis.url = os.getenv("REDIS_URL", "")
+
+        # PostgreSQL
+        config.postgres.host = os.getenv("POSTGRES_HOST", "localhost")
+        config.postgres.port = int(os.getenv("POSTGRES_PORT", "5432"))
+        config.postgres.database = os.getenv("POSTGRES_DB", "fibo_bot")
+        config.postgres.user = os.getenv("POSTGRES_USER", "fibo_bot")
+        config.postgres.password = os.getenv("POSTGRES_PASSWORD", "")
+        config.postgres.url = os.getenv("DATABASE_URL", "")
 
         # Trading
-        config.trading.default_symbol = os.getenv("DEFAULT_SYMBOL", "BTCUSDT")
+        config.trading.default_symbol = os.getenv("DEFAULT_SYMBOL", "BTC_USDT")
         config.trading.default_timeframe = os.getenv("DEFAULT_TIMEFRAME", "5m")
         config.trading.risk_per_trade = float(os.getenv("RISK_PER_TRADE", "0.01"))
         config.trading.default_mode = os.getenv("TRADING_MODE", "balanced")
