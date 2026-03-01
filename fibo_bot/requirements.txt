@@ -1,0 +1,34 @@
+# ============================================
+# Fibo Bot — Зависимости
+# ============================================
+
+# --- Core ---
+python-dotenv==1.0.1
+aiohttp==3.9.5
+websockets==12.0
+
+# --- Data & Analysis ---
+pandas==2.2.2
+numpy==1.26.4
+ta==0.11.0
+
+# --- Charts ---
+matplotlib==3.9.0
+mplfinance==0.12.10b0
+
+# --- Telegram ---
+aiogram==3.7.0
+
+# --- Redis ---
+redis==5.0.4
+aioredis==2.0.1
+
+# --- ML ---
+scikit-learn==1.5.0
+xgboost==2.0.3
+lightgbm==4.3.0
+shap==0.45.0
+joblib==1.4.2
+
+# --- Logging ---
+loguru==0.7.2

@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Env
+.env
+
+# Logs
+logs/
+*.log
+
+# ML models
+ml/models/*.pkl
+ml/models/*.joblib
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Charts (temp)
+charts_temp/
