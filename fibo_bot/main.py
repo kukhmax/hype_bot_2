@@ -15,6 +15,8 @@ from utils.logger import setup_logger, get_logger
 from utils.redis_manager import redis_manager
 from utils.db_manager import db_manager
 from engines.market_engine import MarketEngine, CandleBuffer
+from engines.strategy_engine import StrategyEngine
+from engines.risk_engine import RiskEngine
 
 # Инициализация логгера
 setup_logger(
@@ -37,9 +39,38 @@ async def on_candle(symbol: str, timeframe: str, buffer: CandleBuffer):
         f"V={candle.volume}"
     )
 
-    # TODO: Шаг 3 — Feature Engine
-    # TODO: Шаг 4 — Strategy Engine
-    # TODO: Шаг 5 — Risk Engine
+    # Шаг 3 & 4 — Feature Engine & Strategy Engine
+    # StrategyEngine внутри себя вызывает FeatureEngine.compute()
+    try:
+        signal = await strategy_engine.analyze(symbol, timeframe, buffer)
+    except Exception as e:
+        logger.error(f"Ошибка в Strategy Engine: {e}", exc_info=True)
+        return
+
+    if not signal:
+        return  # Нет сигнала
+
+    # Шаг 5 — Risk Engine
+    # Для RiskEngine нам нужны фичи, достанем их заново (быстро, т.к. уже закэшировано в буфере)
+    # или можно передавать фичи из StrategyEngine, но пока для простоты вызовем:
+    features = strategy_engine.feature_engine.compute(buffer)
+    if not features:
+        return
+
+    try:
+        risk_result = await risk_engine.validate(signal, features)
+    except Exception as e:
+        logger.error(f"Ошибка в Risk Engine: {e}", exc_info=True)
+        return
+
+    if not risk_result:
+        return  # Отклонено риск-менеджментом
+
+    # Обогащаем сигнал размером позиции
+    signal.explanation += f"\nРекомендуемая маржа: {risk_result['margin_pct']}%"
+
+    logger.info(f"🚀 СИГНАЛ ПРОШЁЛ РИСК-ФИЛЬТРЫ: {signal.direction} {signal.symbol}")
+
     # TODO: Шаг 8 — ML Engine
     # TODO: Шаг 6 — Chart Service
     # TODO: Шаг 7 — Signal Formatter → Telegram
@@ -71,6 +102,10 @@ async def main():
         logger.warning("Продолжаем без PostgreSQL")
 
     # --- Инициализация Market Engine ---
+    global strategy_engine, risk_engine
+    strategy_engine = StrategyEngine()
+    risk_engine = RiskEngine()
+
     market_engine = MarketEngine(
         symbol=config.trading.default_symbol,
         timeframes=config.trading.timeframes,
