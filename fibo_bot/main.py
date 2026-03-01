@@ -17,6 +17,7 @@ from utils.db_manager import db_manager
 from engines.market_engine import MarketEngine, CandleBuffer
 from engines.strategy_engine import StrategyEngine
 from engines.risk_engine import RiskEngine
+from ml.ml_engine import ml_engine
 from services.chart_service import chart_service
 from services.telegram_bot import telegram_service
 
@@ -73,6 +74,16 @@ async def on_candle(symbol: str, timeframe: str, buffer: CandleBuffer):
 
     logger.info(f"🚀 СИГНАЛ ПРОШЁЛ РИСК-ФИЛЬТРЫ: {signal.direction} {signal.symbol}")
 
+    # Шаг 8 — ML Engine
+    try:
+        # Предсказываем вероятность отработки (TP)
+        prob_pct = await ml_engine.predict_probability(features, signal)
+        signal.probability = prob_pct
+        if prob_pct > 0:
+            signal.explanation += f"\nML Вероятность: {prob_pct}%"
+    except Exception as e:
+        logger.error(f"Ошибка в ML Engine: {e}", exc_info=True)
+
     # Шаг 6 — Chart Service
     chart_path = chart_service.generate_chart(signal, buffer)
     if chart_path:
@@ -83,8 +94,6 @@ async def on_candle(symbol: str, timeframe: str, buffer: CandleBuffer):
     # Шаг 7 — Signal Formatter → Telegram
     # Отправляем сигнал асинхронно
     asyncio.create_task(telegram_service.broadcast_signal(signal))
-
-    # TODO: Шаг 8 — ML Engine
 
 
 async def main():
