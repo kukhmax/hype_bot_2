@@ -73,8 +73,8 @@ class PostgresConfig:
 @dataclass
 class TradingConfig:
     """Параметры торговой стратегии."""
-    # Торговая пара по умолчанию (MEXC futures формат)
-    default_symbol: str = "BTC_USDT"
+    # Торговые пары (список, считываемый из SYMBOLS)
+    symbols: List[str] = field(default_factory=lambda: ["SOL_USDT"])
     # Основной таймфрейм
     default_timeframe: str = "5m"
     # Таймфреймы для анализа
@@ -169,7 +169,8 @@ class Config:
         config.postgres.url = os.getenv("DATABASE_URL", "")
 
         # Trading
-        config.trading.default_symbol = os.getenv("DEFAULT_SYMBOL", "BTC_USDT")
+        symbols_str = os.getenv("SYMBOLS", "SOL_USDT")
+        config.trading.symbols = [s.strip() for s in symbols_str.split(",") if s.strip()]
         config.trading.default_timeframe = os.getenv("DEFAULT_TIMEFRAME", "5m")
         config.trading.risk_per_trade = float(os.getenv("RISK_PER_TRADE", "0.01"))
         config.trading.default_mode = os.getenv("TRADING_MODE", "balanced")

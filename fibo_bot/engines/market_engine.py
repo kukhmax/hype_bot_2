@@ -138,15 +138,18 @@ class CandleBuffer:
 
 # ─── MEXC WebSocket парсеры ──────────────────────────────────────────────────
 
-def parse_mexc_futures(msg: dict) -> Optional[Candle]:
+def parse_mexc_futures(msg: dict) -> Optional[tuple[str, Candle]]:
     """Парсинг MEXC futures kline: channel 'push.kline'."""
     if msg.get("channel") != "push.kline":
         return None
+        
+    ds = msg.get("symbol", "")
     d = msg.get("data", {})
     k = d.get("kline", {})
-    if not k:
+    if not k or not ds:
         return None
-    return Candle(
+        
+    candle = Candle(
         timestamp=int(k.get("t", 0)) * 1000,
         open=float(k.get("o", 0)),
         high=float(k.get("h", 0)),
@@ -155,17 +158,20 @@ def parse_mexc_futures(msg: dict) -> Optional[Candle]:
         volume=float(k.get("v", 0)),
         is_closed=True,  # MEXC futures не даёт явного флага
     )
+    return ds, candle
 
 
-def parse_mexc_spot(msg: dict) -> Optional[Candle]:
+def parse_mexc_spot(msg: dict) -> Optional[tuple[str, Candle]]:
     """Парсинг MEXC spot kline: channel 'spot@public.kline.v3.api'."""
-    if "d" not in msg:
+    if "d" not in msg or "s" not in msg:
         return None
+    ds = msg["s"]
     d = msg["d"]
     k = d.get("k", {})
     if not k:
         return None
-    return Candle(
+        
+    candle = Candle(
         timestamp=int(k.get("t", 0)),
         open=float(k.get("o", 0)),
         high=float(k.get("h", 0)),
@@ -174,6 +180,7 @@ def parse_mexc_spot(msg: dict) -> Optional[Candle]:
         volume=float(k.get("v", 0)),
         is_closed=bool(k.get("x", False)),
     )
+    return ds, candle
 
 
 # ─── MEXC REST API ───────────────────────────────────────────────────────────
@@ -371,13 +378,13 @@ class MarketEngine:
 
     def __init__(
         self,
-        symbol: str,
+        symbols: List[str],
         timeframes: List[str],
         market_type: str = "futures",
         on_candle: Optional[Callable] = None,
         buffer_size: int = 500,
     ):
-        self.symbol = symbol
+        self.symbols = symbols
         self.timeframes = timeframes
         self.market_type = market_type
         self.on_candle = on_candle
@@ -391,40 +398,45 @@ class MarketEngine:
             self._ws_url = config.exchange.ws_spot_url
             self._parser = parse_mexc_spot
 
-        # Буферы для каждого таймфрейма
-        self.buffers: dict[str, CandleBuffer] = {
-            tf: CandleBuffer(maxlen=buffer_size) for tf in timeframes
+        # Буферы для каждого символа и таймфрейма: dict[symbol][tf]
+        self.buffers: dict[str, dict[str, CandleBuffer]] = {
+            sym: {tf: CandleBuffer(maxlen=buffer_size) for tf in timeframes}
+            for sym in symbols
         }
 
-        # Агрегаторы (из 1m в старшие TF)
-        self.aggregators: dict[str, CandleAggregator] = {}
-        for tf in timeframes:
-            if tf != "1m":
-                self.aggregators[tf] = CandleAggregator(tf)
+        # Агрегаторы (из 1m в старшие TF) для каждого символа: dict[symbol][tf]
+        self.aggregators: dict[str, dict[str, CandleAggregator]] = {
+            sym: {} for sym in symbols
+        }
+        for sym in symbols:
+            for tf in timeframes:
+                if tf != "1m":
+                    self.aggregators[sym][tf] = CandleAggregator(tf)
 
     async def start(self):
         """Запуск: загрузка истории + WebSocket стрим."""
         self._running = True
         self._reconnect_count = 0
 
-        logger.info(f"[MarketEngine] 🚀 Запуск для {self.symbol} ({self.market_type})")
+        logger.info(f"[MarketEngine] 🚀 Запуск для {self.symbols} ({self.market_type})")
         logger.info(f"[MarketEngine] Таймфреймы: {self.timeframes}")
         logger.info(f"[MarketEngine] WS URL: {self._ws_url}")
 
-        # Загружаем историю для каждого TF
-        for tf in self.timeframes:
-            logger.info(f"[MarketEngine] Загрузка истории {self.symbol} {tf}...")
-            history = await fetch_historical_candles(
-                symbol=self.symbol,
-                tf=tf,
-                market_type=self.market_type,
-                limit=300,
-            )
-            for c in history:
-                self.buffers[tf].push(c)
-            buf_len = len(self.buffers[tf])
-            ready = "✅ готов" if self.buffers[tf].ready(50) else "⚠ недостаточно данных"
-            logger.info(f"[MarketEngine] Буфер {tf}: {buf_len} свечей — {ready}")
+        # Загружаем историю для каждого символа и TF
+        for symbol in self.symbols:
+            for tf in self.timeframes:
+                logger.info(f"[MarketEngine] Загрузка истории {symbol} {tf}...")
+                history = await fetch_historical_candles(
+                    symbol=symbol,
+                    tf=tf,
+                    market_type=self.market_type,
+                    limit=300,
+                )
+                for c in history:
+                    self.buffers[symbol][tf].push(c)
+                buf_len = len(self.buffers[symbol][tf])
+                ready = "✅ готов" if self.buffers[symbol][tf].ready(50) else "⚠ недостаточно данных"
+                logger.info(f"[MarketEngine] Буфер {symbol} {tf}: {buf_len} свечей — {ready}")
 
         logger.info(f"[MarketEngine] ✅ История загружена. Переход к WebSocket стриму.")
 
@@ -444,12 +456,12 @@ class MarketEngine:
     async def stop(self):
         """Остановка."""
         self._running = False
-        logger.info(f"[MarketEngine] 🛑 Остановлен ({self.symbol}). Переподключений: {getattr(self, '_reconnect_count', 0)}")
+        logger.info(f"[MarketEngine] 🛑 Остановлен ({self.symbols}). Переподключений: {getattr(self, '_reconnect_count', 0)}")
 
     async def _ws_loop(self):
-        """Основной WebSocket цикл."""
+        """Основной WebSocket цикл для всех пар."""
         connect_time = time.time()
-        logger.info(f"[WS] 🔌 Подключение к MEXC {self.market_type} WS ({self.symbol})...")
+        logger.info(f"[WS] 🔌 Подключение к MEXC {self.market_type} WS ({self.symbols})...")
 
         async with websockets.connect(
             self._ws_url,
@@ -458,17 +470,19 @@ class MarketEngine:
             elapsed = time.time() - connect_time
             logger.info(f"[WS] ✅ Подключено к {self._ws_url} за {elapsed:.2f}с")
 
-            # Подписываемся на 1m kline (базовый TF)
-            sub = build_subscribe_msg(self.symbol, "1m", self.market_type)
-            await ws.send(json.dumps(sub))
-            logger.info(f"[WS] 📡 Подписка отправлена: {self.symbol} 1m kline")
+            # Отправляем подписку для каждого символа и TF
+            for symbol in self.symbols:
+                # Базовый TF (1m)
+                sub = build_subscribe_msg(symbol, "1m", self.market_type)
+                await ws.send(json.dumps(sub))
+                logger.info(f"[WS] 📡 Подписка отправлена: {symbol} 1m kline")
 
-            # Подписываемся на конкретные TF
-            for tf in self.timeframes:
-                if tf != "1m":
-                    sub_tf = build_subscribe_msg(self.symbol, tf, self.market_type)
-                    await ws.send(json.dumps(sub_tf))
-                    logger.info(f"[WS] 📡 Подписка отправлена: {self.symbol} {tf} kline")
+                # Старшие TF
+                for tf in self.timeframes:
+                    if tf != "1m":
+                        sub_tf = build_subscribe_msg(symbol, tf, self.market_type)
+                        await ws.send(json.dumps(sub_tf))
+                        logger.info(f"[WS] 📡 Подписка отправлена: {symbol} {tf} kline")
 
             # Пинг-задача
             ping_task = asyncio.create_task(self._ping_loop(ws))
@@ -481,13 +495,20 @@ class MarketEngine:
 
                 async for raw in ws:
                     if not self._running:
-                        logger.info(f"[WS] Остановка WS потока ({self.symbol})")
+                        logger.info(f"[WS] Остановка WS потока")
                         break
 
                     msg_count += 1
                     msg = json.loads(raw)
-                    candle = self._parser(msg)
-                    if not candle:
+                    
+                    parsed = self._parser(msg)
+                    if not parsed:
+                        continue
+                        
+                    symbol, candle = parsed
+                    
+                    # Проверяем что символ нам нужен (на случай стороннего шума)
+                    if symbol not in self.symbols:
                         continue
 
                     candle_count += 1
@@ -495,35 +516,35 @@ class MarketEngine:
                     # Периодический отчёт каждые 60 секунд
                     now = time.time()
                     if now - last_report >= 60:
-                        buf_info = {tf: len(b) for tf, b in self.buffers.items()}
+                        # Суммарная инфа по буферам
+                        total_candles = sum(len(b) for s in self.buffers.values() for b in s.values())
                         logger.info(
-                            f"[WS] 📊 {self.symbol} | Сообщений: {msg_count} | "
-                            f"Свечей: {candle_count} | Буферы: {buf_info} | "
-                            f"Текущая цена: {candle.close:.2f}"
+                            f"[WS] 📊 Сообщений: {msg_count} | Пар: {len(self.symbols)} | "
+                            f"Свечей принято: {candle_count} | Всего в буферах: {total_candles}"
                         )
                         last_report = now
 
-                    # Пушим в буфер 1m
-                    if "1m" in self.buffers:
-                        self.buffers["1m"].push(candle)
+                    # Пушим в буфер 1m для данного символа
+                    if "1m" in self.buffers[symbol]:
+                        self.buffers[symbol]["1m"].push(candle)
 
-                    # Агрегация в старшие TF
-                    for tf, agg in self.aggregators.items():
+                    # Агрегация в старшие TF для данного символа
+                    for tf, agg in self.aggregators[symbol].items():
                         closed = agg.add(candle)
                         if closed:
-                            self.buffers[tf].push(closed)
+                            self.buffers[symbol][tf].push(closed)
                             logger.info(
-                                f"[WS] 🕯 Свеча закрыта {self.symbol} {tf}: "
+                                f"[WS] 🕯 Свеча закрыта {symbol} {tf}: "
                                 f"O={closed.open:.2f} H={closed.high:.2f} "
                                 f"L={closed.low:.2f} C={closed.close:.2f} V={closed.volume:.0f}"
                             )
                             # Коллбэк при закрытии свечи
-                            if self.on_candle and self.buffers[tf].ready(50):
-                                logger.debug(f"[WS] Вызов on_candle для {self.symbol} {tf}")
+                            if self.on_candle and self.buffers[symbol][tf].ready(50):
+                                logger.debug(f"[WS] Вызов on_candle для {symbol} {tf}")
                                 await self.on_candle(
-                                    symbol=self.symbol,
+                                    symbol=symbol,
                                     timeframe=tf,
-                                    buffer=self.buffers[tf],
+                                    buffer=self.buffers[symbol][tf],
                                 )
 
             except websockets.exceptions.ConnectionClosed as e:

@@ -112,7 +112,7 @@ class TelegramService:
         text = (
             "🚀 <b>Fibo Bot запущен!</b>\n\n"
             f"Биржа: <b>MEXC {config.exchange.market_type}</b>\n"
-            f"Пара: <b>{config.trading.default_symbol}</b>\n"
+            f"Пары: <b>{', '.join(config.trading.symbols)}</b>\n"
             f"Таймфреймы: <b>{', '.join(config.trading.timeframes)}</b>\n\n"
             "Используйте кнопки меню внизу для управления 🔽"
         )
@@ -147,7 +147,7 @@ class TelegramService:
         text = (
             f"🤖 <b>Статус Fibo Bot</b>\n\n"
             f"Состояние: <b>{state_str}</b>\n"
-            f"Пара: {config.trading.default_symbol}\n"
+            f"Пары: {', '.join(config.trading.symbols)}\n"
             f"Риск: {config.trading.risk_per_trade * 100}%\n\n"
             f"{stats_str}"
         )

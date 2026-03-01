@@ -113,7 +113,7 @@ async def main():
     logger.info("=" * 60)
     logger.info("🚀 Fibo Bot запускается...")
     logger.info(f"   Биржа: MEXC ({config.exchange.market_type})")
-    logger.info(f"   Символ: {config.trading.default_symbol}")
+    logger.info(f"   Символы: {', '.join(config.trading.symbols)}")
     logger.info(f"   Таймфрейм: {config.trading.default_timeframe}")
     logger.info(f"   Режим: {config.trading.default_mode}")
     logger.info(f"   Риск на сделку: {config.trading.risk_per_trade * 100}%")
@@ -139,7 +139,7 @@ async def main():
     risk_engine = RiskEngine()
 
     market_engine = MarketEngine(
-        symbol=config.trading.default_symbol,
+        symbols=config.trading.symbols,
         timeframes=config.trading.timeframes,
         market_type=config.exchange.market_type,
         on_candle=on_candle,
