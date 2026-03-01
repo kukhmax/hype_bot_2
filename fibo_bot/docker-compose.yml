@@ -10,6 +10,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./ml/models:/app/ml/models
+      - ./charts:/app/charts
     depends_on:
       redis:
         condition: service_started
