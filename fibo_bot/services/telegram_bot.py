@@ -10,9 +10,9 @@ Fibo Bot — Telegram Service.
 import os
 from datetime import datetime, timezone
 
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, ReplyKeyboardMarkup, KeyboardButton
 
 from config import config
 from engines.strategy_engine import TradeSignal
@@ -44,7 +44,30 @@ class TelegramService:
         self.dp.message(Command("pause"))(self.cmd_pause)
         self.dp.message(Command("resume"))(self.cmd_resume)
 
+        # Регистрация хэндлеров меню (текстовые кнопки)
+        self.dp.message(F.text == "📊 Статус")(self.cmd_status)
+        self.dp.message(F.text == "⏸ Пауза")(self.cmd_pause)
+        self.dp.message(F.text == "▶️ Возобновить")(self.cmd_resume)
+
         logger.info("[Telegram] Бот инициализирован")
+
+    def _get_main_keyboard(self) -> ReplyKeyboardMarkup:
+        """Создает основную клавиатуру с кнопками."""
+        keyboard = [
+            [
+                KeyboardButton(text="📊 Статус"),
+            ],
+            [
+                KeyboardButton(text="▶️ Возобновить"),
+                KeyboardButton(text="⏸ Пауза"),
+            ]
+        ]
+        return ReplyKeyboardMarkup(
+            keyboard=keyboard,
+            resize_keyboard=True,
+            is_persistent=True,
+            input_field_placeholder="Управление ботом..."
+        )
 
     async def start(self):
         """Запуск поллинга сообщений."""
@@ -84,12 +107,9 @@ class TelegramService:
             f"Биржа: <b>MEXC {config.exchange.market_type}</b>\n"
             f"Пара: <b>{config.trading.default_symbol}</b>\n"
             f"Таймфреймы: <b>{', '.join(config.trading.timeframes)}</b>\n\n"
-            "Доступные команды:\n"
-            "/status - текущая статистика и состояние\n"
-            "/pause - приостановить торговлю\n"
-            "/resume - возобновить торговлю\n"
+            "Используйте кнопки меню внизу для управления 🔽"
         )
-        await message.reply(text)
+        await message.reply(text, reply_markup=self._get_main_keyboard())
 
     async def cmd_status(self, message: types.Message):
         """Команда /status — статистика за день и state."""
