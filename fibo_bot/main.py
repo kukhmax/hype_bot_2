@@ -17,6 +17,7 @@ from utils.db_manager import db_manager
 from engines.market_engine import MarketEngine, CandleBuffer
 from engines.strategy_engine import StrategyEngine
 from engines.risk_engine import RiskEngine
+from services.chart_service import chart_service
 
 # Инициализация логгера
 setup_logger(
@@ -71,8 +72,14 @@ async def on_candle(symbol: str, timeframe: str, buffer: CandleBuffer):
 
     logger.info(f"🚀 СИГНАЛ ПРОШЁЛ РИСК-ФИЛЬТРЫ: {signal.direction} {signal.symbol}")
 
+    # Шаг 6 — Chart Service
+    chart_path = chart_service.generate_chart(signal, buffer)
+    if chart_path:
+        signal.explanation += "\nГрафическая разметка: ✅"
+        # Для Telegram бота нам понадобится путь к файлу, сохраним его в объекте:
+        signal.chart_path = chart_path
+
     # TODO: Шаг 8 — ML Engine
-    # TODO: Шаг 6 — Chart Service
     # TODO: Шаг 7 — Signal Formatter → Telegram
 
 
