@@ -494,7 +494,7 @@ class StrategyEngine:
 
     def __init__(self):
         self.feature_engine = FeatureEngine(
-            atr_period=config.trading.min_adx,
+            atr_period=int(config.trading.min_adx),
         )
         self.regime_classifier = RegimeClassifier()
         self.wave1_detector = Wave1Detector(

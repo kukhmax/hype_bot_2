@@ -31,6 +31,7 @@ logger = get_logger("feature_engine")
 def compute_atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
                 period: int = 14) -> np.ndarray:
     """Average True Range."""
+    period = int(period)
     if len(closes) < period + 1:
         return np.full(len(closes), np.nan)
 
@@ -58,6 +59,7 @@ def compute_atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
 
 def compute_ema(data: np.ndarray, period: int) -> np.ndarray:
     """Exponential Moving Average."""
+    period = int(period)
     ema = np.full(len(data), np.nan)
     if len(data) < period:
         return ema
@@ -72,6 +74,7 @@ def compute_ema(data: np.ndarray, period: int) -> np.ndarray:
 
 def compute_rsi(closes: np.ndarray, period: int = 14) -> np.ndarray:
     """Relative Strength Index."""
+    period = int(period)
     rsi = np.full(len(closes), np.nan)
     if len(closes) < period + 1:
         return rsi
@@ -106,6 +109,7 @@ def compute_rsi(closes: np.ndarray, period: int = 14) -> np.ndarray:
 def compute_adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
                 period: int = 14) -> np.ndarray:
     """Average Directional Index."""
+    period = int(period)
     n = len(closes)
     adx = np.full(n, np.nan)
     if n < period * 2:
@@ -271,10 +275,10 @@ class FeatureEngine:
 
     def __init__(self, atr_period: int = 14, rsi_period: int = 14,
                  adx_period: int = 14, bb_period: int = 20):
-        self.atr_period = atr_period
-        self.rsi_period = rsi_period
-        self.adx_period = adx_period
-        self.bb_period = bb_period
+        self.atr_period = int(atr_period)
+        self.rsi_period = int(rsi_period)
+        self.adx_period = int(adx_period)
+        self.bb_period = int(bb_period)
         self._call_count = 0
 
         logger.info(
