@@ -348,12 +348,13 @@ class LiveEngine:
             pos["initial_sl"] = pos["stop_loss"]
             
         r_dist = abs(pos["entry_price"] - pos["initial_sl"])
+        one_tenth_tp = (pos["take_profit"] - pos["entry_price"])/10
         
         if pos["side"] == "BUY":
             # Перевод в безубыток при достижении 1R
-            if r_dist > 0 and candle["high"] >= pos["entry_price"] + r_dist:
+            if r_dist > 0 and candle["high"] >= pos["entry_price"] + r_dist: 
                 if pos["stop_loss"] < pos["entry_price"]:
-                    pos["stop_loss"] = pos["entry_price"]
+                    pos["stop_loss"] = pos["entry_price"] + one_tenth_tp
                     logger.info(f"Trailing Stop (LONG): Стоп переведен в безубыток ({pos['stop_loss']})")
                     await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (LONG) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']}`")
                     
@@ -374,7 +375,7 @@ class LiveEngine:
             # Перевод в безубыток при достижении 1R
             if r_dist > 0 and candle["low"] <= pos["entry_price"] - r_dist:
                 if pos["stop_loss"] > pos["entry_price"]:
-                    pos["stop_loss"] = pos["entry_price"]
+                    pos["stop_loss"] = pos["entry_price"] - one_tenth_tp
                     logger.info(f"Trailing Stop (SHORT): Стоп переведен в безубыток ({pos['stop_loss']})")
                     await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']}`")
 
@@ -408,15 +409,16 @@ class LiveEngine:
             
             self.risk_manager.report_trade_result(pnl)
             # Отчёт в ML Ensemble (для адаптации Dynamic Threshold)
+            result_emoji = "🟢" if pnl > 0 else "🔴"
             if self.ml_filter is not None and self._last_ml_score is not None:
                 self.ml_filter.report_trade(self._last_ml_score, pnl)
-                result_emoji = "🟢" if pnl > 0 else "🔴"
+                
                 logger.info(
                     f"[{self.symbol}] ML Threshold обновлён: {result_emoji} PnL={pnl:.2f} score={self._last_ml_score:.3f} "
                     f"новый threshold={self.ml_filter.threshold.get_threshold():.3f}"
                 )
                 self._last_ml_score = None
-            await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [PAPER]**\nПара: `{self.symbol}`\nPnL: `{pnl:.2f} USDT`")
+            await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [PAPER]**\nПара: `{self.symbol}`\n{result_emoji}PnL: `{pnl:.2f} USDT`")
             self.current_position = None
 
     async def _execute_signal(self, signal: dict, current_price: float):
@@ -446,7 +448,7 @@ class LiveEngine:
         base_qty = size_info["base_qty"] * self.leverage
         
         if self.paper_trading:
-            logger.info(f"[PAPER TRADING] Открываем {side} на сумму {quote_qty} USDT. Entry: {current_price}, SL: {stop_loss}, TP: {take_profit}")
+            logger.info(f"🟢 [PAPER TRADING] Открываем {side} на сумму {quote_qty} USDT. Entry: {current_price}, SL: {stop_loss}, TP: {take_profit}")
             await self._notify(f"🟢 *ПОЗИЦИЯ ОТКРЫТА [PAPER]*\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`\nSL: `{stop_loss}`\nTP: `{take_profit}`")
             self.current_position = {
                 "side": side,
@@ -486,7 +488,7 @@ class LiveEngine:
                     if "orderId" in tp_res:
                          self.current_position["tp_order_id"] = tp_res["orderId"]
                          
-                logger.info(f"[LIVE TRADING] Успешно открыта позиция {side}. Результат: {result}")
+                logger.info(f"🔴 [LIVE TRADING] Успешно открыта позиция {side}. Результат: {result}")
                 await self._notify(f"🔴 *ПОЗИЦИЯ ОТКРЫТА [LIVE]*\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`")
             else:
                 logger.error(f"[LIVE TRADING] Ошибка открытия ордера: {result}")

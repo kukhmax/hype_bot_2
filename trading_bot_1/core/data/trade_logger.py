@@ -59,7 +59,7 @@ class TradeLogger:
                     f"{entry_price:.4f}",
                     f"{close_price:.4f}",
                     f"{qty:.4f}",
-                    f"{pnl:.4f}",
+                    f"{pnl:.2f}",
                     strategy_name,
                     regime,
                     reason

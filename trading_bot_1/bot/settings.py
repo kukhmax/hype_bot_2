@@ -9,10 +9,10 @@ class BotSettings:
             cls._instance = super(BotSettings, cls).__new__(cls)
             cls._instance.config: Dict[str, Any] = {
                 "mode": "paper",  # paper / live / signals
-                "risk_percent": 2.0,
+                "risk_percent": 2.5,
                 # Пары с индивидуальными настройками: {symbol: {tf, leverage}}
                 "pairs": {
-                    "SOL_USDT": {"tf": 15, "leverage": 5}
+                    "SOL_USDT": {"tf": 5, "leverage": 20}
                 },
                 # Параметры стратегий (можно менять из Telegram)
                 "strategy_params": {
