@@ -471,18 +471,13 @@ class MarketEngine:
             logger.info(f"[WS] ✅ Подключено к {self._ws_url} за {elapsed:.2f}с")
 
             # Отправляем подписку для каждого символа и TF
+            # Отправляем подписку ТОЛЬКО на базовый TF (1m)
+            # Все остальные ТФ будут агрегированы локально из 1-минутных свечей.
             for symbol in self.symbols:
                 # Базовый TF (1m)
                 sub = build_subscribe_msg(symbol, "1m", self.market_type)
                 await ws.send(json.dumps(sub))
                 logger.info(f"[WS] 📡 Подписка отправлена: {symbol} 1m kline")
-
-                # Старшие TF
-                for tf in self.timeframes:
-                    if tf != "1m":
-                        sub_tf = build_subscribe_msg(symbol, tf, self.market_type)
-                        await ws.send(json.dumps(sub_tf))
-                        logger.info(f"[WS] 📡 Подписка отправлена: {symbol} {tf} kline")
 
             # Пинг-задача
             ping_task = asyncio.create_task(self._ping_loop(ws))
@@ -526,7 +521,15 @@ class MarketEngine:
 
                     # Пушим в буфер 1m для данного символа
                     if "1m" in self.buffers[symbol]:
-                        self.buffers[symbol]["1m"].push(candle)
+                        is_new_1m_closed = self.buffers[symbol]["1m"].push(candle)
+                        if is_new_1m_closed:
+                            # Коллбэк для 1m
+                            if self.on_candle and self.buffers[symbol]["1m"].ready(50):
+                                await self.on_candle(
+                                    symbol=symbol,
+                                    timeframe="1m",
+                                    buffer=self.buffers[symbol]["1m"],
+                                )
 
                     # Агрегация в старшие TF для данного символа
                     for tf, agg in self.aggregators[symbol].items():
@@ -538,7 +541,7 @@ class MarketEngine:
                                 f"O={closed.open:.2f} H={closed.high:.2f} "
                                 f"L={closed.low:.2f} C={closed.close:.2f} V={closed.volume:.0f}"
                             )
-                            # Коллбэк при закрытии свечи
+                            # Коллбэк при закрытии свечи (например 5m, 15m, 1h)
                             if self.on_candle and self.buffers[symbol][tf].ready(50):
                                 logger.debug(f"[WS] Вызов on_candle для {symbol} {tf}")
                                 await self.on_candle(
