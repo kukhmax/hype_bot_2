@@ -196,7 +196,7 @@ class LiveEngine:
                 # Пересчитываем prepare_data для новой стратегии
                 # (например LiquiditySweep добавляет local_low/local_high)
                 self.df = self.active_strategy.prepare_data(self.df)
-                await self._notify(f"🔄 *СМЕНА РЕЖИМА*\nНовый режим: `{new_regime}`\nВключена стратегия: `{self.active_strategy.__class__.__name__}`")
+                # await self._notify(f"🔄 *СМЕНА РЕЖИМА*\nНовый режим: `{new_regime}`\nВключена стратегия: `{self.active_strategy.__class__.__name__}`")
         
         # --- Симуляция проверки Stop Loss / Take Profit ---
         if self.paper_trading and self.current_position:
@@ -246,7 +246,7 @@ class LiveEngine:
                     f"\n"
                     f"💰 *Цена:*\n"
                     f"  Close: `{close}`\n"
-                    f"  SL: `{sl:.2f}` | TP: `{tp:.2f}`\n"
+                    f"  SL: `{sl:.3f}` | TP: `{tp:.3f}`\n"
                     f"  R:R = `1:{((tp - close) / (close - sl)) if direction == 'BUY' and close != sl else ((close - tp) / (sl - close)) if direction == 'SELL' and sl != close else 0:.1f}`\n"
                     f"\n"
                     f"📈 *Индикаторы:*\n"
@@ -319,7 +319,7 @@ class LiveEngine:
                         'ema_200': ema_200, 'bb_width_percent': bb_width_pct
                     }
                     
-                    await self._notify("🤖 Запрашиваю 'Второе мнение' у ИИ Gemini...")
+                    # await self._notify("🤖 Запрашиваю 'Второе мнение' у ИИ Gemini...")
                     is_approved, reasoning = await gemini_client.verify_signal(
                         self.symbol, 
                         self.timeframe_minutes, 
@@ -459,7 +459,7 @@ class LiveEngine:
                 "leverage": self.leverage
             }
             
-            await self._notify(f"📄 *PAPER TRADING: ПОЗИЦИЯ ОТКРЫТА*\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{base_qty:.4f}` монет\nSL: `{stop_loss:.4f}` | TP: `{take_profit:.4f}`")
+            # await self._notify(f"📄 *PAPER TRADING: ПОЗИЦИЯ ОТКРЫТА*\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{base_qty:.4f}` монет\nSL: `{stop_loss:.4f}` | TP: `{take_profit:.4f}`")
         else:
             # REAL TRADING (Отправка рыночного ордера)
             # 1. Кидаем Market Order на вход
