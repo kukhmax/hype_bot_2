@@ -22,7 +22,7 @@ class TrendPullbackStrategy(BaseStrategy):
     1. SL: 1.5 * ATR (от Low свечи входа)
     2. TP: Фиксированный 2 R (Risk/Reward 1:2)
     """
-    def __init__(self, rsi_threshold: int = 40, sl_atr_mult: float = 1.5, rr_ratio: float = 2.0):
+    def __init__(self, rsi_threshold: int = 40, sl_atr_mult: float = 1.5, rr_ratio: float = 2.5):
         super().__init__("Trend_Pullback_Strategy")
         self.rsi_threshold = rsi_threshold
         self.sl_atr_mult = sl_atr_mult

@@ -27,7 +27,7 @@ class BreakoutStrategy(BaseStrategy):
     1. SL: 1 * ATR.
     2. TP: 1.5 R (быстрый скальп-профит).
     """
-    def __init__(self, bb_width_threshold: float = 0.05, adx_threshold: float = 20.0, sl_atr_mult: float = 1.0, rr_ratio: float = 1.5):
+    def __init__(self, bb_width_threshold: float = 0.05, adx_threshold: float = 20.0, sl_atr_mult: float = 1.5, rr_ratio: float = 2.5):
         super().__init__("Volatility_Breakout")
         self.bb_width_threshold = bb_width_threshold
         self.adx_threshold = adx_threshold

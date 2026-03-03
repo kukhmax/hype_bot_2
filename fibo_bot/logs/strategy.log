@@ -1,0 +1,21 @@
+2026-03-01 19:32:16 | INFO     | fibo_bot.strategy_engine  | [Wave1Detector] Инициализирован: min_impulse=2.5 ATR, lookback=50
+2026-03-01 19:32:16 | INFO     | fibo_bot.strategy_engine  | [StrategyEngine] ✅ Инициализирован | min_impulse=2.5 ATR | Fib zone: 0.5–0.618 | Extension target: 1.618
+2026-03-01 19:32:16 | INFO     | fibo_bot.risk_engine      | [RiskEngine] ✅ Инициализирован
+2026-03-01 19:34:33 | INFO     | fibo_bot.strategy_engine  | [Wave1Detector] Инициализирован: min_impulse=2.5 ATR, lookback=50
+2026-03-01 19:34:33 | INFO     | fibo_bot.strategy_engine  | [StrategyEngine] ✅ Инициализирован | min_impulse=2.5 ATR | Fib zone: 0.5–0.618 | Extension target: 1.618
+2026-03-01 19:34:33 | INFO     | fibo_bot.risk_engine      | [RiskEngine] ✅ Инициализирован
+2026-03-01 19:34:49 | INFO     | fibo_bot.strategy_engine  | [Wave1Detector] Инициализирован: min_impulse=2.5 ATR, lookback=50
+2026-03-01 19:34:49 | INFO     | fibo_bot.strategy_engine  | [StrategyEngine] ✅ Инициализирован | min_impulse=2.5 ATR | Fib zone: 0.5–0.618 | Extension target: 1.618
+2026-03-01 19:34:49 | INFO     | fibo_bot.risk_engine      | [RiskEngine] ✅ Инициализирован
+2026-03-01 19:52:54 | INFO     | fibo_bot.strategy_engine  | [Wave1Detector] Инициализирован: min_impulse=2.5 ATR, lookback=50
+2026-03-01 19:52:54 | INFO     | fibo_bot.strategy_engine  | [StrategyEngine] ✅ Инициализирован | min_impulse=2.5 ATR | Fib zone: 0.5–0.618 | Extension target: 1.618
+2026-03-01 19:52:54 | INFO     | fibo_bot.risk_engine      | [RiskEngine] ✅ Инициализирован
+2026-03-01 21:52:37 | INFO     | fibo_bot.strategy_engine  | [Wave1Detector] Инициализирован: min_impulse=2.5 ATR, lookback=50
+2026-03-01 21:52:37 | INFO     | fibo_bot.strategy_engine  | [StrategyEngine] ✅ Инициализирован | min_impulse=2.5 ATR | Fib zone: 0.5–0.618 | Extension target: 1.618
+2026-03-01 21:52:37 | INFO     | fibo_bot.risk_engine      | [RiskEngine] ✅ Инициализирован
+2026-03-01 22:06:59 | INFO     | fibo_bot.strategy_engine  | [Wave1Detector] Инициализирован: min_impulse=2.5 ATR, lookback=50
+2026-03-01 22:06:59 | INFO     | fibo_bot.strategy_engine  | [StrategyEngine] ✅ Инициализирован | min_impulse=2.5 ATR | Fib zone: 0.5–0.618 | Extension target: 1.618
+2026-03-01 22:06:59 | INFO     | fibo_bot.risk_engine      | [RiskEngine] ✅ Инициализирован
+2026-03-01 22:19:09 | INFO     | fibo_bot.strategy_engine  | [Wave1Detector] Инициализирован: min_impulse=2.5 ATR, lookback=50
+2026-03-01 22:19:09 | INFO     | fibo_bot.strategy_engine  | [StrategyEngine] ✅ Инициализирован | min_impulse=2.5 ATR | Fib zone: 0.5–0.618 | Extension target: 1.618
+2026-03-01 22:19:09 | INFO     | fibo_bot.risk_engine      | [RiskEngine] ✅ Инициализирован

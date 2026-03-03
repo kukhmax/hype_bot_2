@@ -29,7 +29,7 @@ class LiquiditySweepStrategy(BaseStrategy):
     1. SL: чуть за хвостом свечи (Low - 1 ATR для лонга).
     2. TP: 2 R.
     """
-    def __init__(self, lookback_period: int = 15, rsi_ob_os: int = 40, sl_atr_mult: float = 1.0, rr_ratio: float = 2.0):
+    def __init__(self, lookback_period: int = 15, rsi_ob_os: int = 40, sl_atr_mult: float = 1.5, rr_ratio: float = 2.5):
         super().__init__("Liquidity_Sweep")
         self.lookback = lookback_period
         self.rsi_ob_os = rsi_ob_os

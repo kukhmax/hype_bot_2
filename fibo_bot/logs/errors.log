@@ -1,0 +1,71 @@
+2026-03-01 19:32:16 | ERROR    | fibo_bot.db_manager       | [DB] Ошибка при очистке старых данных: invalid input for query argument $1: '60 days' ('str' object has no attribute 'days')
+Traceback (most recent call last):
+  File "asyncpg/protocol/prepared_stmt.pyx", line 175, in asyncpg.protocol.protocol.PreparedStatementState._encode_bind_msg
+  File "asyncpg/protocol/codecs/base.pyx", line 227, in asyncpg.protocol.protocol.Codec.encode
+  File "asyncpg/protocol/codecs/base.pyx", line 129, in asyncpg.protocol.protocol.Codec.encode_scalar
+  File "asyncpg/pgproto/./codecs/datetime.pyx", line 357, in asyncpg.pgproto.pgproto.interval_encode
+AttributeError: 'str' object has no attribute 'days'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/app/utils/db_manager.py", line 239, in delete_old_records
+    res_del = await conn.execute(
+              ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/asyncpg/connection.py", line 353, in execute
+    _, status, _ = await self._execute(
+                   ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/asyncpg/connection.py", line 1794, in _execute
+    result, _ = await self.__execute(
+                ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/asyncpg/connection.py", line 1892, in __execute
+    result, stmt = await self._do_execute(
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/asyncpg/connection.py", line 1945, in _do_execute
+    result = await executor(stmt, None)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "asyncpg/protocol/protocol.pyx", line 186, in bind_execute
+  File "asyncpg/protocol/prepared_stmt.pyx", line 204, in asyncpg.protocol.protocol.PreparedStatementState._encode_bind_msg
+asyncpg.exceptions.DataError: invalid input for query argument $1: '60 days' ('str' object has no attribute 'days')
+2026-03-01 19:32:21 | ERROR    | fibo_bot.market_engine    | [REST] MEXC futures: пустой ответ data. Полный ответ: {'success': False, 'code': 1001, 'message': 'Contract does not exist'}
+2026-03-01 19:32:21 | ERROR    | fibo_bot.market_engine    | [REST] MEXC futures: пустой ответ data. Полный ответ: {'success': False, 'code': 1001, 'message': 'Contract does not exist'}
+2026-03-01 19:32:22 | ERROR    | fibo_bot.market_engine    | [REST] MEXC futures: пустой ответ data. Полный ответ: {'success': False, 'code': 1001, 'message': 'Contract does not exist'}
+2026-03-01 19:32:22 | ERROR    | fibo_bot.market_engine    | [REST] MEXC futures: пустой ответ data. Полный ответ: {'success': False, 'code': 1001, 'message': 'Contract does not exist'}
+2026-03-01 19:34:33 | ERROR    | fibo_bot.db_manager       | [DB] Ошибка при очистке старых данных: invalid input for query argument $1: '60 days' ('str' object has no attribute 'days')
+Traceback (most recent call last):
+  File "asyncpg/protocol/prepared_stmt.pyx", line 175, in asyncpg.protocol.protocol.PreparedStatementState._encode_bind_msg
+  File "asyncpg/protocol/codecs/base.pyx", line 227, in asyncpg.protocol.protocol.Codec.encode
+  File "asyncpg/protocol/codecs/base.pyx", line 129, in asyncpg.protocol.protocol.Codec.encode_scalar
+  File "asyncpg/pgproto/./codecs/datetime.pyx", line 357, in asyncpg.pgproto.pgproto.interval_encode
+AttributeError: 'str' object has no attribute 'days'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/app/utils/db_manager.py", line 239, in delete_old_records
+    res_del = await conn.execute(
+              ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/asyncpg/connection.py", line 353, in execute
+    _, status, _ = await self._execute(
+                   ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/asyncpg/connection.py", line 1794, in _execute
+    result, _ = await self.__execute(
+                ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/asyncpg/connection.py", line 1892, in __execute
+    result, stmt = await self._do_execute(
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/asyncpg/connection.py", line 1945, in _do_execute
+    result = await executor(stmt, None)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "asyncpg/protocol/protocol.pyx", line 186, in bind_execute
+  File "asyncpg/protocol/prepared_stmt.pyx", line 204, in asyncpg.protocol.protocol.PreparedStatementState._encode_bind_msg
+asyncpg.exceptions.DataError: invalid input for query argument $1: '60 days' ('str' object has no attribute 'days')
+2026-03-01 21:52:37 | ERROR    | fibo_bot.telegram_bot     | [Telegram] Ошибка поллинга: HTTP Client says - ClientConnectorError: Cannot connect to host api.telegram.org:443 ssl:default [Temporary failure in name resolution]
+2026-03-01 21:52:37 | ERROR    | fibo_bot.market_engine    | [REST] Сетевая ошибка при загрузке свечей SOL_USDT 1m: Cannot connect to host contract.mexc.com:443 ssl:default [Temporary failure in name resolution]
+2026-03-01 21:52:37 | ERROR    | fibo_bot.market_engine    | [REST] Сетевая ошибка при загрузке свечей SOL_USDT 5m: Cannot connect to host contract.mexc.com:443 ssl:default [Temporary failure in name resolution]
+2026-03-01 21:52:37 | ERROR    | fibo_bot.market_engine    | [REST] Сетевая ошибка при загрузке свечей SOL_USDT 15m: Cannot connect to host contract.mexc.com:443 ssl:default [Temporary failure in name resolution]
+2026-03-01 21:52:37 | ERROR    | fibo_bot.market_engine    | [REST] Сетевая ошибка при загрузке свечей SOL_USDT 1h: Cannot connect to host contract.mexc.com:443 ssl:default [Temporary failure in name resolution]
+2026-03-01 21:52:37 | ERROR    | fibo_bot.market_engine    | [REST] Сетевая ошибка при загрузке свечей HYPE_USDT 1m: Cannot connect to host contract.mexc.com:443 ssl:default [Temporary failure in name resolution]
+2026-03-01 21:52:37 | ERROR    | fibo_bot.market_engine    | [REST] Сетевая ошибка при загрузке свечей HYPE_USDT 5m: Cannot connect to host contract.mexc.com:443 ssl:default [Temporary failure in name resolution]
+2026-03-01 21:52:37 | ERROR    | fibo_bot.market_engine    | [REST] Сетевая ошибка при загрузке свечей HYPE_USDT 15m: Cannot connect to host contract.mexc.com:443 ssl:default [Temporary failure in name resolution]
+2026-03-01 21:52:37 | ERROR    | fibo_bot.market_engine    | [REST] Сетевая ошибка при загрузке свечей HYPE_USDT 1h: Cannot connect to host contract.mexc.com:443 ssl:default [Temporary failure in name resolution]

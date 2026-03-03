@@ -501,4 +501,103 @@ trading_bot_1/
 ```
 
 ---
+
+## 🎯 Формирование Stop Loss и Take Profit
+
+Логика SL/TP полностью сосредоточена внутри каждой стратегии. Все три стратегии используют единую базовую концепцию: **ATR (Average True Range)** как универсальную единицу риска, адаптированную к текущей волатильности рынка.
+
+### Общий принцип: ATR как единица риска
+
+```
+sl_distance = ATR × sl_atr_mult        # абсолютное расстояние до стопа
+stop_loss   = точка_входа ± sl_distance
+take_profit = точка_входа ± (sl_distance × rr_ratio)
+```
+
+- `ATR` — средний истинный диапазон свечи (автоматически отражает текущую волатильность)
+- `sl_atr_mult` — сколько ATR отступаем до стопа (по умолчанию **1.5**)
+- `rr_ratio` — соотношение Risk:Reward (по умолчанию **2.0**, т.е. TP = 2 × риск)
+
+Оба параметра настраиваются через Telegram, либо передаются в `LiveEngine` через `strategy_params`.
+
+---
+
+### Стратегия 1: Trend Pullback (режимы `strong_trend`, `weak_trend`)
+
+**SL отсчитывается от цены Close** закрывшейся свечи-входа:
+
+| Направление | Stop Loss | Take Profit |
+|---|---|---|
+| **BUY** | `close − ATR × sl_atr_mult` | `close + ATR × sl_atr_mult × rr_ratio` |
+| **SELL** | `close + ATR × sl_atr_mult` | `close − ATR × sl_atr_mult × rr_ratio` |
+
+```python
+sl_distance = candle["atr"] * self.sl_atr_mult
+stop_loss   = candle["close"] - sl_distance           # BUY: стоп под Close
+take_profit = candle["close"] + sl_distance * self.rr_ratio
+```
+
+Параметры по режимам: `strong_trend` → `sl=1.5, rr=2.0`; `weak_trend` → `sl=1.5, rr=1.5`.
+
+---
+
+### Стратегия 2: Volatility Breakout (режим `range`)
+
+Та же формула, что у TrendPullback, но с **уменьшенными множителями** — скальп-подход (короткий стоп, быстрый профит):
+
+| Направление | Stop Loss | Take Profit |
+|---|---|---|
+| **BUY** | `close − ATR × 1.0` | `close + ATR × 1.0 × 1.5` |
+| **SELL** | `close + ATR × 1.0` | `close − ATR × 1.0 × 1.5` |
+
+---
+
+### Стратегия 3: Liquidity Sweep Reversal (режим `high_volatility`)
+
+**Ключевое отличие:** SL ставится **за экстремум хвоста свечи** (Low/High), а не от Close. TP рассчитывается от реального расстояния до стопа:
+
+| Направление | Stop Loss | Take Profit |
+|---|---|---|
+| **BUY** | `low − ATR × 1.0` | `close + (close − stop_loss) × rr_ratio` |
+| **SELL** | `high + ATR × 1.0` | `close − (stop_loss − close) × rr_ratio` |
+
+```python
+# BUY (после ложного пробоя снизу)
+stop_loss   = candle["low"] - sl_distance              # за хвостом свечи
+take_profit = candle["close"] + (candle["close"] - stop_loss) * self.rr_ratio
+
+# SELL (после ложного пробоя сверху)
+stop_loss   = candle["high"] + sl_distance
+take_profit = candle["close"] - (stop_loss - candle["close"]) * self.rr_ratio
+```
+
+Такой подход даёт **минимально возможный стоп** при максимальной логичности размещения (за структурой).
+
+---
+
+### Сводная таблица параметров по умолчанию
+
+| Стратегия | Режим рынка | SL от | `sl_atr_mult` | `rr_ratio` |
+|---|---|---|:---:|:---:|
+| `TrendPullback` | `strong_trend` | Close | 1.5 | 2.0 |
+| `TrendPullback` | `weak_trend` | Close | 1.5 | 1.5 |
+| `LiquiditySweep` | `high_volatility` | Low / High свечи | 1.0 | 2.0 |
+| `Breakout` | `range` | Close | 1.0 | 1.5 |
+
+---
+
+### 🛡 Trailing Stop — автоматический перевод в безубыток
+
+После открытия бумажной (paper) позиции `LiveEngine` отслеживает каждую новую свечу и переносит стоп в безубыток, как только цена проходит 1R в нужную сторону:
+
+```
+r_dist = |entry_price − initial_sl|   # = 1 риск (R)
+
+BUY:  если candle.high  >= entry_price + r_dist → стоп переносится выше entry
+SELL: если candle.low   <= entry_price − r_dist → стоп переносится ниже entry
+```
+
+После переноса в Telegram уходит уведомление `🛡 ATR TRAILING — Сделка переведена в БЕЗУБЫТОК`.
+
+---
 *Powered by `asyncio`, `pandas`, `scikit-learn` & MEXC API. Trade at your own risk.*
