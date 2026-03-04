@@ -449,7 +449,7 @@ class LiveEngine:
         
         if self.paper_trading:
             logger.info(f"🟢 [PAPER TRADING] Открываем {side} на сумму {quote_qty} USDT. Entry: {current_price}, SL: {stop_loss}, TP: {take_profit}")
-            await self._notify(f"🟢 *ПОЗИЦИЯ ОТКРЫТА [PAPER]*\nПара: `{self.symbol}`\nНаправление: `{'🟢LONG🟢' if side == 'BUY' else '🔴SHORT🔴'}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`\nSL: `{stop_loss}`\nTP: `{take_profit}`")
+            await self._notify(f"🟢 *ПОЗИЦИЯ ОТКРЫТА [PAPER]*\nПара: `{self.symbol}`\nНаправление: `{'🟢LONG🟢' if side == 'BUY' else '🔴SHORT🔴'}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`\nSL: `{stop_loss:.4f}`\nTP: `{take_profit:.4f}`")
             self.current_position = {
                 "side": side,
                 "entry_price": current_price,
