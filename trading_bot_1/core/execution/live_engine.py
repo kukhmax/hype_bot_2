@@ -449,7 +449,7 @@ class LiveEngine:
         
         if self.paper_trading:
             logger.info(f"🟢 [PAPER TRADING] Открываем {side} на сумму {quote_qty} USDT. Entry: {current_price}, SL: {stop_loss}, TP: {take_profit}")
-            await self._notify(f"🟢 *ПОЗИЦИЯ ОТКРЫТА [PAPER]*\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`\nSL: `{stop_loss}`\nTP: `{take_profit}`")
+            await self._notify(f"🟢 *ПОЗИЦИЯ ОТКРЫТА [PAPER]*\nПара: `{self.symbol}`\nНаправление: `{'🟢LONG🟢' if side == 'BUY' else '🔴SHORT🔴'}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`\nSL: `{stop_loss}`\nTP: `{take_profit}`")
             self.current_position = {
                 "side": side,
                 "entry_price": current_price,
@@ -489,7 +489,7 @@ class LiveEngine:
                          self.current_position["tp_order_id"] = tp_res["orderId"]
                          
                 logger.info(f"🔴 [LIVE TRADING] Успешно открыта позиция {side}. Результат: {result}")
-                await self._notify(f"🔴 *ПОЗИЦИЯ ОТКРЫТА [LIVE]*\nПара: `{self.symbol}`\nНаправление: `{side}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`")
+                await self._notify(f"📈 *ПОЗИЦИЯ ОТКРЫТА [LIVE]*\nПара: `{self.symbol}`\nНаправление: `{'🟢LONG🟢' if side == 'BUY' else '🔴SHORT🔴'}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`")
             else:
                 logger.error(f"[LIVE TRADING] Ошибка открытия ордера: {result}")
 
