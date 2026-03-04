@@ -62,30 +62,44 @@ class RiskManager:
 
     def calculate_position_size(self, current_balance: float, entry_price: float, stop_loss: float) -> Dict[str, float]:
         """
-        Расчет размера позиции.
-        Вариант А: Фиксированный процент от депозита (просто сайз).
-        Вариант Б: Риск на сделку (учитывая SL).
-        Мы выберем Вариант А (сайз в 2% от баланса) для простоты скальпинга, 
-        но можно переключить на полноценный расчет по SL.
+        Расчет размера позиции на основе расстояния до SL.
+        Позиция рассчитывается так, чтобы убыток при срабатывании SL
+        всегда составлял risk_per_trade_percent % от баланса.
+
+        Формула:
+            risk_amount = balance * (risk_pct / 100)
+            sl_distance_pct = |entry - sl| / entry
+            quote_qty = risk_amount / sl_distance_pct
         """
         
         if not self.check_daily_limit():
             return {"quote_qty": 0.0, "base_qty": 0.0, "reason": "daily_limit_reached"}
 
-        # Рассчитываем размер порции в USDT
-        # Например, 2% от 1000$ = 20 USDT на сделку (без плеча)
-        quote_qty = current_balance * (self.risk_per_trade_percent / 100.0)
-        
+        # Сумма риска в USDT (сколько мы готовы потерять)
+        risk_amount = current_balance * (self.risk_per_trade_percent / 100.0)
+
+        # Расстояние до SL в процентах от цены входа
+        sl_distance_pct = abs(entry_price - stop_loss) / entry_price
+
+        if sl_distance_pct == 0:
+            logger.error("Риск-менеджмент: SL distance = 0, невозможно рассчитать позицию!")
+            return {"quote_qty": 0.0, "base_qty": 0.0, "reason": "invalid_sl"}
+
+        # Размер позиции в USDT, при котором убыток на SL = risk_amount
+        quote_qty = risk_amount / sl_distance_pct
+
+        logger.info(f"RiskManager: risk_amount={risk_amount:.2f} USDT, "
+                     f"SL дист.={sl_distance_pct*100:.2f}%, позиция={quote_qty:.2f} USDT")
+
         # Минимальный размер ордера на MEXC обычно 5 USDT (зависит от пары)
         if quote_qty < 5.0:
             logger.warning(f"Риск-менеджмент: Рассчитанный объем ({quote_qty:.2f} USDT) меньше минимального (5 USDT).")
-            # Для тестов/MVP будем входить на 5 баксов, если депо мелкий.
             quote_qty = 5.0
             
-        # Если баланса не хватает даже на минималку
+        # Если размер позиции превышает баланс — ограничиваем балансом
         if quote_qty > current_balance:
-            logger.error("Риск-менеджмент: Недостаточно средств на балансе!")
-            return {"quote_qty": 0.0, "base_qty": 0.0, "reason": "insufficient_funds"}
+            logger.warning(f"Риск-менеджмент: Позиция ({quote_qty:.2f} USDT) превышает баланс ({current_balance:.2f}). Ограничиваем балансом.")
+            quote_qty = current_balance
 
         # Базовый объем актива (например, сколько это SOL)
         base_qty = quote_qty / entry_price
@@ -93,7 +107,7 @@ class RiskManager:
         logger.debug(f"RiskManager Одобрил: Вход {entry_price}, Объем {quote_qty:.2f} USDT ({base_qty:.4f} crypto)")
         
         return {
-            "quote_qty": round(quote_qty, 2), # Округляем до 2 знаков для USDT
-            "base_qty": round(base_qty, 4),   # Округляем до 4 знаков для крипты
+            "quote_qty": round(quote_qty, 2),
+            "base_qty": round(base_qty, 4),
             "reason": "ok"
         }
