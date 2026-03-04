@@ -237,7 +237,7 @@ class LiveEngine:
                 # 📊 ПОЛНЫЙ СЕТАП — отправляется ВСЕГДА
                 # ═══════════════════════════════════════════
                 setup_msg = (
-                    f"{'🟢' if direction == 'BUY' else '🔴'} *СИГНАЛ {direction}* `{self.symbol}`\n"
+                    f"{'🟢' if direction == 'BUY' else '🔴'} *СИГНАЛ `{self.symbol}`  {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}*\n"
                     f"\n"
                     f"📊 *Сетап:*\n"
                     f"  Стратегия: `{strategy_name}`\n"
@@ -272,13 +272,13 @@ class LiveEngine:
                     
                     if ml_details.get("fallback"):
                         ml_text = (
-                            f"🧠 *ML АНСАМБЛЬ {ml_verdict}* `{self.symbol}` {direction}\n\n"
+                            f"🧠 *ML АНСАМБЛЬ {ml_verdict}*  {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}    `{self.symbol}`\n\n"
                             f"⚠️ *Обучение не завершено*\n"
                             f"Сигнал одобрен автоматически (Fallback-режим)."
                         )
                     else:
                         ml_text = (
-                            f"🧠 *ML АНСАМБЛЬ {ml_verdict}* `{self.symbol}` {direction}\n\n"
+                            f"🧠 *ML АНСАМБЛЬ {ml_verdict}*  {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}    `{self.symbol}`\n\n"
                             f"  Momentum: `{ml_details.get('momentum_score', 0):.3f}`\n"
                             f"  Volatility: `{ml_details.get('volatility_score', 0):.3f}`\n"
                             f"  Structure: `{ml_details.get('structure_score', 0):.3f}`\n\n"
@@ -328,11 +328,11 @@ class LiveEngine:
                     )
                     
                     if is_approved:
-                        await self._notify(f"✅ *ИИ ОДОБРИЛ* `{self.symbol}` {direction}\n`{reasoning}`")
+                        await self._notify(f"✅ *ИИ ОДОБРИЛ* `{self.symbol}` {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}\n`{reasoning}`")
                         await self._execute_signal(signal_data, close)
                     else:
-                        await self._notify(f"❌ *ИИ ОТКЛОНИЛ* `{self.symbol}` {direction}\n`{reasoning}`")
-                        logger.info(f"[{self.symbol}] Сделка отклонена ИИ. Причина: {reasoning}")
+                        await self._notify(f"❌ *ИИ ОТКЛОНИЛ* `{self.symbol}` {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}\n`{reasoning}`")
+                        logger.info(f"[{self.symbol}] ❌❌❌ Сделка отклонена ИИ. Причина: {reasoning}")
 
     async def _check_paper_stops(self, candle: dict):
         """Только для Paper Trading: закрытие сделки если цена коснулась SL/TP."""
