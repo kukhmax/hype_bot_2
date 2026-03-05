@@ -141,14 +141,23 @@ async def cmd_status(message: Message, state: FSMContext):
                 f"`{s['leverage']}x` | "
                 f"Поз: `{pos_text}`"
             )
-        lines.append(f"\n⚙️ Режим: `{bot_settings['mode'].upper()}` | Риск: `{bot_settings['risk_percent']}%`")
+        gemini_icon = "✅" if bot_settings.get('enable_gemini', True) else "❌"
+        lines.append(
+            f"\n⚙️ Режим: `{bot_settings['mode'].upper()}` | "
+            f"Риск: `{bot_settings['risk_percent']}%` | "
+            f"Просадка: `{bot_settings.get('max_daily_loss_percent', 5.0)}%` | "
+            f"Gemini: {gemini_icon}"
+        )
         text = "\n".join(lines)
     else:
+        gemini_icon = "✅" if bot_settings.get('enable_gemini', True) else "❌"
         text = (
             "📊 **ТЕКУЩИЙ СТАТУС**\n\n"
             f"Движок: `🛑 Остановлен`\n"
             f"Режим: `{bot_settings['mode'].upper()}`\n"
-            f"Риск: `{bot_settings['risk_percent']}%`\n\n"
+            f"Риск: `{bot_settings['risk_percent']}%`\n"
+            f"Макс. просадка: `{bot_settings.get('max_daily_loss_percent', 5.0)}%`\n"
+            f"Gemini AI: {gemini_icon}\n\n"
             f"**Пары:**\n{_pairs_summary()}"
         )
     # Отправляем сообщение со статусом и кнопкой Скрыть
@@ -196,11 +205,70 @@ async def process_risk(message: Message, state: FSMContext):
     bot_settings["risk_percent"] = risk
     logger.info(f"Пользователь {message.from_user.id} установил риск: {risk}%")
     
-    await message.answer(
-        f"✅ Настройки сохранены!\n\n"
+    current_daily = bot_settings.get("max_daily_loss_percent", 5.0)
+    msg = await message.answer(
+        f"⏳ Риск: `{risk}%`\n\n"
+        f"Введите максимальную **дневную просадку** в % (текущая: `{current_daily}%`):\n"
+        f"_(например `5.0` — бот остановит торговлю при убытке 5% от баланса за день)_"
+    )
+    await state.set_state(SettingsFSM.waiting_for_daily_loss)
+    await save_prompt_id(msg, state)
+
+
+@router.message(SettingsFSM.waiting_for_daily_loss)
+async def process_daily_loss(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
+    try:
+        daily_loss = float(message.text.strip())
+        if daily_loss <= 0 or daily_loss > 100:
+            raise ValueError
+    except ValueError:
+        msg = await message.answer("Некорректное значение. Введите число от 0.1 до 100 (например, `5.0`).")
+        await save_prompt_id(msg, state)
+        return
+
+    bot_settings["max_daily_loss_percent"] = daily_loss
+    logger.info(f"Пользователь {message.from_user.id} установил дневную просадку: {daily_loss}%")
+    
+    current_gemini = bot_settings.get("enable_gemini", True)
+    gemini_status = "✅ ВКЛ" if current_gemini else "❌ ВЫКЛ"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Включить", callback_data="gemini_on"),
+            InlineKeyboardButton(text="❌ Выключить", callback_data="gemini_off")
+        ]
+    ])
+    msg = await message.answer(
+        f"⏳ Просадка: `{daily_loss}%`\n\n"
+        f"🤖 **Подтверждение Gemini AI** (сейчас: {gemini_status})\n"
+        f"ИИ анализирует каждый сигнал перед исполнением.\n\n"
+        f"Включить подтверждение Gemini?",
+        reply_markup=kb
+    )
+    await state.set_state(SettingsFSM.waiting_for_gemini)
+    await save_prompt_id(msg, state)
+
+
+@router.callback_query(SettingsFSM.waiting_for_gemini, F.data.startswith("gemini_"))
+async def process_gemini_toggle(callback: CallbackQuery, state: FSMContext):
+    await delete_previous_prompt(callback.message, state)
+    
+    enable = callback.data == "gemini_on"
+    bot_settings["enable_gemini"] = enable
+    gemini_text = "✅ ВКЛ" if enable else "❌ ВЫКЛ"
+    logger.info(f"Пользователь {callback.from_user.id} {'включил' if enable else 'выключил'} Gemini AI")
+    
+    await callback.message.answer(
+        f"✅ **Настройки сохранены!**\n\n"
         f"Режим: `{bot_settings['mode'].upper()}`\n"
-        f"Риск: `{risk}%`\n\n"
-        f"**Пары:**\n{_pairs_summary()}",
+        f"Риск на сделку: `{bot_settings['risk_percent']}%`\n"
+        f"Макс. дневная просадка: `{bot_settings['max_daily_loss_percent']}%`\n"
+        f"Gemini AI: {gemini_text}\n\n"
+        f"**Пары:**\n{_pairs_summary()}\n\n"
+        f"⚠️ Изменения применятся при следующем **🚀 ЗАПУСК БОТА**.",
         reply_markup=get_delete_kb()
     )
     await state.clear()
@@ -391,6 +459,9 @@ async def cmd_start_bot(message: Message, state: FSMContext):
     _engine_manager = EngineManager()
 
     success_count = 0
+    # Собираем параметры стратегий + risk_percent для передачи в движок
+    strat_params = dict(bot_settings.get("strategy_params", {}))
+    strat_params["risk_percent"] = bot_settings.get("risk_percent", 2.5)
     for symbol, cfg in pairs.items():
         ok = await _engine_manager.add_pair(
             symbol=symbol,
@@ -398,7 +469,9 @@ async def cmd_start_bot(message: Message, state: FSMContext):
             leverage=cfg["leverage"],
             paper_trading=paper_trading,
             tg_callback=send_tg_notification,
-            strategy_params=bot_settings.get("strategy_params", {})
+            strategy_params=strat_params,
+            max_daily_loss_percent=bot_settings.get("max_daily_loss_percent", 5.0),
+            enable_gemini=bot_settings.get("enable_gemini", True)
         )
         if ok:
             success_count += 1

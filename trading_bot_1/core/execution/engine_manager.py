@@ -52,7 +52,9 @@ class EngineManager:
         leverage: int = 1,
         paper_trading: bool = True,
         tg_callback: Optional[Callable[[str], Awaitable[None]]] = None,
-        strategy_params: dict = None
+        strategy_params: dict = None,
+        max_daily_loss_percent: float = 5.0,
+        enable_gemini: bool = True
     ) -> bool:
         """Добавляет пару и запускает для неё движок."""
         if symbol in self.engines:
@@ -69,7 +71,9 @@ class EngineManager:
             leverage=leverage,
             tg_callback=tg_callback,
             ws_client=ws_client,
-            strategy_params=strategy_params
+            strategy_params=strategy_params,
+            max_daily_loss_percent=max_daily_loss_percent,
+            enable_gemini=enable_gemini
         )
         
         is_ready = await engine.initialize()

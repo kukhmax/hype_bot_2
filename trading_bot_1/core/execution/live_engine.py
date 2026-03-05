@@ -33,7 +33,9 @@ class LiveEngine:
                  leverage: int = 1,
                  tg_callback: 'Callable[[str], Awaitable[None]]' = None,
                  ws_client: 'MEXCWebSocketClient' = None,
-                 strategy_params: dict = None):
+                 strategy_params: dict = None,
+                 max_daily_loss_percent: float = 5.0,
+                 enable_gemini: bool = True):
         
         self.symbol = symbol
         self.timeframe_minutes = timeframe_minutes
@@ -63,7 +65,11 @@ class LiveEngine:
         
         # Компоненты системы
         self.executor = MEXCExecutor()
-        self.risk_manager = RiskManager()
+        self.risk_manager = RiskManager(
+            risk_per_trade_percent=sp.get("risk_percent", 2.0),
+            max_daily_loss_percent=max_daily_loss_percent
+        )
+        self.enable_gemini = enable_gemini
         # WS клиент — общий, передаётся из EngineManager
         self.ws_client = ws_client
         self.candle_builder = CandleBuilder(symbol, timeframe_minutes)
@@ -301,7 +307,14 @@ class LiveEngine:
                 # ═══════════════════════════════════════════
                 # 🤖 AI VERIFICATION (Gemini)
                 # ═══════════════════════════════════════════
-                if self.timeframe_minutes < settings.AI_VERIFY_MIN_TIMEFRAME:
+                if not self.enable_gemini:
+                    logger.info(f"[{self.symbol}] Gemini AI ВЫКЛЮЧЕН в настройках. Сигнал → исполнение.")
+                    await self._notify(
+                        f"⚡ *Gemini AI ВЫКЛЮЧЕН*\n"
+                        f"Сигнал `{direction}` направлен напрямую в исполнение."
+                    )
+                    await self._execute_signal(signal_data, close)
+                elif self.timeframe_minutes < settings.AI_VERIFY_MIN_TIMEFRAME:
                     logger.info(
                         f"[{self.symbol}] AI верификация ПРОПУЩЕНА "
                         f"(TF={self.timeframe_minutes}m < порог {settings.AI_VERIFY_MIN_TIMEFRAME}m)"

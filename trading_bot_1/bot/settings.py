@@ -10,6 +10,8 @@ class BotSettings:
             cls._instance.config: Dict[str, Any] = {
                 "mode": "paper",  # paper / live / signals
                 "risk_percent": 2.5,
+                "max_daily_loss_percent": 5.0,  # Макс. дневная просадка %
+                "enable_gemini": True,           # Подтверждение ИИ Gemini
                 # Пары с индивидуальными настройками: {symbol: {tf, leverage}}
                 "pairs": {
                     "SOL_USDT": {"tf": 5, "leverage": 20}
