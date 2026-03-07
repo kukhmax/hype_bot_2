@@ -153,6 +153,14 @@ class EngineManager:
                     if position_value > 0:
                         pnl_percent = (pos_pnl / position_value) * 100 * engine.leverage
 
+            # Расчет текущей дневной просадки
+            current_drawdown_percent = 0.0
+            if engine.risk_manager.is_session_started and engine.risk_manager.session_start_balance > 0:
+                # Если PnL отрицательный, считаем процент просадки от стартового баланса
+                if engine.risk_manager.current_session_pnl < 0:
+                    loss = abs(engine.risk_manager.current_session_pnl)
+                    current_drawdown_percent = (loss / engine.risk_manager.session_start_balance) * 100
+
             statuses.append({
                 "symbol": symbol,
                 "tf": engine.timeframe_minutes,
@@ -163,6 +171,7 @@ class EngineManager:
                 "position_side": engine.current_position["side"] if engine.current_position else None,
                 "pnl": pos_pnl,
                 "pnl_percent": pnl_percent,
+                "current_drawdown_percent": current_drawdown_percent,
                 "running": True  # Если в engines — значит работает
             })
         return statuses

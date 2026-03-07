@@ -141,22 +141,39 @@ async def cmd_status(message: Message, state: FSMContext):
                 f"`{s['leverage']}x` | "
                 f"Поз: `{pos_text}`"
             )
+        # Вычисляем общую просадку по всем движкам (берем максимальную из всех, так как баланс общий
+        # но PnL у каждого свой). А точнее: общий PnL = сумма PnL всех движков.
+        # Но у нас в statuses нет стартового баланса.
+        # Поскольку у нас нет единого RiskManager на весь бот, мы можем вывести 
+        # среднее/максимальное или просто суммировать.
+        
+        # Проще взять максимальную просадку среди всех запущенных пар, либо
+        # если мы хотим точнее: агрегировать PnL.
+        max_drawdown = 0.0
+        for s in statuses:
+            if s.get("current_drawdown_percent", 0.0) > max_drawdown:
+                max_drawdown = s["current_drawdown_percent"]
+                
         gemini_icon = "✅" if bot_settings.get('enable_gemini', True) else "❌"
+        max_loss_limit = bot_settings.get('max_daily_loss_percent', 5.0)
+        
         lines.append(
             f"\n⚙️ Режим: `{bot_settings['mode'].upper()}` | "
             f"Риск: `{bot_settings['risk_percent']}%` | "
-            f"Просадка: `{bot_settings.get('max_daily_loss_percent', 5.0)}%` | "
+            f"Просадка: `{max_drawdown:.1f}% ({max_loss_limit}%)` | "
             f"Gemini: {gemini_icon}"
         )
         text = "\n".join(lines)
     else:
         gemini_icon = "✅" if bot_settings.get('enable_gemini', True) else "❌"
+        max_loss_limit = bot_settings.get('max_daily_loss_percent', 5.0)
+        
         text = (
             "📊 **ТЕКУЩИЙ СТАТУС**\n\n"
             f"Движок: `🛑 Остановлен`\n"
             f"Режим: `{bot_settings['mode'].upper()}`\n"
             f"Риск: `{bot_settings['risk_percent']}%`\n"
-            f"Макс. просадка: `{bot_settings.get('max_daily_loss_percent', 5.0)}%`\n"
+            f"Просадка: `0.0% ({max_loss_limit}%)`\n"
             f"Gemini AI: {gemini_icon}\n\n"
             f"**Пары:**\n{_pairs_summary()}"
         )
