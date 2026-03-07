@@ -52,6 +52,7 @@ class EngineManager:
         leverage: int = 1,
         paper_trading: bool = True,
         tg_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        tg_delete_callback: Optional[Callable[[int], Awaitable[None]]] = None,
         strategy_params: dict = None,
         max_daily_loss_percent: float = 5.0,
         enable_gemini: bool = True
@@ -70,6 +71,7 @@ class EngineManager:
             paper_trading=paper_trading,
             leverage=leverage,
             tg_callback=tg_callback,
+            tg_delete_callback=tg_delete_callback,
             ws_client=ws_client,
             strategy_params=strategy_params,
             max_daily_loss_percent=max_daily_loss_percent,

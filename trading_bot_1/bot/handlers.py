@@ -428,23 +428,36 @@ async def process_remove_pair(callback: CallbackQuery, state: FSMContext):
 
 # --- ЗАПУСК / СТОП ---
 
-async def send_tg_notification(text: str):
-    """Callback для LiveEngine, чтобы он мог писать в Telegram"""
+async def send_tg_notification(text: str) -> Optional[int]:
+    """Callback для LiveEngine, чтобы он мог писать в Telegram. Возвращает message_id."""
     bot = bot_settings.get("bot_instance")
     
     if bot and bot_settings.get("chat_id"):
         try:
-            await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode="Markdown", reply_markup=get_delete_kb())
+            msg = await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode="Markdown", reply_markup=get_delete_kb())
+            return msg.message_id
         except Exception as e:
             # Fallback: отправляем без Markdown если парсинг сломался
             logger.error(f"Ошибка отправки в Telegram (Markdown): {e}")
             try:
                 # Обязательно указываем parse_mode=None, иначе применится дефолтный Markdown из telegram_bot.py
-                await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode=None, reply_markup=get_delete_kb())
+                msg = await bot.send_message(chat_id=bot_settings["chat_id"], text=text, parse_mode=None, reply_markup=get_delete_kb())
+                return msg.message_id
             except Exception as e2:
                 logger.error(f"Ошибка отправки в Telegram (plain): {e2}")
     else:
         logger.warning(f"ПРОПУСК ОТПРАВКИ ТГ: bot={bot is not None}, chat_id={bot_settings.get('chat_id')}. Message preview: {text[:50]}")
+    return None
+
+async def delete_tg_notification(message_id: int):
+    """Callback для LiveEngine, удаляет сообщение по message_id."""
+    bot = bot_settings.get("bot_instance")
+    chat_id = bot_settings.get("chat_id")
+    if bot and chat_id and message_id:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception as e:
+            logger.error(f"Ошибка удаления сообщения в Telegram (ID {message_id}): {e}")
 
 
 @router.message(F.text == "🚀 ЗАПУСК БОТА")
@@ -486,6 +499,7 @@ async def cmd_start_bot(message: Message, state: FSMContext):
             leverage=cfg["leverage"],
             paper_trading=paper_trading,
             tg_callback=send_tg_notification,
+            tg_delete_callback=delete_tg_notification,
             strategy_params=strat_params,
             max_daily_loss_percent=bot_settings.get("max_daily_loss_percent", 5.0),
             enable_gemini=bot_settings.get("enable_gemini", True)

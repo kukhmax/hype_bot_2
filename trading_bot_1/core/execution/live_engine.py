@@ -31,7 +31,8 @@ class LiveEngine:
                  timeframe_minutes: int, 
                  paper_trading: bool = True,
                  leverage: int = 1,
-                 tg_callback: 'Callable[[str], Awaitable[None]]' = None,
+                 tg_callback: 'Callable[[str], Awaitable[Optional[int]]]' = None,
+                 tg_delete_callback: 'Callable[[int], Awaitable[None]]' = None,
                  ws_client: 'MEXCWebSocketClient' = None,
                  strategy_params: dict = None,
                  max_daily_loss_percent: float = 5.0,
@@ -91,10 +92,23 @@ class LiveEngine:
         # Текущая открытая позиция
         self.current_position: Optional[Dict[str, Any]] = None
         self.tg_callback = tg_callback
+        self.tg_delete_callback = tg_delete_callback
 
-    async def _notify(self, msg: str):
+    async def _notify(self, msg: str) -> Optional[int]:
         if hasattr(self, 'tg_callback') and self.tg_callback:
-            await self.tg_callback(msg)
+            return await self.tg_callback(msg)
+        return None
+        
+    async def _delayed_delete(self, msg_ids: list, delay_seconds: int = 10):
+        """Отложенное удаление списка сообщений."""
+        await asyncio.sleep(delay_seconds)
+        if hasattr(self, 'tg_delete_callback') and self.tg_delete_callback:
+            for msg_id in msg_ids:
+                if msg_id is not None:
+                    try:
+                        await self.tg_delete_callback(msg_id)
+                    except Exception as e:
+                        logger.error(f"[{self.symbol}] Ошибка при отложенном удалении сообщения {msg_id}: {e}")
 
     async def initialize(self):
         """Подготовка: скачивание истории для расчета индикаторов."""
@@ -261,7 +275,7 @@ class LiveEngine:
                     f"  EMA200: `{ema_200:.2f}` ({ema_pos})\n"
                     f"  BB Width: `{bb_width_pct:.2f}%` | ATR: `{atr:.4f}`"
                 )
-                await self._notify(setup_msg)
+                setup_msg_id = await self._notify(setup_msg)
                 
                 # ═══════════════════════════════════════════
                 # 🧠 ML ENSEMBLE FILTER
@@ -294,7 +308,7 @@ class LiveEngine:
                             f"(margin: `{ml_details.get('margin', 0):+.3f}`)"
                         )
                         
-                    await self._notify(ml_text)
+                    ml_msg_id = await self._notify(ml_text)
                     logger.info(
                         f"[{self.symbol}] {direction} {ml_verdict} ML. "
                         f"Score={ml_details.get('ensemble_score', 0):.3f} "
@@ -302,6 +316,8 @@ class LiveEngine:
                     )
                     
                     if not ml_passed:
+                        # Запускаем отложенное удаление сообщений (сетап + ответ ML)
+                        asyncio.create_task(self._delayed_delete([setup_msg_id, ml_msg_id], delay_seconds=10))
                         return
                 
                 # ═══════════════════════════════════════════
@@ -341,10 +357,10 @@ class LiveEngine:
                     )
                     
                     if is_approved:
-                        await self._notify(f"✅ *ИИ ОДОБРИЛ* `{self.symbol}` {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}\n`{reasoning}`")
+                        await self._notify(f"✅ *ИИ ОДОБРИЛ* `{self.symbol}`    {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}\n`{reasoning}`")
                         await self._execute_signal(signal_data, close)
                     else:
-                        await self._notify(f"❌ *ИИ ОТКЛОНИЛ* `{self.symbol}` {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}\n`{reasoning}`")
+                        await self._notify(f"❌ *ИИ ОТКЛОНИЛ* `{self.symbol}`   {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}\n`{reasoning}`")
                         logger.info(f"[{self.symbol}] ❌❌❌ Сделка отклонена ИИ. Причина: {reasoning}")
 
     async def _check_paper_stops(self, candle: dict):
