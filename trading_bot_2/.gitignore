@@ -1,7 +1,0 @@
-.env
-__pycache__/
-*.pyc
-logs/
-.venv/
-venv/
-*.zip
