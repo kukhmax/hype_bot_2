@@ -88,8 +88,8 @@ class RiskManager:
         # Размер позиции в USDT, при котором убыток на SL = risk_amount
         quote_qty = risk_amount / sl_distance_pct
 
-        logger.info(f"RiskManager: risk_amount={risk_amount:.2f} USDT, "
-                     f"SL дист.={sl_distance_pct*100:.2f}%, позиция={quote_qty:.2f} USDT")
+        logger.info(f"\n\nRiskManager: risk_amount={risk_amount:.2f} USDT, "
+                     f"SL дист.={sl_distance_pct*100:.2f}%, позиция={quote_qty:.2f} USDT\n\n")
 
         # Минимальный размер ордера на MEXC обычно 5 USDT (зависит от пары)
         if quote_qty < 5.0:
