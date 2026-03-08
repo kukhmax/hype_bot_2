@@ -135,11 +135,10 @@ async def cmd_status(message: Message, state: FSMContext):
                 pos_text = "—"
                 
             lines.append(
-                f"{pos_icon} `{s['symbol']}` | "
+                f"{pos_icon} `{s['symbol']}` x {s['leverage']} | "
                 f"`{s['tf']}m` | "
                 f"`{s['regime']}` | "
                 f"`{s['strategy']}` | "
-                f"`{s['leverage']}x` | "
                 f"Поз: `{pos_text}`"
             )
         # Вычисляем общую просадку по всем движкам (берем максимальную из всех, так как баланс общий
@@ -162,7 +161,7 @@ async def cmd_status(message: Message, state: FSMContext):
             f"\n⚙️ Режим: `{bot_settings['mode'].upper()}` | "
             f"Риск: `{bot_settings['risk_percent']}%` | "
             f"Просадка: `{max_drawdown:.1f}% ({max_loss_limit}%)` | "
-            f"Gemini: {gemini_icon}"
+            f"AI: {gemini_icon}"
         )
         text = "\n".join(lines)
     else:
