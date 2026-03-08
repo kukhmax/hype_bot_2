@@ -56,10 +56,10 @@ class LiveEngine:
         # Breakout требует сжатие (low BBW), что противоречит high_volatility.
         # Range -> Breakout: при сжатии (range) ожидаем пробой.
         self.strategies = {
-            "strong_trend": TrendPullbackStrategy(rsi_threshold=rsi_th, sl_atr_mult=sl_atr, rr_ratio=rr),
-            "weak_trend": TrendPullbackStrategy(rsi_threshold=rsi_th + 5, sl_atr_mult=sl_atr, rr_ratio=rr - 0.5),
-            "high_volatility": LiquiditySweepStrategy(rsi_ob_os=rsi_th, sl_atr_mult=sl_atr - 0.5, rr_ratio=rr),
-            "range": BreakoutStrategy(bb_width_threshold=bb_th, adx_threshold=adx_th, sl_atr_mult=sl_atr - 0.5, rr_ratio=rr - 0.5)
+            "strong_trend": TrendPullbackStrategy(rsi_threshold=rsi_th, sl_atr_mult=sl_atr, rr_ratio=max(2.0, rr)),
+            "weak_trend": TrendPullbackStrategy(rsi_threshold=rsi_th + 5, sl_atr_mult=sl_atr, rr_ratio=max(2.0, rr - 0.5)),
+            "high_volatility": LiquiditySweepStrategy(rsi_ob_os=rsi_th, sl_atr_mult=sl_atr - 0.5, rr_ratio=max(2.0, rr)),
+            "range": BreakoutStrategy(bb_width_threshold=bb_th, adx_threshold=adx_th, sl_atr_mult=sl_atr - 0.5, rr_ratio=max(2.0, rr - 0.5))
         }
         self.active_strategy = self.strategies["weak_trend"]
         self.current_regime = "unknown"
@@ -385,7 +385,7 @@ class LiveEngine:
                 if pos["stop_loss"] < pos["entry_price"]:
                     pos["stop_loss"] = pos["entry_price"] + one_tenth_tp
                     logger.info(f"Trailing Stop (LONG): Стоп переведен в безубыток ({pos['stop_loss']})")
-                    await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (LONG) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']}`")
+                    await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (LONG) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']:.4f}`")
                     
             if candle["low"] <= pos["stop_loss"]:
                 close_price = pos["stop_loss"]
@@ -406,7 +406,7 @@ class LiveEngine:
                 if pos["stop_loss"] > pos["entry_price"]:
                     pos["stop_loss"] = pos["entry_price"] - one_tenth_tp
                     logger.info(f"Trailing Stop (SHORT): Стоп переведен в безубыток ({pos['stop_loss']})")
-                    await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']}`")
+                    await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']:.10f}`")
 
             if candle["high"] >= pos["stop_loss"]:
                 close_price = pos["stop_loss"]
@@ -476,9 +476,25 @@ class LiveEngine:
         quote_qty = size_info["quote_qty"] * self.leverage
         base_qty = size_info["base_qty"] * self.leverage
         
+        # Расчеты для красивого отображения в Telegram
+        margin = size_info["quote_qty"]
+        free_balance = current_balance - margin
+        sl_usdt = abs(current_price - stop_loss) * base_qty
+        tp_usdt = abs(take_profit - current_price) * base_qty if take_profit else 0
+        
         if self.paper_trading:
             logger.info(f"🟢 [PAPER TRADING] Открываем {side} на сумму {quote_qty} USDT. Entry: {current_price}, SL: {stop_loss}, TP: {take_profit}")
-            await self._notify(f"🟢 *ПОЗИЦИЯ ОТКРЫТА [PAPER]*\nПара: `{self.symbol}`\nНаправление: `{'🟢LONG🟢' if side == 'BUY' else '🔴SHORT🔴'}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`\nSL: `{stop_loss:.4f}`\nTP: `{take_profit:.4f}`")
+            await self._notify(
+                f"🟢 *ПОЗИЦИЯ ОТКРЫТА [PAPER]*\n"
+                f"Пара: `{self.symbol}`\n"
+                f"Направление: `{'🟢LONG🟢' if side == 'BUY' else '🔴SHORT🔴'}`\n"
+                f"Своб. баланс: `{free_balance:.2f} USDT`\n"
+                f"Маржа: `{margin:.2f} USDT` (Плечо {self.leverage}x)\n"
+                f"Объем: `{quote_qty:.2f} USDT`\n"
+                f"Вход: `{current_price:.10f}`\n"
+                f"SL: `{stop_loss:.10f}` (`-{sl_usdt:.2f} USDT`)\n"
+                f"TP: `{take_profit:.10f}` (`+{tp_usdt:.2f} USDT`)"
+            )
             self.current_position = {
                 "side": side,
                 "entry_price": current_price,
@@ -518,7 +534,17 @@ class LiveEngine:
                          self.current_position["tp_order_id"] = tp_res["orderId"]
                          
                 logger.info(f"🔴 [LIVE TRADING] Успешно открыта позиция {side}. Результат: {result}")
-                await self._notify(f"📈 *ПОЗИЦИЯ ОТКРЫТА [LIVE]*\nПара: `{self.symbol}`\nНаправление: `{'🟢LONG🟢' if side == 'BUY' else '🔴SHORT🔴'}`\nОбъем: `{quote_qty} USDT`\nВход: `{current_price}`")
+                await self._notify(
+                    f"📈 *ПОЗИЦИЯ ОТКРЫТА [LIVE]*\n"
+                    f"Пара: `{self.symbol}`\n"
+                    f"Направление: `{'🟢LONG🟢' if side == 'BUY' else '🔴SHORT🔴'}`\n"
+                    f"Своб. баланс: `{free_balance:.2f} USDT`\n"
+                    f"Маржа: `{margin:.2f} USDT` (Плечо {self.leverage}x)\n"
+                    f"Объем: `{quote_qty:.2f} USDT`\n"
+                    f"Вход: `{current_price:.10f}`\n"
+                    f"SL: `{stop_loss:.10f}` (`-{sl_usdt:.2f} USDT`)\n"
+                    f"TP: `{take_profit:.10f}` (`+{tp_usdt:.2f} USDT`)"
+                )
             else:
                 logger.error(f"[LIVE TRADING] Ошибка открытия ордера: {result}")
 
