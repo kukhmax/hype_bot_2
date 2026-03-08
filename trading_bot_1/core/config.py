@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
-    EXCHANGE: str = "binance"
+    EXCHANGE: str = "mexc"
     REDIS_URL: str = "redis://redis:6379/0"
     
     # API Keys for Execution (Required for Phase 3)

@@ -36,7 +36,8 @@ class LiveEngine:
                  ws_client: 'MEXCWebSocketClient' = None,
                  strategy_params: dict = None,
                  max_daily_loss_percent: float = 5.0,
-                 enable_gemini: bool = True):
+                 enable_gemini: bool = True,
+                 tg_position_callback: 'Callable[[str, str], Awaitable[Optional[int]]]' = None):
         
         self.symbol = symbol
         self.timeframe_minutes = timeframe_minutes
@@ -93,12 +94,20 @@ class LiveEngine:
         self.current_position: Optional[Dict[str, Any]] = None
         self.tg_callback = tg_callback
         self.tg_delete_callback = tg_delete_callback
+        self.tg_position_callback = tg_position_callback
 
     async def _notify(self, msg: str) -> Optional[int]:
         if hasattr(self, 'tg_callback') and self.tg_callback:
             return await self.tg_callback(msg)
         return None
         
+    async def _notify_position(self, msg: str, symbol: str) -> Optional[int]:
+        if hasattr(self, 'tg_position_callback') and self.tg_position_callback:
+            return await self.tg_position_callback(msg, symbol)
+        elif hasattr(self, 'tg_callback') and self.tg_callback:
+            return await self.tg_callback(msg)
+        return None
+
     async def _delayed_delete(self, msg_ids: list, delay_seconds: int = 10):
         """Отложенное удаление списка сообщений."""
         await asyncio.sleep(delay_seconds)
@@ -218,9 +227,9 @@ class LiveEngine:
                 self.df = self.active_strategy.prepare_data(self.df)
                 # await self._notify(f"🔄 *СМЕНА РЕЖИМА*\nНовый режим: `{new_regime}`\nВключена стратегия: `{self.active_strategy.__class__.__name__}`")
         
-        # --- Симуляция проверки Stop Loss / Take Profit ---
-        if self.paper_trading and self.current_position:
-            await self._check_paper_stops(candle_dict)
+        # --- Проверка Stop Loss / Take Profit ---
+        if self.current_position:
+            await self._check_stops(candle_dict)
 
         # Вызываем логику стратегии для генерации сигнала
         logger.warning(f"[{self.symbol}] STATE DEBUG: current_position={self.current_position}")
@@ -363,8 +372,8 @@ class LiveEngine:
                         await self._notify(f"❌ *ИИ ОТКЛОНИЛ* `{self.symbol}`   {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}\n`{reasoning}`")
                         logger.info(f"[{self.symbol}] ❌❌❌ Сделка отклонена ИИ. Причина: {reasoning}")
 
-    async def _check_paper_stops(self, candle: dict):
-        """Только для Paper Trading: закрытие сделки если цена коснулась SL/TP."""
+    async def _check_stops(self, candle: dict):
+        """Проверка закрытия сделки по SL/TP (и для Paper, и для Live с ручным контролем)."""
         pos = self.current_position
         if not pos:
             return
@@ -377,7 +386,7 @@ class LiveEngine:
             pos["initial_sl"] = pos["stop_loss"]
             
         r_dist = abs(pos["entry_price"] - pos["initial_sl"])
-        one_tenth_tp = (pos["take_profit"] - pos["entry_price"])/10
+        one_tenth_tp = (pos["take_profit"] - pos["entry_price"])/10 if pos.get("take_profit") else r_dist / 10
         
         if pos["side"] == "BUY":
             # Перевод в безубыток при достижении 1R
@@ -391,13 +400,11 @@ class LiveEngine:
                 close_price = pos["stop_loss"]
                 close_reason = "SL"
                 pnl = (close_price - pos["entry_price"]) * pos["qty"]
-                logger.info(f"[-PAPER-] Сработал SL по BUY ({close_price}). PnL: {pnl:.2f}")
                 closed = True
             elif pos.get("take_profit") and candle["high"] >= pos["take_profit"]:
                 close_price = pos["take_profit"]
                 close_reason = "TP"
                 pnl = (close_price - pos["entry_price"]) * pos["qty"]
-                logger.info(f"[+PAPER+] Сработал TP по BUY ({close_price}). PnL: {pnl:.2f}")
                 closed = True
                 
         elif pos["side"] == "SELL":
@@ -412,20 +419,22 @@ class LiveEngine:
                 close_price = pos["stop_loss"]
                 close_reason = "SL"
                 pnl = (pos["entry_price"] - close_price) * pos["qty"] # Шорт: цена выросла = убыток
-                logger.info(f"[-PAPER-] Сработал SL по SELL ({close_price}). PnL: {pnl:.2f}")
                 closed = True
             elif pos.get("take_profit") and candle["low"] <= pos["take_profit"]:
                 close_price = pos["take_profit"]
                 close_reason = "TP"
                 pnl = (pos["entry_price"] - close_price) * pos["qty"]
-                logger.info(f"[+PAPER+] Сработал TP по SELL ({close_price}). PnL: {pnl:.2f}")
                 closed = True
                 
         if closed:
+            mode_tag = "PAPER" if self.paper_trading else "LIVE"
+            logger.info(f"[{mode_tag}] Сработал {close_reason} по {pos['side']} ({close_price}). PnL: {pnl:.2f}")
+            
             # Логируем сделку в CSV
+            from core.data.trade_logger import TradeLogger
             TradeLogger.log_trade(
                 symbol=self.symbol,
-                mode="PAPER" if self.paper_trading else "LIVE",
+                mode=mode_tag,
                 side=pos["side"],
                 entry_price=pos["entry_price"],
                 close_price=close_price,
@@ -437,6 +446,7 @@ class LiveEngine:
             )
             
             self.risk_manager.report_trade_result(pnl)
+            
             # Отчёт в ML Ensemble (для адаптации Dynamic Threshold)
             result_emoji = "🟢" if pnl > 0 else "🔴"
             if self.ml_filter is not None and self._last_ml_score is not None:
@@ -447,7 +457,28 @@ class LiveEngine:
                     f"новый threshold={self.ml_filter.threshold.get_threshold():.3f}"
                 )
                 self._last_ml_score = None
-            await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [PAPER]**\nПара: `{self.symbol}`\n{result_emoji}PnL: `{pnl:.2f} USDT`")
+                
+            await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [{mode_tag}]**\nПара: `{self.symbol}`\nПричина: `{close_reason}`\n{result_emoji}PnL: `{pnl:.2f} USDT`")
+            
+            if not self.paper_trading:
+                # В Live режиме нужно закрыть позицию на бирже (рыночным ордером)
+                # и отменить лимитный ордер TP, если он есть
+                close_side = "SELL" if pos["side"] == "BUY" else "BUY"
+                if close_reason == "SL":
+                    # Если закрываем по нашему виртуальному SL, кидаем маркет-ордер на весь объем позиции
+                    # Внимание: MEXC MARKET ордера могут требовать quoteOrderQty, но для закрытия позиции 
+                    # проще использовать quantity (базовый объем) или если MEXC API позволяет закрыть все. 
+                    # В нашем текущем MEXCExecutor place_market_order принимает quoteOrderQty (в USDT).
+                    # Так как мы закрываем ровно qty монет:
+                    close_quote_qty = pos["qty"] * close_price
+                    logger.info(f"[{self.symbol}] LIVE CLOSE: Отправка MARKET {close_side} ордера для закрытия SL. Qty: {pos['qty']}, QuoteQty: {close_quote_qty}")
+                    await self.executor.place_market_order(self.symbol, close_side, close_quote_qty)
+                    
+                # Отменяем LIMIT TP ордер
+                if "tp_order_id" in pos:
+                    logger.info(f"[{self.symbol}] LIVE CLOSE: Отмена TP ордера {pos['tp_order_id']}")
+                    await self.executor.cancel_order(self.symbol, pos["tp_order_id"])
+                    
             self.current_position = None
 
     async def _execute_signal(self, signal: dict, current_price: float):
@@ -484,7 +515,7 @@ class LiveEngine:
         
         if self.paper_trading:
             logger.info(f"🟢 [PAPER TRADING] Открываем {side} на сумму {quote_qty} USDT. Entry: {current_price}, SL: {stop_loss}, TP: {take_profit}")
-            await self._notify(
+            await self._notify_position(
                 f"🟢 *ПОЗИЦИЯ ОТКРЫТА [PAPER]*\n"
                 f"Пара: `{self.symbol}`\n"
                 f"Направление: `{'🟢LONG🟢' if side == 'BUY' else '🔴SHORT🔴'}`\n"
@@ -493,7 +524,8 @@ class LiveEngine:
                 f"Объем: `{quote_qty:.2f} USDT`\n"
                 f"Вход: `{current_price:.10f}`\n"
                 f"SL: `{stop_loss:.10f}` (`-{sl_usdt:.2f} USDT`)\n"
-                f"TP: `{take_profit:.10f}` (`+{tp_usdt:.2f} USDT`)"
+                f"TP: `{take_profit:.10f}` (`+{tp_usdt:.2f} USDT`)",
+                self.symbol
             )
             self.current_position = {
                 "side": side,
@@ -534,7 +566,7 @@ class LiveEngine:
                          self.current_position["tp_order_id"] = tp_res["orderId"]
                          
                 logger.info(f"🔴 [LIVE TRADING] Успешно открыта позиция {side}. Результат: {result}")
-                await self._notify(
+                await self._notify_position(
                     f"📈 *ПОЗИЦИЯ ОТКРЫТА [LIVE]*\n"
                     f"Пара: `{self.symbol}`\n"
                     f"Направление: `{'🟢LONG🟢' if side == 'BUY' else '🔴SHORT🔴'}`\n"
@@ -543,10 +575,110 @@ class LiveEngine:
                     f"Объем: `{quote_qty:.2f} USDT`\n"
                     f"Вход: `{current_price:.10f}`\n"
                     f"SL: `{stop_loss:.10f}` (`-{sl_usdt:.2f} USDT`)\n"
-                    f"TP: `{take_profit:.10f}` (`+{tp_usdt:.2f} USDT`)"
+                    f"TP: `{take_profit:.10f}` (`+{tp_usdt:.2f} USDT`)",
+                    self.symbol
                 )
             else:
                 logger.error(f"[LIVE TRADING] Ошибка открытия ордера: {result}")
+
+    async def manual_close_position(self) -> bool:
+        """Ручное закрытие позиции (по кнопке)."""
+        pos = self.current_position
+        if not pos:
+            return False
+            
+        current_price = None
+        if getattr(self, 'candle_builder', None) and self.candle_builder.current_candle:
+            current_price = self.candle_builder.current_candle["close"]
+        elif hasattr(self, 'df') and not self.df.empty:
+            current_price = self.df.iloc[-1]["close"]
+            
+        if not current_price:
+            logger.error(f"[{self.symbol}] Не удалось определить текущую цену для ручного закрытия")
+            return False
+            
+        close_price = current_price
+        
+        if pos["side"] == "BUY":
+            pnl = (close_price - pos["entry_price"]) * pos["qty"]
+        else:
+            pnl = (pos["entry_price"] - close_price) * pos["qty"]
+            
+        mode_tag = "PAPER" if self.paper_trading else "LIVE"
+        logger.info(f"[{mode_tag}] Ручное закрытие позиции {pos['side']} ({close_price}). PnL: {pnl:.2f}")
+        
+        # Логируем сделку в CSV
+        from core.data.trade_logger import TradeLogger
+        TradeLogger.log_trade(
+            symbol=self.symbol,
+            mode=mode_tag,
+            side=pos["side"],
+            entry_price=pos["entry_price"],
+            close_price=close_price,
+            qty=pos["qty"],
+            pnl=pnl,
+            strategy_name=self.active_strategy.__class__.__name__,
+            regime=self.current_regime,
+            reason="MANUAL"
+        )
+        
+        self.risk_manager.report_trade_result(pnl)
+        
+        # Интеграция с ML 
+        result_emoji = "🟢" if pnl > 0 else "🔴"
+        if self.ml_filter is not None and self._last_ml_score is not None:
+            self.ml_filter.report_trade(self._last_ml_score, pnl)
+            self._last_ml_score = None
+            
+        await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА ВРУЧНУЮ [{mode_tag}]**\nПара: `{self.symbol}`\n{result_emoji}PnL: `{pnl:.2f} USDT`")
+        
+        if not self.paper_trading:
+            close_side = "SELL" if pos["side"] == "BUY" else "BUY"
+            close_quote_qty = pos["qty"] * close_price
+            logger.info(f"[{self.symbol}] LIVE CLOSE MANUAL: Отправка MARKET {close_side} ордера. Qty: {pos['qty']}, QuoteQty: {close_quote_qty}")
+            await self.executor.place_market_order(self.symbol, close_side, close_quote_qty)
+            
+            if "tp_order_id" in pos:
+                logger.info(f"[{self.symbol}] LIVE CLOSE MANUAL: Отмена TP ордера {pos['tp_order_id']}")
+                await self.executor.cancel_order(self.symbol, pos["tp_order_id"])
+                
+        self.current_position = None
+        return True
+        
+    async def update_sl(self, new_sl: float) -> bool:
+        """Обновление значения Stop Loss вручную."""
+        if not self.current_position:
+            return False
+            
+        self.current_position["stop_loss"] = new_sl
+        await self._notify(f"🔄 **SL ИЗМЕНЁН**\nПара: `{self.symbol}`\nНовый стоп: `{new_sl:.10f}`")
+        logger.info(f"[{self.symbol}] Stop Loss изменён на {new_sl}")
+        return True
+        
+    async def update_tp(self, new_tp: float) -> bool:
+        """Обновление значения Take Profit вручную."""
+        if not self.current_position:
+            return False
+            
+        old_tp = self.current_position.get("take_profit")
+        self.current_position["take_profit"] = new_tp
+        
+        if not self.paper_trading:
+            # Отменяем старый лимитный ордер
+            if "tp_order_id" in self.current_position:
+                logger.info(f"[{self.symbol}] Обновление TP: отмена старого лимитника {self.current_position['tp_order_id']}")
+                await self.executor.cancel_order(self.symbol, self.current_position["tp_order_id"])
+            
+            # Выставляем новый лимитный ордер
+            close_side = "SELL" if self.current_position["side"] == "BUY" else "BUY"
+            tp_res = await self.executor.place_limit_order(self.symbol, close_side, self.current_position["qty"], new_tp)
+            if "orderId" in tp_res:
+                 self.current_position["tp_order_id"] = tp_res["orderId"]
+                 logger.info(f"[{self.symbol}] Обновление TP: новый лимитник выставлен {tp_res['orderId']}")
+                 
+        await self._notify(f"🔄 **TP ИЗМЕНЁН**\nПара: `{self.symbol}`\nНовый тейк: `{new_tp:.10f}`")
+        logger.info(f"[{self.symbol}] Take Profit изменён с {old_tp} на {new_tp}")
+        return True
 
     # WebSocket управляется EngineManager — run_forever() больше не нужен.
     # Движок получает тики через callback, зарегистрированный в shared WS клиенте.

@@ -9,8 +9,9 @@ from aiogram.fsm.context import FSMContext
 from contextlib import suppress
 from aiogram.exceptions import TelegramBadRequest
 
-from bot.states import SettingsFSM, PairFSM, TestFSM, StrategyFSM, TrainMLFSM
+from bot.states import SettingsFSM, PairFSM, TestFSM, StrategyFSM, TrainMLFSM, PositionEditFSM
 from bot.settings import bot_settings
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 logger = logging.getLogger("telegram_handlers")
 
@@ -459,6 +460,43 @@ async def delete_tg_notification(message_id: int):
         except Exception as e:
             logger.error(f"Ошибка удаления сообщения в Telegram (ID {message_id}): {e}")
 
+async def send_tg_position_notification(text: str, symbol: str) -> Optional[int]:
+    """Callback для LiveEngine, отправляет сообщение об открытой позиции с кнопками управления."""
+    bot = bot_settings.get("bot_instance")
+    chat_id = bot_settings.get("chat_id")
+    
+    if bot and chat_id:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Закрыть позицию", callback_data=f"close_pos_{symbol}")
+            ],
+            [
+                InlineKeyboardButton(text="SL", callback_data=f"edit_sl_{symbol}"),
+                InlineKeyboardButton(text="TP", callback_data=f"edit_tp_{symbol}")
+            ]
+        ])
+        
+        try:
+            msg = await bot.send_message(
+                chat_id=chat_id, 
+                text=text, 
+                parse_mode="Markdown", 
+                reply_markup=kb
+            )
+            return msg.message_id
+        except Exception as e:
+            logger.error(f"Ошибка отправки позиции в Telegram: {e}")
+            try:
+                msg = await bot.send_message(
+                    chat_id=chat_id, 
+                    text=text, 
+                    parse_mode=None, 
+                    reply_markup=kb
+                )
+                return msg.message_id
+            except Exception as e2:
+                logger.error(f"Ошибка отправки позиции в Telegram (plain): {e2}")
+    return None
 
 @router.message(F.text == "🚀 ЗАПУСК БОТА")
 async def cmd_start_bot(message: Message, state: FSMContext):
@@ -502,7 +540,8 @@ async def cmd_start_bot(message: Message, state: FSMContext):
             tg_delete_callback=delete_tg_notification,
             strategy_params=strat_params,
             max_daily_loss_percent=bot_settings.get("max_daily_loss_percent", 5.0),
-            enable_gemini=bot_settings.get("enable_gemini", True)
+            enable_gemini=bot_settings.get("enable_gemini", True),
+            tg_position_callback=send_tg_position_notification
         )
         if ok:
             success_count += 1
@@ -797,25 +836,162 @@ async def run_ml_trainer_and_report(message: Message, symbol: str, tf: int):
                 reply_markup=get_delete_kb()
             )
             return
-            
-        trained_count = sum([
-            ensemble.momentum.is_trained,
-            ensemble.volatility.is_trained,
-            ensemble.structure.is_trained,
-        ])
-        
-        await message.answer(
-            f"✅ **ОБУЧЕНИЕ ЗАВЕРШЕНО!**\n\n"
-            f"🧠 Обучено моделей: `{trained_count}/3`\n"
-            f"📊 На паре: `{symbol}` ({tf}m)\n"
-            f"⚙️ Разметка по: `TrendPullback (RSI {rsi_th}, SL {sl_mult}x)`\n\n"
-            f"Модели успешно сохранены. Новые сделки будут проходить настоящую ML-фильтрацию (без Fallback)!",
-            reply_markup=get_delete_kb()
+
+        report = (
+            f"✅ **Обучение Завершено!**\n"
+            f"Пара: `{symbol}` ({tf}m)\n\n"
+            f"📈 Моделей в ансамбле: `{ensemble.get_model_info()['models_trained']}`\n"
+            f"Порог для сигналов: `{ensemble.threshold.get_threshold():.2f}`\n\n"
+            f"Модели сохранены и готовы к работе."
         )
+        await message.answer(report, reply_markup=get_delete_kb())
         
     except Exception as e:
         logger.error(f"Ошибка обучения ML: {e}", exc_info=True)
-        await message.answer("❌ Произошла ошибка при обучении ML. Проверьте логи сервера.", parse_mode=None, reply_markup=get_delete_kb())
+        await message.answer("❌ Произошла ошибка при обучении ML. Проверьте логи.", parse_mode=None, reply_markup=get_delete_kb())
+
+
+# --- УПРАВЛЕНИЕ ПОЗИЦИЯМИ (КНОПКИ ТЕЛЕГРАМ) ---
+
+@router.callback_query(F.data.startswith("close_pos_"))
+async def process_close_position(callback: CallbackQuery, state: FSMContext):
+    await delete_previous_prompt(callback.message, state)
+    
+    symbol = callback.data.replace("close_pos_", "")
+    global _engine_manager
+    
+    if not _engine_manager or symbol not in _engine_manager.engines:
+        await callback.message.answer(f"⚠️ Движок для пары {symbol} не запущен или позиция уже закрыта.", reply_markup=get_delete_kb())
+        return
+        
+    engine = _engine_manager.engines[symbol]
+    if not engine.current_position:
+        await callback.message.answer(f"⚠️ Нет активной позиции по {symbol}.", reply_markup=get_delete_kb())
+        return
+        
+    await callback.message.answer(f"⏳ Закрываю позицию {symbol} вручную...")
+    success = await engine.manual_close_position()
+    if not success:
+         await callback.message.answer(f"❌ Не удалось закрыть позицию {symbol}. Проверьте логи.", reply_markup=get_delete_kb())
+         
+         
+@router.callback_query(F.data.startswith("edit_sl_"))
+async def process_edit_sl(callback: CallbackQuery, state: FSMContext):
+    await delete_previous_prompt(callback.message, state)
+    
+    symbol = callback.data.replace("edit_sl_", "")
+    global _engine_manager
+    
+    if not _engine_manager or symbol not in _engine_manager.engines:
+        await callback.message.answer(f"⚠️ Движок для пары {symbol} не запущен.", reply_markup=get_delete_kb())
+        return
+        
+    engine = _engine_manager.engines[symbol]
+    if not engine.current_position:
+        await callback.message.answer(f"⚠️ Нет активной позиции по {symbol}.", reply_markup=get_delete_kb())
+        return
+        
+    current_sl = engine.current_position.get("stop_loss", 0)
+    msg = await callback.message.answer(
+        f"Текущий SL для `{symbol}`: `{current_sl:.10f}`\n\n"
+        f"Введите новое значение Stop Loss (в формате числа, например `0.54321`):"
+    )
+    
+    await state.update_data(edit_pos_symbol=symbol)
+    await state.set_state(PositionEditFSM.waiting_for_sl)
+    await save_prompt_id(msg, state)
+
+
+@router.message(PositionEditFSM.waiting_for_sl)
+async def process_new_sl(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
+    data = await state.get_data()
+    symbol = data.get("edit_pos_symbol")
+    
+    try:
+        new_sl = float(message.text.strip())
+        if new_sl <= 0:
+            raise ValueError
+    except ValueError:
+        msg = await message.answer("Некорректное значение. Введите число (например, `0.54321`).")
+        await save_prompt_id(msg, state)
+        return
+        
+    global _engine_manager
+    if not _engine_manager or symbol not in _engine_manager.engines:
+        await message.answer(f"⚠️ Движок для пары {symbol} остановлен.", reply_markup=get_delete_kb())
+        await state.clear()
+        return
+        
+    engine = _engine_manager.engines[symbol]
+    success = await engine.update_sl(new_sl)
+    if not success:
+        await message.answer(f"⚠️ Не удалось обновить SL (позиция уже закрыта или другая ошибка).", reply_markup=get_delete_kb())
+        
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("edit_tp_"))
+async def process_edit_tp(callback: CallbackQuery, state: FSMContext):
+    await delete_previous_prompt(callback.message, state)
+    
+    symbol = callback.data.replace("edit_tp_", "")
+    global _engine_manager
+    
+    if not _engine_manager or symbol not in _engine_manager.engines:
+        await callback.message.answer(f"⚠️ Движок для пары {symbol} не запущен.", reply_markup=get_delete_kb())
+        return
+        
+    engine = _engine_manager.engines[symbol]
+    if not engine.current_position:
+        await callback.message.answer(f"⚠️ Нет активной позиции по {symbol}.", reply_markup=get_delete_kb())
+        return
+        
+    current_tp = engine.current_position.get("take_profit", "Не установлен")
+    if isinstance(current_tp, float):
+        current_tp = f"{current_tp:.10f}"
+        
+    msg = await callback.message.answer(
+        f"Текущий TP для `{symbol}`: `{current_tp}`\n\n"
+        f"Введите новое значение Take Profit (в формате числа):"
+    )
+    
+    await state.update_data(edit_pos_symbol=symbol)
+    await state.set_state(PositionEditFSM.waiting_for_tp)
+    await save_prompt_id(msg, state)
+
+
+@router.message(PositionEditFSM.waiting_for_tp)
+async def process_new_tp(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
+    data = await state.get_data()
+    symbol = data.get("edit_pos_symbol")
+    
+    try:
+        new_tp = float(message.text.strip())
+        if new_tp <= 0:
+            raise ValueError
+    except ValueError:
+        msg = await message.answer("Некорректное значение. Введите число.")
+        await save_prompt_id(msg, state)
+        return
+        
+    global _engine_manager
+    if not _engine_manager or symbol not in _engine_manager.engines:
+        await message.answer(f"⚠️ Движок для пары {symbol} остановлен.", reply_markup=get_delete_kb())
+        await state.clear()
+        return
+        
+    engine = _engine_manager.engines[symbol]
+    success = await engine.update_tp(new_tp)
+    if not success:
+        await message.answer(f"⚠️ Не удалось обновить TP (позиция уже закрыта или другая ошибка).", reply_markup=get_delete_kb())
+        
+    await state.clear()
 
 
 # --- НАСТРОЙКИ СТРАТЕГИЙ ---

@@ -20,3 +20,7 @@ class TrainMLFSM(StatesGroup):
 class StrategyFSM(StatesGroup):
     waiting_for_param_choice = State()
     waiting_for_value = State()
+
+class PositionEditFSM(StatesGroup):
+    waiting_for_sl = State()
+    waiting_for_tp = State()

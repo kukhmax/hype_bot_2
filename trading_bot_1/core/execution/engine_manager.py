@@ -55,7 +55,8 @@ class EngineManager:
         tg_delete_callback: Optional[Callable[[int], Awaitable[None]]] = None,
         strategy_params: dict = None,
         max_daily_loss_percent: float = 5.0,
-        enable_gemini: bool = True
+        enable_gemini: bool = True,
+        tg_position_callback: Optional[Callable[[str, str], Awaitable[None]]] = None
     ) -> bool:
         """Добавляет пару и запускает для неё движок."""
         if symbol in self.engines:
@@ -75,7 +76,8 @@ class EngineManager:
             ws_client=ws_client,
             strategy_params=strategy_params,
             max_daily_loss_percent=max_daily_loss_percent,
-            enable_gemini=enable_gemini
+            enable_gemini=enable_gemini,
+            tg_position_callback=tg_position_callback
         )
         
         is_ready = await engine.initialize()
