@@ -837,10 +837,16 @@ async def run_ml_trainer_and_report(message: Message, symbol: str, tf: int):
             )
             return
 
+        trained_count = sum([
+            ensemble.momentum.is_trained,
+            ensemble.volatility.is_trained,
+            ensemble.structure.is_trained,
+        ])
+        
         report = (
             f"✅ **Обучение Завершено!**\n"
             f"Пара: `{symbol}` ({tf}m)\n\n"
-            f"📈 Моделей в ансамбле: `{ensemble.get_model_info()['models_trained']}`\n"
+            f"📈 Моделей в ансамбле: `{trained_count}/3`\n"
             f"Порог для сигналов: `{ensemble.threshold.get_threshold():.2f}`\n\n"
             f"Модели сохранены и готовы к работе."
         )
