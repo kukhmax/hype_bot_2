@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     # API Keys for Execution (Required for Phase 3)
     API_KEY: str = ""
     API_SECRET: str = ""
+    HL_WALLET_ADDRESS: str = ""
+    HL_PRIVATE_KEY: str = ""
     
     # Telegram Bot (Required for Phase 4)
     TELEGRAM_BOT_TOKEN: str = ""

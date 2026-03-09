@@ -4,6 +4,8 @@ from typing import Dict, Optional, Callable, Awaitable
 from core.logger import setup_logger
 from core.execution.live_engine import LiveEngine
 from core.data.mexc_client import MEXCWebSocketClient
+from core.data.hyperliquid_client import HyperliquidWebSocketClient
+from bot.settings import bot_settings
 
 logger = setup_logger("engine_manager")
 
@@ -19,14 +21,19 @@ class EngineManager:
         self.engines: Dict[str, LiveEngine] = {}
         self.tasks: Dict[str, asyncio.Task] = {}
         # Общий WebSocket клиент для всех пар
-        self._ws_client: Optional[MEXCWebSocketClient] = None
+        self._ws_client = None
         self._ws_task: Optional[asyncio.Task] = None
     
-    def _ensure_ws_client(self) -> MEXCWebSocketClient:
+    def _ensure_ws_client(self):
         """Создаёт WS клиент при первом использовании (lazy init)."""
         if self._ws_client is None:
-            self._ws_client = MEXCWebSocketClient()
-            logger.info("Создан общий WebSocket клиент для всех пар")
+            exchange = bot_settings.get("exchange", "mexc").lower()
+            if exchange == "hyperliquid":
+                self._ws_client = HyperliquidWebSocketClient()
+                logger.info("Создан общий WebSocket клиент Hyperliquid для всех пар")
+            else:
+                self._ws_client = MEXCWebSocketClient()
+                logger.info("Создан общий WebSocket клиент MEXC для всех пар")
         return self._ws_client
     
     def _start_ws_if_needed(self):
@@ -36,7 +43,7 @@ class EngineManager:
             self._ws_task = asyncio.create_task(self._run_ws(ws))
             logger.info("WebSocket connection task запущен")
     
-    async def _run_ws(self, ws_client: MEXCWebSocketClient):
+    async def _run_ws(self, ws_client):
         """Бесконечный цикл WS (единственный на все пары)."""
         try:
             await ws_client.connect()
@@ -92,7 +99,10 @@ class EngineManager:
         
         # Подписываемся на символ (если WS уже подключён)
         if ws_client.ws and ws_client.ws.close_code is None:
-            await ws_client.subscribe_symbol(symbol)
+            try:
+                await ws_client.subscribe_symbol(symbol)
+            except Exception as e:
+                logger.error(f"WS Subscribe Error for {symbol}: {e}")
         
         logger.info(f"Движок для {symbol} успешно запущен (Leverage: {leverage}x)")
         return True

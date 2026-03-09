@@ -5,13 +5,15 @@ from typing import Dict, Any, Optional
 from core.logger import setup_logger
 from core.config import settings
 from core.data.mexc_client import MEXCWebSocketClient
+from core.data.hyperliquid_client import HyperliquidWebSocketClient
 from core.data.candle_builder import CandleBuilder
-from core.data.historical import MEXCHistoricalDownloader
+from core.data.historical import MEXCHistoricalDownloader, HyperliquidHistoricalDownloader
 from core.strategies.base import BaseStrategy
 from core.strategies.trend_pullback import TrendPullbackStrategy
 from core.strategies.breakout import BreakoutStrategy
 from core.strategies.liquidity_sweep import LiquiditySweepStrategy
 from core.execution.mexc_executor import MEXCExecutor
+from core.execution.hyperliquid_executor import HyperliquidExecutor
 from core.risk.manager import RiskManager
 from core.regime.classifier import RegimeClassifier
 from core.ml.ensemble import EnsembleFilter
@@ -33,7 +35,7 @@ class LiveEngine:
                  leverage: int = 1,
                  tg_callback: 'Callable[[str], Awaitable[Optional[int]]]' = None,
                  tg_delete_callback: 'Callable[[int], Awaitable[None]]' = None,
-                 ws_client: 'MEXCWebSocketClient' = None,
+                 ws_client = None,
                  strategy_params: dict = None,
                  max_daily_loss_percent: float = 5.0,
                  enable_gemini: bool = True,
@@ -65,8 +67,15 @@ class LiveEngine:
         self.active_strategy = self.strategies["weak_trend"]
         self.current_regime = "unknown"
         
-        # Компоненты системы
-        self.executor = MEXCExecutor()
+        # Компоненты системы: выбор биржи
+        from bot.settings import bot_settings
+        self.exchange_name = bot_settings.get("exchange", "mexc").lower()
+        if self.exchange_name == "hyperliquid":
+             self.executor = HyperliquidExecutor()
+             self.quote_asset = "USDC"
+        else:
+             self.executor = MEXCExecutor()
+             self.quote_asset = "USDT"
         self.risk_manager = RiskManager(
             risk_per_trade_percent=sp.get("risk_percent", 2.0),
             max_daily_loss_percent=max_daily_loss_percent
@@ -124,8 +133,11 @@ class LiveEngine:
         logger.info(f"Инициализация Live Engine для {self.symbol} ({self.timeframe_minutes}m). Paper Trading: {self.paper_trading}")
         
         # 1. Скачиваем последние N свечей истории
-        # Нужно достаточно свечей для EMA200
-        historical_df = await MEXCHistoricalDownloader.get_klines(self.symbol, self.timeframe_minutes, limit=500)
+        if self.exchange_name == "hyperliquid":
+            historical_df = await HyperliquidHistoricalDownloader.get_klines(self.symbol, self.timeframe_minutes, limit=500)
+        else:
+            historical_df = await MEXCHistoricalDownloader.get_klines(self.symbol, self.timeframe_minutes, limit=500)
+
         if historical_df.empty:
             logger.error("Не удалось скачать исторические данные. Остановка.")
             return False
@@ -147,9 +159,9 @@ class LiveEngine:
         if self.paper_trading:
             # В paper/signals режиме используем виртуальный баланс
             initial_balance = 10000.0
-            logger.info(f"Paper Trading: виртуальный баланс {initial_balance} USDT")
+            logger.info(f"Paper Trading: виртуальный баланс {initial_balance} {self.quote_asset}")
         else:
-            initial_balance = await self.executor.get_balance("USDT")
+            initial_balance = await self.executor.get_balance(self.quote_asset)
         self.risk_manager.start_session(initial_balance)
         
         self.is_ready = True
@@ -458,7 +470,7 @@ class LiveEngine:
                 )
                 self._last_ml_score = None
                 
-            await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [{mode_tag}]**\nПара: `{self.symbol}`\nПричина: `{close_reason}`\n{result_emoji}PnL: `{pnl:.2f} USDT`")
+            await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [{mode_tag}]**\nПара: `{self.symbol}`\nПричина: `{close_reason}`\n{result_emoji}PnL: `{pnl:.2f} {self.quote_asset}`")
             
             if not self.paper_trading:
                 # В Live режиме нужно закрыть позицию на бирже (рыночным ордером)
@@ -492,8 +504,8 @@ class LiveEngine:
         if self.paper_trading:
             current_balance = self.risk_manager.session_start_balance
         else:
-            current_balance = await self.executor.get_balance("USDT")
-        logger.info(f"Обработка сигнала {side}. Текущий баланс: {current_balance} USDT. Плечо: {self.leverage}x")
+            current_balance = await self.executor.get_balance(self.quote_asset)
+        logger.info(f"Обработка сигнала {side}. Текущий баланс: {current_balance} {self.quote_asset}. Плечо: {self.leverage}x")
         
         # Рассчитываем размер через риск-менеджера
         size_info = self.risk_manager.calculate_position_size(current_balance, current_price, stop_loss)
@@ -519,12 +531,12 @@ class LiveEngine:
                 f"🟢 *ПОЗИЦИЯ ОТКРЫТА [PAPER]*\n"
                 f"Пара: `{self.symbol}`\n"
                 f"Направление: `{'🟢LONG🟢' if side == 'BUY' else '🔴SHORT🔴'}`\n"
-                f"Своб. баланс: `{free_balance:.2f} USDT`\n"
-                f"Маржа: `{margin:.2f} USDT` (Плечо {self.leverage}x)\n"
-                f"Объем: `{quote_qty:.2f} USDT`\n"
+                f"Своб. баланс: `{free_balance:.2f} {self.quote_asset}`\n"
+                f"Маржа: `{margin:.2f} {self.quote_asset}` (Плечо {self.leverage}x)\n"
+                f"Объем: `{quote_qty:.2f} {self.quote_asset}`\n"
                 f"Вход: `{current_price:.10f}`\n"
-                f"SL: `{stop_loss:.10f}` (`-{sl_usdt:.2f} USDT`)\n"
-                f"TP: `{take_profit:.10f}` (`+{tp_usdt:.2f} USDT`)",
+                f"SL: `{stop_loss:.10f}` (`-{sl_usdt:.2f} {self.quote_asset}`)\n"
+                f"TP: `{take_profit:.10f}` (`+{tp_usdt:.2f} {self.quote_asset}`)",
                 self.symbol
             )
             self.current_position = {
@@ -570,12 +582,12 @@ class LiveEngine:
                     f"📈 *ПОЗИЦИЯ ОТКРЫТА [LIVE]*\n"
                     f"Пара: `{self.symbol}`\n"
                     f"Направление: `{'🟢LONG🟢' if side == 'BUY' else '🔴SHORT🔴'}`\n"
-                    f"Своб. баланс: `{free_balance:.2f} USDT`\n"
-                    f"Маржа: `{margin:.2f} USDT` (Плечо {self.leverage}x)\n"
-                    f"Объем: `{quote_qty:.2f} USDT`\n"
+                    f"Своб. баланс: `{free_balance:.2f} {self.quote_asset}`\n"
+                    f"Маржа: `{margin:.2f} {self.quote_asset}` (Плечо {self.leverage}x)\n"
+                    f"Объем: `{quote_qty:.2f} {self.quote_asset}`\n"
                     f"Вход: `{current_price:.10f}`\n"
-                    f"SL: `{stop_loss:.10f}` (`-{sl_usdt:.2f} USDT`)\n"
-                    f"TP: `{take_profit:.10f}` (`+{tp_usdt:.2f} USDT`)",
+                    f"SL: `{stop_loss:.10f}` (`-{sl_usdt:.2f} {self.quote_asset}`)\n"
+                    f"TP: `{take_profit:.10f}` (`+{tp_usdt:.2f} {self.quote_asset}`)",
                     self.symbol
                 )
             else:
@@ -630,7 +642,7 @@ class LiveEngine:
             self.ml_filter.report_trade(self._last_ml_score, pnl)
             self._last_ml_score = None
             
-        await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА ВРУЧНУЮ [{mode_tag}]**\nПара: `{self.symbol}`\n{result_emoji}PnL: `{pnl:.2f} USDT`")
+        await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА ВРУЧНУЮ [{mode_tag}]**\nПара: `{self.symbol}`\n{result_emoji}PnL: `{pnl:.2f} {self.quote_asset}`")
         
         if not self.paper_trading:
             close_side = "SELL" if pos["side"] == "BUY" else "BUY"

@@ -8,6 +8,7 @@ class BotSettings:
         if cls._instance is None:
             cls._instance = super(BotSettings, cls).__new__(cls)
             cls._instance.config: Dict[str, Any] = {
+                "exchange": "mexc",      # mexc / hyperliquid
                 "mode": "paper",  # paper / live / signals
                 "risk_percent": 2.5,
                 "max_daily_loss_percent": 5.0,  # Макс. дневная просадка %

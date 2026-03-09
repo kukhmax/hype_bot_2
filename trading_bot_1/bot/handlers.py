@@ -187,13 +187,33 @@ async def cmd_status(message: Message, state: FSMContext):
 @router.message(F.text == "⚙️ Настройки")
 async def cmd_settings(message: Message, state: FSMContext):
     await delete_user_msg(message)
+    current_exchange = bot_settings.get("exchange", "mexc").upper()
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"Биржа: {current_exchange}", callback_data="toggle_exchange")],
         [InlineKeyboardButton(text="PAPER (Тест)", callback_data="mode_paper"), InlineKeyboardButton(text="LIVE (Бой)", callback_data="mode_live")],
         [InlineKeyboardButton(text="SIGNALS (Только сигналы)", callback_data="mode_signals")]
     ])
     msg = await message.answer("🛠 *НАСТРОЙКИ*\n\nВыберите Режим работы бота:", reply_markup=kb)
     await state.set_state(SettingsFSM.waiting_for_mode)
     await save_prompt_id(msg, state)
+
+@router.callback_query(SettingsFSM.waiting_for_mode, F.data == "toggle_exchange")
+async def process_toggle_exchange(callback: CallbackQuery, state: FSMContext):
+    current = bot_settings.get("exchange", "mexc")
+    new_exchange = "hyperliquid" if current == "mexc" else "mexc"
+    bot_settings["exchange"] = new_exchange
+    logger.info(f"Пользователь {callback.from_user.id} изменил биржу на: {new_exchange}")
+    
+    current_exchange = new_exchange.upper()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"Биржа: {current_exchange}", callback_data="toggle_exchange")],
+        [InlineKeyboardButton(text="PAPER (Тест)", callback_data="mode_paper"), InlineKeyboardButton(text="LIVE (Бой)", callback_data="mode_live")],
+        [InlineKeyboardButton(text="SIGNALS (Только сигналы)", callback_data="mode_signals")]
+    ])
+    
+    with suppress(TelegramBadRequest):
+         await callback.message.edit_reply_markup(reply_markup=kb)
+    await callback.answer(f"Биржа изменена на {current_exchange}")
 
 @router.callback_query(SettingsFSM.waiting_for_mode, F.data.startswith("mode_"))
 async def process_mode(callback: CallbackQuery, state: FSMContext):
@@ -281,6 +301,7 @@ async def process_gemini_toggle(callback: CallbackQuery, state: FSMContext):
     
     await callback.message.answer(
         f"✅ **Настройки сохранены!**\n\n"
+        f"Биржа: `{bot_settings.get('exchange', 'mexc').upper()}`\n"
         f"Режим: `{bot_settings['mode'].upper()}`\n"
         f"Риск на сделку: `{bot_settings['risk_percent']}%`\n"
         f"Макс. дневная просадка: `{bot_settings['max_daily_loss_percent']}%`\n"
