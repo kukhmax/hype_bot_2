@@ -398,7 +398,7 @@ class LiveEngine:
             pos["initial_sl"] = pos["stop_loss"]
             
         r_dist = abs(pos["entry_price"] - pos["initial_sl"])
-        one_tenth_tp = (pos["take_profit"] - pos["entry_price"])/10 if pos.get("take_profit") else r_dist / 10
+        one_tenth_tp = abs((pos["take_profit"] - pos["entry_price"])/10)
         
         if pos["side"] == "BUY":
             # Перевод в безубыток при достижении 1R
@@ -425,7 +425,7 @@ class LiveEngine:
                 if pos["stop_loss"] > pos["entry_price"]:
                     pos["stop_loss"] = pos["entry_price"] - one_tenth_tp
                     logger.info(f"Trailing Stop (SHORT): Стоп переведен в безубыток ({pos['stop_loss']})")
-                    await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']:.10f}`")
+                    await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']:.4f}`")
 
             if candle["high"] >= pos["stop_loss"]:
                 close_price = pos["stop_loss"]
@@ -593,17 +593,22 @@ class LiveEngine:
             else:
                 logger.error(f"[LIVE TRADING] Ошибка открытия ордера: {result}")
 
+    def get_current_price(self) -> Optional[float]:
+        """Безопасное получение последней известной цены."""
+        if getattr(self, 'candle_builder', None) and self.candle_builder.current_candle:
+            return self.candle_builder.current_candle["close"]
+        if not self.df.empty:
+            return self.df.iloc[-1]["close"]
+        return None
+
     async def manual_close_position(self) -> bool:
         """Ручное закрытие позиции (по кнопке)."""
         pos = self.current_position
         if not pos:
+            logger.warning(f"[{self.symbol}] Попытка закрыть несуществующую позицию.")
             return False
             
-        current_price = None
-        if getattr(self, 'candle_builder', None) and self.candle_builder.current_candle:
-            current_price = self.candle_builder.current_candle["close"]
-        elif hasattr(self, 'df') and not self.df.empty:
-            current_price = self.df.iloc[-1]["close"]
+        current_price = self.get_current_price()
             
         if not current_price:
             logger.error(f"[{self.symbol}] Не удалось определить текущую цену для ручного закрытия")

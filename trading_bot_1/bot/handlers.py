@@ -891,15 +891,21 @@ async def process_close_position(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(f"⚠️ Движок для пары {symbol} не запущен или позиция уже закрыта.", reply_markup=get_delete_kb())
         return
         
-    engine = _engine_manager.engines[symbol]
-    if not engine.current_position:
-        await callback.message.answer(f"⚠️ Нет активной позиции по {symbol}.", reply_markup=get_delete_kb())
-        return
-        
-    await callback.message.answer(f"⏳ Закрываю позицию {symbol} вручную...")
-    success = await engine.manual_close_position()
-    if not success:
-         await callback.message.answer(f"❌ Не удалось закрыть позицию {symbol}. Проверьте логи.", reply_markup=get_delete_kb())
+    try:
+        await callback.answer("⏳ Закрываю...")
+        engine = _engine_manager.engines[symbol]
+        if not engine.current_position:
+            await callback.message.answer(f"⚠️ Нет активной позиции по {symbol}.", reply_markup=get_delete_kb())
+            return
+            
+        success = await engine.manual_close_position()
+        if success:
+             await callback.message.answer(f"✅ Позиция {symbol} успешно закрыта вручную.")
+        else:
+             await callback.message.answer(f"❌ Не удалось закрыть позицию {symbol}. Проверьте доступность биржи или наличие данных в логах.", reply_markup=get_delete_kb())
+    except Exception as e:
+        logger.error(f"Ошибка при ручном закрытии {symbol}: {e}", exc_info=True)
+        await callback.message.answer(f"❌ Критическая ошибка при закрытии {symbol}: {e}", reply_markup=get_delete_kb())
          
          
 @router.callback_query(F.data.startswith("edit_sl_"))
@@ -919,9 +925,13 @@ async def process_edit_sl(callback: CallbackQuery, state: FSMContext):
         return
         
     current_sl = engine.current_position.get("stop_loss", 0)
+    price = engine.get_current_price()
+    price_str = f" (Цена: `{price:.10f}`)" if price else ""
+    
     msg = await callback.message.answer(
-        f"Текущий SL для `{symbol}`: `{current_sl:.10f}`\n\n"
-        f"Введите новое значение Stop Loss (в формате числа, например `0.54321`):"
+        f"📏 **Изменение SL для** `{symbol}`\n"
+        f"Текущий SL: `{current_sl:.10f}`{price_str}\n\n"
+        f"Введите новое значение Stop Loss:"
     )
     
     await state.update_data(edit_pos_symbol=symbol)
@@ -977,12 +987,16 @@ async def process_edit_tp(callback: CallbackQuery, state: FSMContext):
         return
         
     current_tp = engine.current_position.get("take_profit", "Не установлен")
-    if isinstance(current_tp, float):
-        current_tp = f"{current_tp:.10f}"
+    if isinstance(current_tp, (float, int)):
+        current_tp = f"`{current_tp:.10f}`"
         
+    price = engine.get_current_price()
+    price_str = f" (Цена: `{price:.10f}`)" if price else ""
+    
     msg = await callback.message.answer(
-        f"Текущий TP для `{symbol}`: `{current_tp}`\n\n"
-        f"Введите новое значение Take Profit (в формате числа):"
+        f"🎯 **Изменение TP для** `{symbol}`\n"
+        f"Текущий TP: {current_tp}{price_str}\n\n"
+        f"Введите новое значение Take Profit:"
     )
     
     await state.update_data(edit_pos_symbol=symbol)
