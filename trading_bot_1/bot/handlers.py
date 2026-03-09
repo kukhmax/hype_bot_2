@@ -926,7 +926,7 @@ async def process_edit_sl(callback: CallbackQuery, state: FSMContext):
         
     current_sl = engine.current_position.get("stop_loss", 0)
     price = engine.get_current_price()
-    price_str = f" (Цена: `{price:.10f}`)" if price else ""
+    price_str = f" \n(Текущая цена: `{price:.10f}`)" if price else ""
     
     msg = await callback.message.answer(
         f"📏 **Изменение SL для** `{symbol}`\n"
@@ -991,11 +991,11 @@ async def process_edit_tp(callback: CallbackQuery, state: FSMContext):
         current_tp = f"`{current_tp:.10f}`"
         
     price = engine.get_current_price()
-    price_str = f" (Цена: `{price:.10f}`)" if price else ""
+    price_str = f" (Текущая цена: `{price:.10f}`)" if price else ""
     
     msg = await callback.message.answer(
         f"🎯 **Изменение TP для** `{symbol}`\n"
-        f"Текущий TP: {current_tp}{price_str}\n\n"
+        f"Текущий TP: {current_tp}\n{price_str}\n\n"
         f"Введите новое значение Take Profit:"
     )
     
