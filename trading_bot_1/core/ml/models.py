@@ -15,7 +15,8 @@ logger = setup_logger("ml_models")
 
 # Ленивый импорт scikit-learn для мягкой деградации
 try:
-    from sklearn.linear_model import LogisticRegression
+    from sklearn.ensemble import GradientBoostingClassifier
+    from sklearn.model_selection import cross_val_score
     import joblib
     SKLEARN_AVAILABLE = True
 except ImportError:
@@ -91,20 +92,52 @@ class BaseScorer:
             return
 
         try:
-            self.model = LogisticRegression(
-                max_iter=500,
-                C=1.0,
-                class_weight="balanced",  # Балансируем по классам
+            # GradientBoosting лучше LogisticRegression для малых нелинейных датасетов
+            self.model = GradientBoostingClassifier(
+                n_estimators=100,
+                max_depth=3,
+                learning_rate=0.1,
+                min_samples_split=5,
+                min_samples_leaf=2,
+                subsample=0.8,
                 random_state=42,
             )
-            self.model.fit(X, y)
+            
+            # Применяем sample_weight для балансировки классов
+            sample_weights = self._compute_class_weights(y)
+            self.model.fit(X, y, sample_weight=sample_weights)
             self.is_trained = True
             
-            train_accuracy = self.model.score(X, y)
-            logger.info(f"[{self.name}] Модель обучена. Точность на train: {train_accuracy:.2%}. Сэмплов: {len(X)}")
+            # Cross-validation для реалистичной оценки
+            if len(X) >= 30:
+                cv_folds = min(3, len(unique_classes))
+                cv_scores = cross_val_score(self.model, X, y, cv=cv_folds, scoring='accuracy')
+                cv_mean = cv_scores.mean()
+                cv_std = cv_scores.std()
+                logger.info(
+                    f"[{self.name}] Модель обучена. CV accuracy: {cv_mean:.2%} ± {cv_std:.2%}. "
+                    f"Сэмплов: {len(X)} (win={sum(y)}, loss={len(y)-sum(y)})"
+                )
+            else:
+                train_accuracy = self.model.score(X, y)
+                logger.info(
+                    f"[{self.name}] Модель обучена. Train accuracy: {train_accuracy:.2%}. "
+                    f"Сэмплов: {len(X)} (win={sum(y)}, loss={len(y)-sum(y)})"
+                )
         except Exception as e:
             logger.error(f"[{self.name}] Ошибка обучения: {e}")
             self.is_trained = False
+
+    @staticmethod
+    def _compute_class_weights(y: np.ndarray) -> np.ndarray:
+        """Вычислить веса сэмплов для балансировки классов."""
+        unique, counts = np.unique(y, return_counts=True)
+        total = len(y)
+        weights = np.ones(total)
+        class_weights = {cls: total / (len(unique) * count) for cls, count in zip(unique, counts)}
+        for i, label in enumerate(y):
+            weights[i] = class_weights.get(label, 1.0)
+        return weights
 
     def save(self, filepath: str):
         """Сохранить модель в .pkl файл."""

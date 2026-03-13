@@ -3,6 +3,9 @@ Ensemble Filter — оркестрация 3 ML-скореров и принят
 
 Собирает скоры от MomentumScorer, VolatilityScorer, StructureScorer,
 вычисляет взвешенное среднее и сравнивает с динамическим порогом.
+
+Дополнительно использует TradeHistoryAnalyzer для блокировки
+«токсичных» комбинаций стратегия+режим+символ на основе реальных сделок.
 """
 
 import os
@@ -14,6 +17,7 @@ from core.logger import setup_logger
 from core.ml.features import MLFeatureEngineer
 from core.ml.models import MomentumScorer, VolatilityScorer, StructureScorer
 from core.ml.threshold import DynamicThreshold
+from core.ml.trade_analyzer import TradeHistoryAnalyzer, TradePatternFeatures
 
 logger = setup_logger("ml_ensemble")
 
@@ -39,7 +43,8 @@ class EnsembleFilter:
         w_volatility: float = 0.30,
         w_structure: float = 0.35,
         threshold_window: int = 100,
-        base_threshold: float = 0.55,
+        base_threshold: float = 0.60,
+        csv_path: str = "trades_history.csv",
     ):
         self.weights = {
             "momentum": w_momentum,
@@ -52,11 +57,25 @@ class EnsembleFilter:
         self.volatility = VolatilityScorer()
         self.structure = StructureScorer()
 
-        # Динамический порог
+        # Динамический порог (повышен с 0.55 → 0.60 при WR ~27%)
         self.threshold = DynamicThreshold(
             window=threshold_window,
             base_threshold=base_threshold,
         )
+
+        # Анализатор истории реальных сделок
+        self.trade_analyzer = TradeHistoryAnalyzer(csv_path=csv_path)
+        summary = self.trade_analyzer.get_summary()
+        if summary["total"] > 0:
+            logger.info(
+                f"TradeHistoryAnalyzer загружен: {summary['total']} сделок, "
+                f"WR={summary['winrate']}%, PnL={summary['total_pnl']}"
+            )
+            if summary.get("worst_combo"):
+                logger.warning(
+                    f"Худшая комбинация: {summary['worst_combo']} "
+                    f"(WR={summary['worst_combo_wr']}%)"
+                )
 
         # Попробуем загрузить сохранённые модели
         self._load_models()
@@ -90,15 +109,19 @@ class EnsembleFilter:
         ])
 
     def evaluate(
-        self, df: pd.DataFrame, current_idx: int, signal_direction: str
+        self, df: pd.DataFrame, current_idx: int, signal_direction: str,
+        strategy_name: str = "", regime: str = "", symbol: str = ""
     ) -> Tuple[bool, float, Dict]:
         """
-        Оценить сигнал ансамблем.
+        Оценить сигнал ансамблем с учётом истории реальных сделок.
         
         Args:
             df: DataFrame с базовыми индикаторами
             current_idx: индекс текущей свечи
             signal_direction: "BUY" или "SELL"
+            strategy_name: название стратегии (для trade history анализа)
+            regime: текущий режим рынка (для trade history анализа)
+            symbol: торговый символ (для trade history анализа)
             
         Returns:
             Tuple[is_passed, ensemble_score, details]:
@@ -106,6 +129,26 @@ class EnsembleFilter:
                 - ensemble_score: float ∈ [0, 1]
                 - details: dict с подробностями (скоры моделей, порог)
         """
+        # ═══════════════════════════════════════════
+        # 0. Проверка по истории реальных сделок (до ML)
+        # ═══════════════════════════════════════════
+        if strategy_name and regime and symbol:
+            should_block, block_reason = self.trade_analyzer.should_block_signal(
+                strategy_name, regime, symbol
+            )
+            if should_block:
+                logger.warning(
+                    f"[ML ENSEMBLE] ❌ BLOCK (Trade History) | {signal_direction} "
+                    f"{strategy_name}/{regime}/{symbol}: {block_reason}"
+                )
+                return False, 0.0, {
+                    "blocked_by_history": True,
+                    "block_reason": block_reason,
+                    "ensemble_score": 0.0,
+                    "threshold": self.threshold.get_threshold(),
+                    "passed": False,
+                }
+
         # Если ни одна модель не обучена — пропускаем все
         if not self.is_ready:
             logger.info("[ML ENSEMBLE] FALLBACK — модели не обучены, сигнал пропущен без фильтрации")
@@ -130,6 +173,24 @@ class EnsembleFilter:
             + self.weights["volatility"] * v_score
             + self.weights["structure"] * s_score
         )
+
+        # 3.5 Trade-pattern штраф: снижаем score если история плохая
+        if strategy_name and regime and symbol:
+            tp_features = TradePatternFeatures.compute(
+                self.trade_analyzer, strategy_name, regime, symbol
+            )
+            sr_wr = tp_features["strategy_regime_winrate"]
+            streak_penalty = tp_features["losing_streak_norm"] * 0.15  # до -0.15
+            wr_penalty = max(0.0, (0.5 - sr_wr)) * 0.3  # до -0.15 при WR=0%
+            
+            total_penalty = streak_penalty + wr_penalty
+            if total_penalty > 0:
+                ensemble_score = max(0.0, ensemble_score - total_penalty)
+                logger.debug(
+                    f"[ML ENSEMBLE] Trade-pattern penalty: -{total_penalty:.3f} "
+                    f"(streak={streak_penalty:.3f}, wr={wr_penalty:.3f}) "
+                    f"→ adjusted score={ensemble_score:.3f}"
+                )
 
         # 4. Динамический порог
         current_threshold = self.threshold.get_threshold()
@@ -180,9 +241,25 @@ class EnsembleFilter:
 
         return is_passed, ensemble_score, details
 
-    def report_trade(self, score: float, pnl: float):
-        """Зарегистрировать результат сделки для адаптации порога."""
+    def report_trade(self, score: float, pnl: float,
+                     strategy: str = "", regime: str = "",
+                     symbol: str = "", side: str = "", reason: str = ""):
+        """Зарегистрировать результат сделки для адаптации порога и trade history."""
         self.threshold.report_trade(score, pnl)
+        
+        # Обновляем TradeHistoryAnalyzer (для блокировки в следующих сигналах)
+        if strategy and symbol:
+            from datetime import datetime
+            self.trade_analyzer.update({
+                "timestamp": int(datetime.now().timestamp() * 1000),
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "symbol": symbol,
+                "strategy": strategy,
+                "regime": regime,
+                "side": side,
+                "pnl": pnl,
+                "reason": reason,
+            })
 
     def save_models(self):
         """Сохранить все обученные модели."""

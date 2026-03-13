@@ -304,7 +304,10 @@ class LiveEngine:
                 if self.ml_filter is not None:
                     logger.info(f"[{self.symbol}] ML фильтр: оценка сигнала {direction}...")
                     ml_passed, ml_score, ml_details = self.ml_filter.evaluate(
-                        self.df, current_idx, direction
+                        self.df, current_idx, direction,
+                        strategy_name=strategy_name,
+                        regime=self.current_regime,
+                        symbol=self.symbol
                     )
                     self._last_ml_score = ml_score
                     
@@ -316,6 +319,12 @@ class LiveEngine:
                             f"🧠 *ML АНСАМБЛЬ {ml_verdict}*  {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}    `{self.symbol}`\n\n"
                             f"⚠️ *Обучение не завершено*\n"
                             f"Сигнал одобрен автоматически (Fallback-режим)."
+                        )
+                    elif ml_details.get("blocked_by_history"):
+                        ml_text = (
+                            f"🧠 *ML АНСАМБЛЬ {ml_verdict}*  {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}    `{self.symbol}`\n\n"
+                            f"📊 *Заблокировано историей сделок:*\n"
+                            f"`{ml_details.get('block_reason', 'N/A')}`"
                         )
                     else:
                         ml_text = (
@@ -338,7 +347,9 @@ class LiveEngine:
                     
                     if not ml_passed:
                         # Запускаем отложенное удаление сообщений (сетап + ответ ML)
-                        asyncio.create_task(self._delayed_delete([setup_msg_id, ml_msg_id], delay_seconds=10))
+                        # Если заблокировано историей сделок — удаляем быстрее
+                        delete_delay = 5 if ml_details.get("blocked_by_history") else 10
+                        asyncio.create_task(self._delayed_delete([setup_msg_id, ml_msg_id], delay_seconds=delete_delay))
                         return
                 
                 # ═══════════════════════════════════════════
@@ -462,7 +473,14 @@ class LiveEngine:
             # Отчёт в ML Ensemble (для адаптации Dynamic Threshold)
             result_emoji = "🟢" if pnl > 0 else "🔴"
             if self.ml_filter is not None and self._last_ml_score is not None:
-                self.ml_filter.report_trade(self._last_ml_score, pnl)
+                self.ml_filter.report_trade(
+                    self._last_ml_score, pnl,
+                    strategy=self.active_strategy.__class__.__name__,
+                    regime=self.current_regime,
+                    symbol=self.symbol,
+                    side=pos["side"],
+                    reason=close_reason
+                )
                 
                 logger.info(
                     f"[{self.symbol}] ML Threshold обновлён: {result_emoji} PnL={pnl:.2f} score={self._last_ml_score:.3f} "
@@ -644,7 +662,14 @@ class LiveEngine:
         # Интеграция с ML 
         result_emoji = "🟢" if pnl > 0 else "🔴"
         if self.ml_filter is not None and self._last_ml_score is not None:
-            self.ml_filter.report_trade(self._last_ml_score, pnl)
+            self.ml_filter.report_trade(
+                self._last_ml_score, pnl,
+                strategy=self.active_strategy.__class__.__name__,
+                regime=self.current_regime,
+                symbol=self.symbol,
+                side=pos["side"],
+                reason="MANUAL"
+            )
             self._last_ml_score = None
             
         await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА ВРУЧНУЮ [{mode_tag}]**\nПара: `{self.symbol}`\n{result_emoji}PnL: `{pnl:.2f} {self.quote_asset}`")
