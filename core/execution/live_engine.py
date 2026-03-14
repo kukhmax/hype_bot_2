@@ -404,6 +404,13 @@ class LiveEngine:
         closed = False
         pnl = 0.0
         
+        try:
+            current_price = self.get_current_price()
+        except Exception as e:
+            logger.error(f"[{self.symbol}] Ошибка получения текущей цены: {e}")
+            current_price = 0.0
+        
+        
         # Логика Trailing Stop (перевод в БУ при достижении 1R)
         if "initial_sl" not in pos:
             pos["initial_sl"] = pos["stop_loss"]
@@ -413,12 +420,23 @@ class LiveEngine:
         
         if pos["side"] == "BUY":
             # Перевод в безубыток при достижении 1R
-            if r_dist > 0 and candle["high"] >= pos["entry_price"] + r_dist: 
+            if r_dist > 0 and candle["high"] >= pos["entry_price"] + r_dist:
                 if pos["stop_loss"] < pos["entry_price"]:
                     pos["stop_loss"] = pos["entry_price"] + one_tenth_tp
                     logger.info(f"Trailing Stop (LONG): Стоп переведен в безубыток ({pos['stop_loss']})")
                     await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (LONG) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']:.4f}`")
+                if current_price:
+                    if current_price >= pos["take_profit"] + one_tenth_tp / 2:
+                        pos["take_profit"] = current_price + r_dist
+                        logger.info(f"Trailing Take Profit (LONG): Новый тейк ({pos['take_profit']})")
+                        await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (LONG)\nНовый тейк: `{pos['take_profit']:.4f}`")
+
+                    if pos["stop_loss"] > pos["entry_price"] + one_tenth_tp and current_price < pos["stop_loss"] + r_dist:
+                        pos["stop_loss"] = current_price - r_dist
+                        logger.info(f"Trailing Stop (LONG): Стоп переведен в безубыток ({pos['stop_loss']})")
+                        await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (LONG) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']:.4f}`")
                     
+
             if candle["low"] <= pos["stop_loss"]:
                 close_price = pos["stop_loss"]
                 close_reason = "SL"
@@ -437,6 +455,16 @@ class LiveEngine:
                     pos["stop_loss"] = pos["entry_price"] - one_tenth_tp
                     logger.info(f"Trailing Stop (SHORT): Стоп переведен в безубыток ({pos['stop_loss']})")
                     await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']:.4f}`")
+                if current_price:
+                    if current_price <= pos["take_profit"] - one_tenth_tp / 2:
+                        pos["take_profit"] = current_price - r_dist
+                        logger.info(f"Trailing Take Profit (SHORT): Новый тейк ({pos['take_profit']})")
+                        await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT)\nНовый тейк: `{pos['take_profit']:.4f}`")
+                        
+                    if pos["stop_loss"] < pos["entry_price"] - one_tenth_tp and current_price > pos["stop_loss"] - r_dist:
+                        pos["stop_loss"] = current_price + r_dist
+                        logger.info(f"Trailing Stop (SHORT): Стоп переведен в безубыток ({pos['stop_loss']})")
+                        await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']:.4f}`")
 
             if candle["high"] >= pos["stop_loss"]:
                 close_price = pos["stop_loss"]
