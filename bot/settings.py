@@ -12,10 +12,11 @@ class BotSettings:
                 "mode": "paper",  # paper / live / signals
                 "risk_percent": 2.5,
                 "max_daily_loss_percent": 5.0,  # Макс. дневная просадка %
+                "leverage": 20,                  # Глобальное кредитное плечо для всех пар
                 "enable_gemini": True,           # Подтверждение ИИ Gemini
-                # Пары с индивидуальными настройками: {symbol: {tf, leverage}}
+                # Пары с индивидуальными настройками: {symbol: {tf}}
                 "pairs": {
-                    "SOL_USDT": {"tf": 5, "leverage": 20}
+                    "SOL_USDT": {"tf": 5}
                 },
                 # Параметры стратегий (можно менять из Telegram)
                 "strategy_params": {

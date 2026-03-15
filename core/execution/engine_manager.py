@@ -73,7 +73,16 @@ class EngineManager:
         # Получаем/создаём общий WS клиент
         ws_client = self._ensure_ws_client()
         
-        engine = LiveEngine(
+        # Выбор класса движка
+        from bot.settings import bot_settings
+        exchange = bot_settings.get("exchange", "mexc").lower()
+        if exchange == "mexc" and not paper_trading:
+            from core.execution.mexc_live_engine import MEXCLiveEngine
+            engine_cls = MEXCLiveEngine
+        else:
+            engine_cls = LiveEngine
+
+        engine = engine_cls(
             symbol=symbol,
             timeframe_minutes=timeframe,
             paper_trading=paper_trading,

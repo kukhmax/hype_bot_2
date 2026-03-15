@@ -6,6 +6,7 @@ from core.strategies.trend_pullback import TrendPullbackStrategy
 from core.strategies.breakout import BreakoutStrategy
 from core.strategies.liquidity_sweep import LiquiditySweepStrategy
 from core.execution.live_engine import LiveEngine
+from core.execution.mexc_live_engine import MEXCLiveEngine
 
 logger = setup_logger("run_bot")
 
@@ -27,7 +28,13 @@ async def main():
     logger.info("Стратегия будет выбираться АВТОМАТИЧЕСКИ благодаря Regime Classifier!")
     
     # 2. Инициализируем движок
-    engine = LiveEngine(symbol=args.symbol, timeframe_minutes=args.tf, paper_trading=paper_trading)
+    from bot.settings import bot_settings
+    exchange = bot_settings.get("exchange", "mexc").lower()
+    
+    if exchange == "mexc" and not paper_trading:
+        engine = MEXCLiveEngine(symbol=args.symbol, timeframe_minutes=args.tf, paper_trading=paper_trading)
+    else:
+        engine = LiveEngine(symbol=args.symbol, timeframe_minutes=args.tf, paper_trading=paper_trading)
     
     is_ready = await engine.initialize()
     if not is_ready:

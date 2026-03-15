@@ -78,7 +78,7 @@ def _pairs_summary() -> str:
         return "Пары не добавлены"
     lines = []
     for sym, cfg in pairs.items():
-        lines.append(f"• `{sym}` — {cfg['tf']}m, {cfg['leverage']}x")
+        lines.append(f"• `{sym}` — {cfg['tf']}m")
     return "\n".join(lines)
 
 
@@ -136,7 +136,7 @@ async def cmd_status(message: Message, state: FSMContext):
                 pos_text = "—"
                 
             lines.append(
-                f"{pos_icon} `{s['symbol']}` x {s['leverage']} | "
+                f"{pos_icon} `{s['symbol']}` x {bot_settings.get('leverage', 1)} | "
                 f"`{s['tf']}m` | "
                 f"`{s['regime']}` | "
                 f"`{s['strategy']}` | "
@@ -159,8 +159,9 @@ async def cmd_status(message: Message, state: FSMContext):
         max_loss_limit = bot_settings.get('max_daily_loss_percent', 5.0)
         
         lines.append(
-            f"\n⚙️ Режим: `{bot_settings['mode'].upper()}` | "
+            f"⚙️ Режим: `{bot_settings['mode'].upper()}` | "
             f"Риск: `{bot_settings['risk_percent']}%` | "
+            f"Плечо: `{bot_settings.get('leverage', 1)}x` | "
             f"Просадка: `{max_drawdown:.1f}% ({max_loss_limit}%)` | "
             f"AI: {gemini_icon}"
         )
@@ -174,6 +175,7 @@ async def cmd_status(message: Message, state: FSMContext):
             f"Движок: `🛑 Остановлен`\n"
             f"Режим: `{bot_settings['mode'].upper()}`\n"
             f"Риск: `{bot_settings['risk_percent']}%`\n"
+            f"Плечо: `{bot_settings.get('leverage', 1)}x`\n"
             f"Просадка: `0.0% ({max_loss_limit}%)`\n"
             f"Gemini AI: {gemini_icon}\n\n"
             f"**Пары:**\n{_pairs_summary()}"
@@ -246,6 +248,31 @@ async def process_risk(message: Message, state: FSMContext):
     current_daily = bot_settings.get("max_daily_loss_percent", 5.0)
     msg = await message.answer(
         f"⏳ Риск: `{risk}%`\n\n"
+        f"Введите кредитное **Плечо** (например `10` или `20`):\n"
+    )
+    await state.set_state(SettingsFSM.waiting_for_leverage)
+    await save_prompt_id(msg, state)
+
+@router.message(SettingsFSM.waiting_for_leverage)
+async def process_global_leverage(message: Message, state: FSMContext):
+    await delete_user_msg(message)
+    await delete_previous_prompt(message, state)
+    
+    try:
+        leverage = int(message.text.strip())
+        if leverage <= 0 or leverage > 200:
+            raise ValueError
+    except ValueError:
+        msg = await message.answer("Некорректное значение. Введите число от 1 до 200 (например, `20`).")
+        await save_prompt_id(msg, state)
+        return
+
+    bot_settings["leverage"] = leverage
+    logger.info(f"Пользователь {message.from_user.id} установил глобальное плечо: {leverage}x")
+    
+    current_daily = bot_settings.get("max_daily_loss_percent", 5.0)
+    msg = await message.answer(
+        f"⏳ Плечо: `{leverage}x`\n\n"
         f"Введите максимальную **дневную просадку** в % (текущая: `{current_daily}%`):\n"
         f"_(например `5.0` — бот остановит торговлю при убытке 5% от баланса за день)_"
     )
@@ -303,6 +330,7 @@ async def process_gemini_toggle(callback: CallbackQuery, state: FSMContext):
         f"✅ **Настройки сохранены!**\n\n"
         f"Биржа: `{bot_settings.get('exchange', 'mexc').upper()}`\n"
         f"Режим: `{bot_settings['mode'].upper()}`\n"
+        f"Плечо: `{bot_settings.get('leverage', 1)}x`\n"
         f"Риск на сделку: `{bot_settings['risk_percent']}%`\n"
         f"Макс. дневная просадка: `{bot_settings['max_daily_loss_percent']}%`\n"
         f"Gemini AI: {gemini_text}\n\n"
@@ -362,31 +390,16 @@ async def process_pair_tf(callback: CallbackQuery, state: FSMContext):
     await delete_previous_prompt(callback.message, state)
     
     tf = int(callback.data.replace("tf_", ""))
-    await state.update_data(new_tf=tf)
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1x", callback_data="lev_1"), InlineKeyboardButton(text="3x", callback_data="lev_3"), InlineKeyboardButton(text="5x", callback_data="lev_5")],
-        [InlineKeyboardButton(text="10x", callback_data="lev_10"), InlineKeyboardButton(text="20x", callback_data="lev_20")]
-    ])
-    msg = await callback.message.answer(f"Таймфрейм: `{tf}m`\n\nВыберите кредитное плечо:", reply_markup=kb)
-    await state.set_state(PairFSM.waiting_for_leverage)
-    await save_prompt_id(msg, state)
-
-@router.callback_query(PairFSM.waiting_for_leverage, F.data.startswith("lev_"))
-async def process_pair_leverage(callback: CallbackQuery, state: FSMContext):
-    await delete_previous_prompt(callback.message, state)
     
-    lev = int(callback.data.replace("lev_", ""))
-
     data = await state.get_data()
     symbol = data["new_symbol"]
-    tf = data["new_tf"]
 
-    bot_settings["pairs"][symbol] = {"tf": tf, "leverage": lev}
+    # Сохраняем без плеча, плечо теперь глобальное
+    bot_settings["pairs"][symbol] = {"tf": tf}
 
     await callback.message.answer(
         f"✅ Пара `{symbol}` добавлена!\n"
-        f"Таймфрейм: `{tf}m` | Плечо: `{lev}x`\n\n"
+        f"Таймфрейм: `{tf}m`\n\n"
         f"**Все пары:**\n{_pairs_summary()}",
         reply_markup=get_delete_kb()
     )
@@ -519,6 +532,26 @@ async def send_tg_position_notification(text: str, symbol: str) -> Optional[int]
                 logger.error(f"Ошибка отправки позиции в Telegram (plain): {e2}")
     return None
 
+@router.callback_query(F.data.startswith("open_mexc_"))
+async def process_open_mexc_signal(callback: CallbackQuery):
+    """Обработчик кнопки 'Открыть позицию MEXC' в режиме SIGNALS."""
+    symbol = callback.data.replace("open_mexc_", "")
+    
+    if not _engine_manager or symbol not in _engine_manager.engines:
+        await callback.answer("Движок для этой пары не запущен!", show_alert=True)
+        return
+        
+    engine = _engine_manager.engines[symbol]
+    
+    if hasattr(engine, 'execute_pending_signal'):
+        await callback.answer("Отправка сигнала на MEXC...")
+        try:
+            await engine.execute_pending_signal()
+        except Exception as e:
+            await callback.message.answer(f"Ошибка при выставлении ордера: {e}")
+    else:
+        await callback.answer("Этот режим не поддерживает ручное открытие (нужен MEXCLiveEngine).", show_alert=True)
+
 @router.message(F.text == "🚀 ЗАПУСК БОТА")
 async def cmd_start_bot(message: Message, state: FSMContext):
     await delete_user_msg(message)
@@ -541,7 +574,7 @@ async def cmd_start_bot(message: Message, state: FSMContext):
 
     lines = [f"🚀 Инициализация движков... Режим: `{mode.upper()}`\n"]
     for sym, cfg in pairs.items():
-        lines.append(f"• `{sym}` — {cfg['tf']}m, {cfg['leverage']}x")
+        lines.append(f"• `{sym}` — {cfg['tf']}m")
     await message.answer("\n".join(lines), reply_markup=get_delete_kb())
 
     paper_trading = mode != "live"
@@ -555,7 +588,7 @@ async def cmd_start_bot(message: Message, state: FSMContext):
         ok = await _engine_manager.add_pair(
             symbol=symbol,
             timeframe=cfg["tf"],
-            leverage=cfg["leverage"],
+            leverage=bot_settings.get("leverage", 1),
             paper_trading=paper_trading,
             tg_callback=send_tg_notification,
             tg_delete_callback=delete_tg_notification,
@@ -566,7 +599,7 @@ async def cmd_start_bot(message: Message, state: FSMContext):
         )
         if ok:
             success_count += 1
-            await message.answer(f"✅ `{symbol}` ({cfg['tf']}m, {cfg['leverage']}x) — запущен", reply_markup=get_delete_kb())
+            await message.answer(f"✅ `{symbol}` ({cfg['tf']}m) — запущен", reply_markup=get_delete_kb())
         else:
             await message.answer(f"❌ `{symbol}` — ошибка инициализации", reply_markup=get_delete_kb())
 
