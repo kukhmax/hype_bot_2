@@ -516,7 +516,7 @@ class LiveEngine:
                 )
                 self._last_ml_score = None
                 
-            await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [{mode_tag}]**\nПара: `{self.symbol}`\nПричина: `{close_reason}`\n{result_emoji}PnL: `{pnl:.2f} {self.quote_asset}`")
+            await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [{mode_tag}]**\nПара: `{self.symbol}`   {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}\nЦена входа: `{pos['entry_price']:.4f}`\nTP: `{pos['take_profit']:.4f}`\nSL: `{pos['stop_loss']:.4f}`\nПричина: `{close_reason}`\n{result_emoji}PnL: `{pnl:.2f} {self.quote_asset}`")
             
             if not self.paper_trading:
                 # В Live режиме нужно закрыть позицию на бирже (рыночным ордером)
