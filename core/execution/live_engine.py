@@ -269,6 +269,8 @@ class LiveEngine:
                 sl = signal_data.get('stop_loss', 0)
                 tp = signal_data.get('take_profit', 0)
                 direction = signal_data['signal']
+
+                
                 strategy_name = self.active_strategy.__class__.__name__
                 
                 # Позиция цены относительно EMA
@@ -516,7 +518,7 @@ class LiveEngine:
                 )
                 self._last_ml_score = None
                 
-            await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [{mode_tag}]**\nПара: `{self.symbol}`   {'🟢LONG🟢' if direction == 'BUY' else '🔴SHORT🔴'}\nЦена входа: `{pos['entry_price']:.4f}`\nTP: `{pos['take_profit']:.4f}`\nSL: `{pos['stop_loss']:.4f}`\nПричина: `{close_reason}`\n{result_emoji}PnL: `{pnl:.2f} {self.quote_asset}`")
+            await self._notify(f"🏁 **СДЕЛКА ЗАКРЫТА [{mode_tag}]**\nПара: `{self.symbol}`   {'🟢LONG🟢' if pos['side'] == 'BUY' else '🔴SHORT🔴'}\nЦена входа: `{pos['entry_price']:.4f}`\nTP: `{pos['take_profit']:.4f}`\nSL: `{pos['stop_loss']:.4f}`\nПричина: `{close_reason}`\n{result_emoji}PnL: `{pnl:.2f} {self.quote_asset}`")
             
             if not self.paper_trading:
                 # В Live режиме нужно закрыть позицию на бирже (рыночным ордером)
