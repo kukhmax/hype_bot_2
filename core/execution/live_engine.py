@@ -428,12 +428,12 @@ class LiveEngine:
                     logger.info(f"Trailing Stop (LONG): Стоп переведен в безубыток ({pos['stop_loss']})")
                     await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (LONG) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']:.4f}`")
                 if current_price:
-                    if current_price >= pos["take_profit"] + one_tenth_tp:
+                    if current_price >= pos["take_profit"] - one_tenth_tp:
                         pos["take_profit"] = pos["take_profit"] + r_dist
                         logger.info(f"Trailing Take Profit (LONG): Новый тейк ({pos['take_profit']})")
                         await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (LONG)\nНовый тейк: `{pos['take_profit']:.4f}`")
 
-                    if pos["stop_loss"] >= pos["entry_price"] + one_tenth_tp and current_price < pos["stop_loss"] + r_dist:
+                    if pos["stop_loss"] >= pos["entry_price"] + one_tenth_tp and current_price >= pos["stop_loss"] + r_dist:
                         pos["stop_loss"] = current_price - r_dist
                         logger.info(f"Trailing Stop (LONG): Стоп переведен в безубыток ({pos['stop_loss']})")
                         await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (LONG) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']:.4f}`")
@@ -458,12 +458,12 @@ class LiveEngine:
                     logger.info(f"Trailing Stop (SHORT): Стоп переведен в безубыток ({pos['stop_loss']})")
                     await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']:.4f}`")
                 if current_price:
-                    if current_price < pos["take_profit"] - one_tenth_tp:
+                    if current_price <= pos["take_profit"] + one_tenth_tp:
                         pos["take_profit"] = pos["take_profit"] - r_dist
                         logger.info(f"Trailing Take Profit (SHORT): Новый тейк ({pos['take_profit']})")
                         await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT)\nНовый тейк: `{pos['take_profit']:.4f}`")
                         
-                    if pos["stop_loss"] <= pos["entry_price"] - one_tenth_tp and current_price > pos["stop_loss"] - r_dist:
+                    if pos["stop_loss"] <= pos["entry_price"] - one_tenth_tp and current_price <= pos["stop_loss"] - r_dist:
                         pos["stop_loss"] = current_price + r_dist
                         logger.info(f"Trailing Stop (SHORT): Стоп переведен в безубыток ({pos['stop_loss']})")
                         await self._notify(f"🛡 *ATR TRAILING*\nСделка `{self.symbol}` (SHORT) переведена в БЕЗУБЫТОК!\nНовый стоп: `{pos['stop_loss']:.4f}`")
