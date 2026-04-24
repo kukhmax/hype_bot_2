@@ -53,7 +53,7 @@
     - LONG: последний HIGH-фрактал, у которого close кластера > teeth кластера
     - SHORT: последний LOW-фрактал, у которого close кластера < teeth кластера
   - Вход:
-    - stop-market trigger = cluster_price ± 1 tick (tick берём из `TICK_SIZES` или `TICK_SIZE`)
+    - stop-market trigger = cluster_price ± 1 tick (tick получаем из API Hyperliquid по `szDecimals` и правилам tick size)
   - SL:
     - LONG: ближайший LOW-фрактал до HIGH-кластера, у которого close < teeth (на свече кластера)
     - SHORT: ближайший HIGH-фрактал до LOW-кластера, у которого close > teeth (на свече кластера)
@@ -62,6 +62,14 @@
   - Хранение кандидата в Redis:
     - `signal_candidate:last:<pair>:15m`
   - В логи пишется строка `Signal candidate: ...`
+
+- Шаг 6: Tick size из API (улучшение шага 5).
+  - Бот получает `szDecimals` инструмента через Hyperliquid `/info` type=`meta`.
+  - Tick size вычисляется динамически от цены кластера по правилам Hyperliquid:
+    - ограничение по числу знаков после запятой: `MAX_DECIMALS - szDecimals` (для perps `MAX_DECIMALS=6`)
+    - ограничение по 5 значащим цифрам
+    - итоговый tick = max(tick_by_decimals, tick_by_sigfig)
+  - `TICK_SIZE` остаётся как fallback, если API недоступен или инструмент не найден.
 
 ## 0) Зафиксированные требования
 - Рынок: Hyperliquid.

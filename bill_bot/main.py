@@ -94,13 +94,15 @@ async def main():
     async def update_signal_candidate(pair: str):
         window = await store.get_window(pair, cfg.timeframe)
         fr = await fractals_store.get_all(pair, cfg.timeframe)
-        tick = cfg.tick_sizes.get(pair, cfg.tick_size_default)
+        sz_dec = await hl.get_sz_decimals(pair)
         engine = StrategyEngine(
             tf=cfg.timeframe,
             sleep_window=cfg.sleep_window,
             sleep_k=cfg.sleep_k,
-            tick_size=tick,
             rr=1.5,
+            sz_decimals=sz_dec,
+            max_decimals=6,
+            tick_size_fallback=cfg.tick_size_default,
         )
         cand, ctx = engine.evaluate(pair=pair, candles=window, fractals=fr)
         if not cand:
@@ -109,6 +111,7 @@ async def main():
         if prev and prev.get("side") == cand.side and int(prev.get("cluster_t", 0)) == cand.cluster_t:
             return
         await signal_store.set_last(cand)
+        tick = engine.tick_size_for_price(cand.cluster_price)
         logger.info(
             "Signal candidate: pair=%s tf=%s side=%s cluster_t=%s entry=%.4f sl=%.4f tp=%.4f tick=%.8f sleep_med=%.6f",
             pair,

@@ -37,12 +37,42 @@ class SignalCandidate:
 
 
 class StrategyEngine:
-    def __init__(self, tf: str, sleep_window: int, sleep_k: float, tick_size: float, rr: float = 1.5):
+    def __init__(
+        self,
+        tf: str,
+        sleep_window: int,
+        sleep_k: float,
+        rr: float = 1.5,
+        sz_decimals: int | None = None,
+        max_decimals: int = 6,
+        tick_size_fallback: float = 0.01,
+    ):
         self.tf = tf
         self.sleep_window = sleep_window
         self.sleep_k = sleep_k
-        self.tick_size = tick_size
         self.rr = rr
+        self.sz_decimals = sz_decimals
+        self.max_decimals = max_decimals
+        self.tick_size_fallback = tick_size_fallback
+
+    def tick_size_for_price(self, price: float) -> float:
+        if price <= 0:
+            return self.tick_size_fallback
+        if self.sz_decimals is None:
+            return self.tick_size_fallback
+
+        decimals_limit = self.max_decimals - int(self.sz_decimals)
+        if decimals_limit < 0:
+            decimals_limit = 0
+
+        tick_by_decimals = 10 ** (-decimals_limit) if decimals_limit > 0 else 1.0
+
+        import math
+
+        exp = math.floor(math.log10(price)) - 4
+        tick_by_sig = 10 ** exp
+
+        return float(max(tick_by_decimals, tick_by_sig))
 
     def evaluate(
         self,
@@ -88,7 +118,8 @@ class StrategyEngine:
             if sl is None:
                 ctx["reason"] = "no_long_sl_cluster"
                 return None, ctx
-            entry = last_high.price + self.tick_size
+            tick = self.tick_size_for_price(last_high.price)
+            entry = last_high.price + tick
             stop = sl.price
             if stop >= entry:
                 ctx["reason"] = "invalid_long_sl"
@@ -112,7 +143,8 @@ class StrategyEngine:
             if sl is None:
                 ctx["reason"] = "no_short_sl_cluster"
                 return None, ctx
-            entry = last_low.price - self.tick_size
+            tick = self.tick_size_for_price(last_low.price)
+            entry = last_low.price - tick
             stop = sl.price
             if stop <= entry:
                 ctx["reason"] = "invalid_short_sl"
