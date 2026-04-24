@@ -27,6 +27,16 @@
     - раз в `POLL_SECONDS` запрашивается небольшой диапазон последних свечей
     - при появлении новой закрытой свечи она добавляется в окно и логируется как `New closed candle`
 
+- Шаг 3: Indicators (MVP) — Alligator EMA(13/8/5) и определение “сон/не сон” по SpreadLines.
+  - Добавлен расчёт EMA и линий Alligator по Close: Jaw=13, Teeth=8, Lips=5.
+  - Добавлен SpreadLines = max(Jaw,Teeth,Lips) - min(Jaw,Teeth,Lips).
+  - Добавлен критерий сна:
+    - берём медиану SpreadLines по окну `SLEEP_WINDOW` (по умолчанию 20)
+    - сравниваем с порогом `SLEEP_K * last_close` (по умолчанию 0.001)
+  - Сохраняем последнее состояние индикаторов в Redis:
+    - ключ `ind:last:<pair>:15m` (JSON: jaw/teeth/lips/spread/sleep/параметры сна)
+  - В логи пишется строка `Alligator: ... sleep=... med_spread=...`
+
 ## 0) Зафиксированные требования
 - Рынок: Hyperliquid.
 - TF: 15m.

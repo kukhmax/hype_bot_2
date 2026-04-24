@@ -12,6 +12,8 @@ class Config:
     timeframe: str
     history_bars: int
     poll_seconds: int
+    sleep_window: int
+    sleep_k: float
 
     @staticmethod
     def from_env() -> "Config":
@@ -24,6 +26,8 @@ class Config:
         timeframe = os.getenv("TIMEFRAME", "15m")
         history_bars = int(os.getenv("HISTORY_BARS", "100"))
         poll_seconds = int(os.getenv("POLL_SECONDS", "5"))
+        sleep_window = int(os.getenv("SLEEP_WINDOW", "20"))
+        sleep_k = float(os.getenv("SLEEP_K", "0.001"))
         return Config(
             redis_host=host,
             redis_port=port,
@@ -33,4 +37,6 @@ class Config:
             timeframe=timeframe,
             history_bars=history_bars,
             poll_seconds=poll_seconds,
+            sleep_window=sleep_window,
+            sleep_k=sleep_k,
         )
