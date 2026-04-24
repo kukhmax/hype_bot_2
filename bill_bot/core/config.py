@@ -17,6 +17,8 @@ class Config:
     fractals_max: int
     tick_size_default: float
     tick_sizes: dict[str, float]
+    virtual_equity: float
+    risk_pct: float
 
     @staticmethod
     def from_env() -> "Config":
@@ -47,6 +49,8 @@ class Config:
                 tick_sizes[sym] = float(val.strip())
             except ValueError:
                 continue
+        virtual_equity = float(os.getenv("VIRTUAL_EQUITY", "10000"))
+        risk_pct = float(os.getenv("RISK_PCT", "1.0"))
         return Config(
             redis_host=host,
             redis_port=port,
@@ -61,4 +65,6 @@ class Config:
             fractals_max=fractals_max,
             tick_size_default=tick_size_default,
             tick_sizes=tick_sizes,
+            virtual_equity=virtual_equity,
+            risk_pct=risk_pct,
         )

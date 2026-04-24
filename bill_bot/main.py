@@ -7,6 +7,7 @@ from bill_bot.core.config import Config
 from bill_bot.core.logger import setup_logger
 from bill_bot.core.redis_client import get_redis
 from bill_bot.services.candle_store import Candle, RedisCandleStore
+from bill_bot.services.execution import ExecutionDryRun, RedisTradeState
 from bill_bot.services.fractals import RedisFractalStore, detect_confirmed_fractal
 from bill_bot.services.hyperliquid_api import HyperliquidInfoClient
 from bill_bot.services.indicators import alligator_ema, spread_lines, is_sleep
@@ -28,6 +29,8 @@ async def main():
     store = RedisCandleStore(r)
     fractals_store = RedisFractalStore(r)
     signal_store = RedisSignalStore(r)
+    trade_state = RedisTradeState(r)
+    exec_engine = ExecutionDryRun(trade_state, tf=cfg.timeframe, virtual_equity=cfg.virtual_equity, risk_pct=cfg.risk_pct)
     hl = HyperliquidInfoClient()
 
     async def update_fractals(pair: str):
@@ -124,6 +127,18 @@ async def main():
             tick,
             float(ctx.get("sleep_med_spread", 0.0)),
         )
+        order = await exec_engine.maybe_place_order(pair=pair, candle=window[-1], cand=cand)
+        if order:
+            logger.info(
+                "Dry-run order placed: pair=%s tf=%s side=%s trigger=%.4f sl=%.4f tp=%.4f qty=%.6f",
+                pair,
+                cfg.timeframe,
+                order.side,
+                order.trigger,
+                order.stop_loss,
+                order.take_profit,
+                order.qty,
+            )
 
     if cfg.pairs:
         tf_ms = 15 * 60 * 1000 if cfg.timeframe == "15m" else None
@@ -172,6 +187,9 @@ async def main():
                     await update_indicators(pair)
                     await update_fractals(pair)
                     await update_signal_candidate(pair)
+                    evt = await exec_engine.on_candle(pair=pair, candle=new_candle)
+                    if evt.get("changed"):
+                        logger.info("Dry-run event: pair=%s tf=%s %s", pair, cfg.timeframe, evt)
             await asyncio.sleep(cfg.poll_seconds)
 
     logger.info("Bill Bot bootstrap started (dry-run). No PAIRS configured. Waiting...")

@@ -71,6 +71,23 @@
     - итоговый tick = max(tick_by_decimals, tick_by_sigfig)
   - `TICK_SIZE` остаётся как fallback, если API недоступен или инструмент не найден.
 
+- Шаг 7: ExecutionDryRun (MVP) — виртуальные ордера/позиции и P&L.
+  - После появления `signal_candidate:last:<pair>:15m` бот может поставить dry-run ордер, если нет активного ордера/позиции.
+  - Размер позиции:
+    - пока берём из env: `VIRTUAL_EQUITY` и `RISK_PCT`
+    - qty = (equity * risk_pct/100) / abs(entry - SL)
+  - Исполнение:
+    - LONG: ордер срабатывает, если high свечи >= trigger
+    - SHORT: ордер срабатывает, если low свечи <= trigger
+    - entry price в MVP = trigger
+  - Сопровождение:
+    - SL/TP проверяются по диапазону свечи
+    - если SL и TP в одной свече: в MVP считаем, что сработал SL (консервативно)
+  - Хранение в Redis:
+    - `state:<pair>:15m` (ord/pos/last_trade)
+    - `pnl:<pair>:15m` (unrealized/realized)
+  - В логи пишутся события: `Dry-run order placed`, `Dry-run event: position_opened/position_closed`
+
 ## 0) Зафиксированные требования
 - Рынок: Hyperliquid.
 - TF: 15m.
