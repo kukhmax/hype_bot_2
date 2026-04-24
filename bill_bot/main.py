@@ -220,7 +220,7 @@ async def main():
 
     tasks = [asyncio.create_task(market_loop())]
     if cfg.telegram_token:
-        tasks.append(asyncio.create_task(run_telegram(cfg, subs, trade_state)))
+        tasks.append(asyncio.create_task(run_telegram(cfg, subs, trade_state, store, fractals_store)))
     await asyncio.gather(*tasks)
 
 

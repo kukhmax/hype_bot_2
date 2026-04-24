@@ -4,10 +4,15 @@ import logging
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery
+from aiogram.types.input_file import BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bill_bot.core.config import Config
+from bill_bot.services.candle_store import RedisCandleStore
+from bill_bot.services.charting import FractalPoint, build_chart_png
 from bill_bot.services.execution import RedisTradeState, Position, PendingOrder
+from bill_bot.services.fractals import RedisFractalStore
+from bill_bot.services.indicators import alligator_ema
 from bill_bot.services.subscriptions import SubscriptionStore
 
 
@@ -22,6 +27,7 @@ def _main_menu() -> InlineKeyboardBuilder:
     kb.button(text="⏸ Стоп", callback_data="menu:stop")
     kb.button(text="📈 Позиции", callback_data="menu:positions")
     kb.button(text="💰 P&L", callback_data="menu:pnl")
+    kb.button(text="📉 График", callback_data="menu:chart")
     kb.button(text="📊 Статус", callback_data="menu:status")
     kb.adjust(2)
     return kb
@@ -47,7 +53,22 @@ def _risk_menu(current: float | None) -> InlineKeyboardBuilder:
     return kb
 
 
-async def run_telegram(cfg: Config, subs: SubscriptionStore, trade_state: RedisTradeState):
+def _chart_pairs_menu(pairs: list[str]) -> InlineKeyboardBuilder:
+    kb = InlineKeyboardBuilder()
+    for p in pairs:
+        kb.button(text=p, callback_data=f"chart:{p}")
+    kb.button(text="⬅️ Назад", callback_data="menu:back")
+    kb.adjust(3)
+    return kb
+
+
+async def run_telegram(
+    cfg: Config,
+    subs: SubscriptionStore,
+    trade_state: RedisTradeState,
+    candle_store: RedisCandleStore,
+    fractals_store: RedisFractalStore,
+):
     if not cfg.telegram_token:
         logger.warning("TELEGRAM_TOKEN is not set, telegram bot disabled")
         return
@@ -188,6 +209,34 @@ async def run_telegram(cfg: Config, subs: SubscriptionStore, trade_state: RedisT
             f"P&L по TF {cfg.timeframe}\n\nUnrealized: {total_u:.2f}\nRealized: {total_r:.2f}",
             reply_markup=_main_menu().as_markup(),
         )
+
+    @dp.callback_query(F.data == "menu:chart")
+    async def chart_menu(cb: CallbackQuery):
+        uid = cb.from_user.id
+        pairs = await subs.get_user_pairs(uid)
+        if not pairs:
+            await cb.answer()
+            await cb.message.edit_text("Нет выбранных пар.", reply_markup=_main_menu().as_markup())
+            return
+        await cb.answer()
+        await cb.message.edit_text("Выбери пару для графика:", reply_markup=_chart_pairs_menu(pairs).as_markup())
+
+    @dp.callback_query(F.data.startswith("chart:"))
+    async def chart_pair(cb: CallbackQuery):
+        pair = cb.data.split(":", 1)[1].upper()
+        candles = await candle_store.get_window(pair, cfg.timeframe)
+        if not candles:
+            await cb.answer("Нет свечей")
+            return
+        closes = [c.c for c in candles]
+        jaw = alligator_ema(closes, 13)
+        teeth = alligator_ema(closes, 8)
+        lips = alligator_ema(closes, 5)
+        fr = await fractals_store.get_all(pair, cfg.timeframe)
+        fpts = [FractalPoint(kind=f.kind, t=f.t, price=f.price) for f in fr]
+        data = build_chart_png(pair, cfg.timeframe, candles, jaw, teeth, lips, fpts)
+        await cb.answer()
+        await cb.message.answer_photo(BufferedInputFile(data, filename=f"{pair}_{cfg.timeframe}.png"))
 
     logger.info("Telegram bot polling started")
     await dp.start_polling(bot)
