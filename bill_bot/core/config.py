@@ -10,6 +10,7 @@ class Config:
     log_level: str
     pairs: list[str]
     timeframe: str
+    timeframes_available: list[str]
     history_bars: int
     poll_seconds: int
     sleep_window: int
@@ -33,6 +34,10 @@ class Config:
         pairs_raw = os.getenv("PAIRS", "")
         pairs = [p.strip().upper() for p in pairs_raw.split(",") if p.strip()]
         timeframe = os.getenv("TIMEFRAME", "15m")
+        timeframes_available_raw = os.getenv("TIMEFRAMES_AVAILABLE", timeframe)
+        timeframes_available = [t.strip() for t in timeframes_available_raw.split(",") if t.strip()]
+        if not timeframes_available:
+            timeframes_available = [timeframe]
         history_bars = int(os.getenv("HISTORY_BARS", "100"))
         poll_seconds = int(os.getenv("POLL_SECONDS", "5"))
         sleep_window = int(os.getenv("SLEEP_WINDOW", "20"))
@@ -67,6 +72,7 @@ class Config:
             log_level=level,
             pairs=pairs,
             timeframe=timeframe,
+            timeframes_available=timeframes_available,
             history_bars=history_bars,
             poll_seconds=poll_seconds,
             sleep_window=sleep_window,

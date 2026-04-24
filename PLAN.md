@@ -120,6 +120,16 @@
     - отметки фракталов (HIGH/LOW)
   - Источник данных: Redis window `candles:<pair>:15m` и фракталы из Redis.
 
+- Шаг 11: Выбор таймфрейма (TF) на пользователя + обработка нескольких TF.
+  - В Telegram добавлена кнопка “⏱ TF” для выбора таймфрейма из `TIMEFRAMES_AVAILABLE`.
+  - Выбранный TF пользователя хранится в Redis: `sub:user:<user_id>:timeframe`.
+  - Все экраны (статус/пары/риск/позиции/P&L/график) теперь работают в контексте выбранного TF.
+  - Market loop запускается для каждого TF из `TIMEFRAMES_AVAILABLE` и использует tf-скоупнутые Redis-ключи:
+    - свечи: `candles:<pair>:<tf>`
+    - фракталы: `fractals:<pair>:<tf>`
+    - подписки: `sub:user:<user_id>:pairs:<tf>`, `sub:user:<user_id>:active:<tf>`, `sub:user:<user_id>:cfg:<tf>`
+    - состояния: `state:<user_id>:<pair>:<tf>`, `pnl:<user_id>:<pair>:<tf>`
+
 ## 0) Зафиксированные требования
 - Рынок: Hyperliquid.
 - TF: 15m.

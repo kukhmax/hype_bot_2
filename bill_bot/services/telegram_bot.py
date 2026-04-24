@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 def _main_menu() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     kb.button(text="📌 Пары", callback_data="menu:pairs")
+    kb.button(text="⏱ TF", callback_data="menu:tf")
     kb.button(text="⚙️ Риск", callback_data="menu:risk")
     kb.button(text="▶️ Запуск", callback_data="menu:start")
     kb.button(text="⏸ Стоп", callback_data="menu:stop")
@@ -53,6 +54,16 @@ def _risk_menu(current: float | None) -> InlineKeyboardBuilder:
     return kb
 
 
+def _tf_menu(timeframes: list[str], current: str) -> InlineKeyboardBuilder:
+    kb = InlineKeyboardBuilder()
+    for tf in timeframes:
+        mark = "✅" if tf == current else "⬜"
+        kb.button(text=f"{mark} {tf}", callback_data=f"tf:{tf}")
+    kb.button(text="⬅️ Назад", callback_data="menu:back")
+    kb.adjust(3)
+    return kb
+
+
 def _chart_pairs_menu(pairs: list[str]) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     for p in pairs:
@@ -76,12 +87,20 @@ async def run_telegram(
     bot = Bot(token=cfg.telegram_token)
     dp = Dispatcher()
 
+    async def user_ctx(user_id: int) -> tuple[str, SubscriptionStore]:
+        tf = await subs.get_user_timeframe(user_id, cfg.timeframe)
+        if tf not in cfg.timeframes_available:
+            tf = cfg.timeframe
+        return tf, SubscriptionStore(subs.r, tf=tf)
+
     @dp.message(F.text == "/start")
     async def start_handler(message: Message):
-        st = await subs.dump_user_state(message.from_user.id)
+        uid = message.from_user.id
+        tf, user_subs = await user_ctx(uid)
+        st = await user_subs.dump_user_state(uid)
         text = (
             "Bill Bot (Hyperliquid) запущен.\n\n"
-            f"TF: {cfg.timeframe}\n"
+            f"TF: {tf}\n"
             f"Активен: {st['active']}\n"
             f"Пары: {', '.join(st['pairs']) if st['pairs'] else '-'}\n"
             f"Risk%: {st['cfg'].get('risk_pct', cfg.default_risk_pct)}\n\n"
@@ -91,10 +110,12 @@ async def run_telegram(
 
     @dp.callback_query(F.data == "menu:back")
     async def back(cb: CallbackQuery):
-        st = await subs.dump_user_state(cb.from_user.id)
+        uid = cb.from_user.id
+        tf, user_subs = await user_ctx(uid)
+        st = await user_subs.dump_user_state(uid)
         text = (
             "Меню.\n\n"
-            f"TF: {cfg.timeframe}\n"
+            f"TF: {tf}\n"
             f"Активен: {st['active']}\n"
             f"Пары: {', '.join(st['pairs']) if st['pairs'] else '-'}\n"
             f"Risk%: {st['cfg'].get('risk_pct', cfg.default_risk_pct)}"
@@ -102,61 +123,92 @@ async def run_telegram(
         await cb.message.edit_text(text, reply_markup=_main_menu().as_markup())
         await cb.answer()
 
+    @dp.callback_query(F.data == "menu:tf")
+    async def menu_tf(cb: CallbackQuery):
+        tf, _ = await user_ctx(cb.from_user.id)
+        await cb.message.edit_text("Выберите таймфрейм:", reply_markup=_tf_menu(cfg.timeframes_available, tf).as_markup())
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("tf:"))
+    async def set_tf(cb: CallbackQuery):
+        uid = cb.from_user.id
+        tf = cb.data.split(":", 1)[1]
+        if tf not in cfg.timeframes_available:
+            await cb.answer("Неподдерживаемый TF")
+            return
+        await subs.set_user_timeframe(uid, tf)
+        await cb.answer(f"TF установлен: {tf}")
+        await cb.message.edit_reply_markup(reply_markup=_tf_menu(cfg.timeframes_available, tf).as_markup())
+
     @dp.callback_query(F.data == "menu:pairs")
     async def menu_pairs(cb: CallbackQuery):
-        pairs = set(await subs.get_user_pairs(cb.from_user.id))
+        uid = cb.from_user.id
+        _, user_subs = await user_ctx(uid)
+        pairs = set(await user_subs.get_user_pairs(uid))
         await cb.message.edit_text("Выберите пары для отслеживания:", reply_markup=_pairs_menu(cfg, pairs).as_markup())
         await cb.answer()
 
     @dp.callback_query(F.data.startswith("pair:"))
     async def toggle_pair(cb: CallbackQuery):
+        uid = cb.from_user.id
         pair = cb.data.split(":", 1)[1].upper()
-        await subs.toggle_pair(cb.from_user.id, pair)
-        pairs = set(await subs.get_user_pairs(cb.from_user.id))
+        _, user_subs = await user_ctx(uid)
+        await user_subs.toggle_pair(uid, pair)
+        pairs = set(await user_subs.get_user_pairs(uid))
         await cb.message.edit_reply_markup(reply_markup=_pairs_menu(cfg, pairs).as_markup())
         await cb.answer()
 
     @dp.callback_query(F.data == "menu:risk")
     async def menu_risk(cb: CallbackQuery):
-        st = await subs.get_user_cfg(cb.from_user.id)
+        uid = cb.from_user.id
+        _, user_subs = await user_ctx(uid)
+        st = await user_subs.get_user_cfg(uid)
         cur = st.get("risk_pct")
         await cb.message.edit_text("Выберите риск на сделку (% от виртуального депозита):", reply_markup=_risk_menu(cur).as_markup())
         await cb.answer()
 
     @dp.callback_query(F.data.startswith("risk:"))
     async def set_risk(cb: CallbackQuery):
+        uid = cb.from_user.id
         raw = cb.data.split(":", 1)[1]
         try:
             v = float(raw)
         except Exception:
             await cb.answer("Некорректное значение")
             return
-        await subs.set_user_risk(cb.from_user.id, v)
+        _, user_subs = await user_ctx(uid)
+        await user_subs.set_user_risk(uid, v)
         await cb.answer(f"Risk установлен: {v}%")
-        st = await subs.get_user_cfg(cb.from_user.id)
+        st = await user_subs.get_user_cfg(uid)
         await cb.message.edit_reply_markup(reply_markup=_risk_menu(st.get("risk_pct")).as_markup())
 
     @dp.callback_query(F.data == "menu:start")
     async def start_tracking(cb: CallbackQuery):
-        await subs.set_active(cb.from_user.id, True)
+        uid = cb.from_user.id
+        _, user_subs = await user_ctx(uid)
+        await user_subs.set_active(uid, True)
         await cb.answer("Отслеживание включено")
-        st = await subs.dump_user_state(cb.from_user.id)
+        st = await user_subs.dump_user_state(uid)
         text = f"Отслеживание включено.\nПары: {', '.join(st['pairs']) if st['pairs'] else '-'}"
         await cb.message.edit_text(text, reply_markup=_main_menu().as_markup())
 
     @dp.callback_query(F.data == "menu:stop")
     async def stop_tracking(cb: CallbackQuery):
-        await subs.set_active(cb.from_user.id, False)
+        uid = cb.from_user.id
+        _, user_subs = await user_ctx(uid)
+        await user_subs.set_active(uid, False)
         await cb.answer("Отслеживание выключено")
         await cb.message.edit_text("Отслеживание выключено.", reply_markup=_main_menu().as_markup())
 
     @dp.callback_query(F.data == "menu:status")
     async def status(cb: CallbackQuery):
-        st = await subs.dump_user_state(cb.from_user.id)
+        uid = cb.from_user.id
+        tf, user_subs = await user_ctx(uid)
+        st = await user_subs.dump_user_state(uid)
         await cb.answer()
         text = (
             "Статус.\n\n"
-            f"TF: {cfg.timeframe}\n"
+            f"TF: {tf}\n"
             f"Активен: {st['active']}\n"
             f"Пары: {', '.join(st['pairs']) if st['pairs'] else '-'}\n"
             f"Risk%: {st['cfg'].get('risk_pct', cfg.default_risk_pct)}"
@@ -166,17 +218,18 @@ async def run_telegram(
     @dp.callback_query(F.data == "menu:positions")
     async def positions(cb: CallbackQuery):
         uid = cb.from_user.id
-        pairs = await subs.get_user_pairs(uid)
+        tf, user_subs = await user_ctx(uid)
+        pairs = await user_subs.get_user_pairs(uid)
         if not pairs:
             await cb.answer()
             await cb.message.edit_text("Нет выбранных пар.", reply_markup=_main_menu().as_markup())
             return
         lines: list[str] = ["Позиции / ордера:\n"]
         for p in pairs:
-            st = await trade_state.get(uid, p, cfg.timeframe)
+            st = await trade_state.get(uid, p, tf)
             if st.get("pos"):
                 pos = Position.from_dict(st["pos"])
-                pnl = await trade_state.get_pnl(uid, p, cfg.timeframe)
+                pnl = await trade_state.get_pnl(uid, p, tf)
                 lines.append(
                     f"{p}: POS {pos.side} entry={pos.entry:.4f} sl={pos.stop_loss:.4f} tp={pos.take_profit:.4f} qty={pos.qty:.6f} uPnL={float(pnl.get('unrealized', 0.0)):.2f}"
                 )
@@ -191,11 +244,12 @@ async def run_telegram(
     @dp.callback_query(F.data == "menu:pnl")
     async def pnl(cb: CallbackQuery):
         uid = cb.from_user.id
-        pairs = await subs.get_user_pairs(uid)
+        tf, user_subs = await user_ctx(uid)
+        pairs = await user_subs.get_user_pairs(uid)
         total_u = 0.0
         total_r = 0.0
         for p in pairs:
-            pnl = await trade_state.get_pnl(uid, p, cfg.timeframe)
+            pnl = await trade_state.get_pnl(uid, p, tf)
             try:
                 total_u += float(pnl.get("unrealized", 0.0))
             except Exception:
@@ -206,14 +260,15 @@ async def run_telegram(
                 pass
         await cb.answer()
         await cb.message.edit_text(
-            f"P&L по TF {cfg.timeframe}\n\nUnrealized: {total_u:.2f}\nRealized: {total_r:.2f}",
+            f"P&L по TF {tf}\n\nUnrealized: {total_u:.2f}\nRealized: {total_r:.2f}",
             reply_markup=_main_menu().as_markup(),
         )
 
     @dp.callback_query(F.data == "menu:chart")
     async def chart_menu(cb: CallbackQuery):
         uid = cb.from_user.id
-        pairs = await subs.get_user_pairs(uid)
+        _, user_subs = await user_ctx(uid)
+        pairs = await user_subs.get_user_pairs(uid)
         if not pairs:
             await cb.answer()
             await cb.message.edit_text("Нет выбранных пар.", reply_markup=_main_menu().as_markup())
@@ -223,8 +278,10 @@ async def run_telegram(
 
     @dp.callback_query(F.data.startswith("chart:"))
     async def chart_pair(cb: CallbackQuery):
+        uid = cb.from_user.id
+        tf, _ = await user_ctx(uid)
         pair = cb.data.split(":", 1)[1].upper()
-        candles = await candle_store.get_window(pair, cfg.timeframe)
+        candles = await candle_store.get_window(pair, tf)
         if not candles:
             await cb.answer("Нет свечей")
             return
@@ -232,11 +289,11 @@ async def run_telegram(
         jaw = alligator_ema(closes, 13)
         teeth = alligator_ema(closes, 8)
         lips = alligator_ema(closes, 5)
-        fr = await fractals_store.get_all(pair, cfg.timeframe)
+        fr = await fractals_store.get_all(pair, tf)
         fpts = [FractalPoint(kind=f.kind, t=f.t, price=f.price) for f in fr]
-        data = build_chart_png(pair, cfg.timeframe, candles, jaw, teeth, lips, fpts)
+        data = build_chart_png(pair, tf, candles, jaw, teeth, lips, fpts)
         await cb.answer()
-        await cb.message.answer_photo(BufferedInputFile(data, filename=f"{pair}_{cfg.timeframe}.png"))
+        await cb.message.answer_photo(BufferedInputFile(data, filename=f"{pair}_{tf}.png"))
 
     logger.info("Telegram bot polling started")
     await dp.start_polling(bot)

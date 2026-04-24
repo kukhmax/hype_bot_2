@@ -25,6 +25,18 @@ class SubscriptionStore:
     def active_pairs_key(self) -> str:
         return f"active_pairs:{self.tf}"
 
+    def user_timeframe_key(self, user_id: int) -> str:
+        return f"sub:user:{user_id}:timeframe"
+
+    async def get_user_timeframe(self, user_id: int, default: str) -> str:
+        v = await self.r.get(self.user_timeframe_key(user_id))
+        if not v:
+            return default
+        return str(v)
+
+    async def set_user_timeframe(self, user_id: int, tf: str) -> None:
+        await self.r.set(self.user_timeframe_key(user_id), tf)
+
     async def is_active(self, user_id: int) -> bool:
         v = await self.r.get(self.user_active_key(user_id))
         return v == "1"
