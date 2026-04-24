@@ -10,7 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bill_bot.core.config import Config
 from bill_bot.services.candle_store import RedisCandleStore
-from bill_bot.services.charting import FractalPoint, build_chart_png
+from bill_bot.services.charting import FractalPoint, PriceLevel, build_chart_png
 from bill_bot.services.execution import RedisTradeState, Position, PendingOrder
 from bill_bot.services.fractals import RedisFractalStore
 from bill_bot.services.indicators import alligator_ema
@@ -423,13 +423,33 @@ async def run_telegram(
         if not candles:
             await cb.answer("Нет свечей")
             return
+        st = await trade_state.get(uid, pair, tf)
+        levels: list[PriceLevel] = []
+        if st.get("ord"):
+            o = PendingOrder.from_dict(st["ord"])
+            levels.extend(
+                [
+                    PriceLevel(price=o.trigger, label="Trigger", color="#0ea5e9", linestyle="--", linewidth=1.2),
+                    PriceLevel(price=o.stop_loss, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
+                    PriceLevel(price=o.take_profit, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+                ]
+            )
+        if st.get("pos"):
+            p = Position.from_dict(st["pos"])
+            levels.extend(
+                [
+                    PriceLevel(price=p.entry, label="Entry", color="#0ea5e9", linestyle="-", linewidth=1.2),
+                    PriceLevel(price=p.stop_loss, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
+                    PriceLevel(price=p.take_profit, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+                ]
+            )
         closes = [c.c for c in candles]
         jaw = alligator_ema(closes, 13)
         teeth = alligator_ema(closes, 8)
         lips = alligator_ema(closes, 5)
         fr = await fractals_store.get_all(pair, tf)
         fpts = [FractalPoint(kind=f.kind, t=f.t, price=f.price) for f in fr]
-        data = build_chart_png(pair, tf, candles, jaw, teeth, lips, fpts)
+        data = build_chart_png(pair, tf, candles, jaw, teeth, lips, fpts, levels=levels)
         await cb.answer()
         await cb.message.answer_photo(BufferedInputFile(data, filename=f"{pair}_{tf}.png"))
 

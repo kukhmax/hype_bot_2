@@ -18,6 +18,15 @@ class FractalPoint:
     price: float
 
 
+@dataclass(frozen=True)
+class PriceLevel:
+    price: float
+    label: str
+    color: str
+    linestyle: str = "-"
+    linewidth: float = 1.0
+
+
 def build_chart_png(
     pair: str,
     tf: str,
@@ -26,6 +35,7 @@ def build_chart_png(
     teeth: list[float],
     lips: list[float],
     fractals: Iterable[FractalPoint],
+    levels: Iterable[PriceLevel] = (),
 ) -> bytes:
     if not candles:
         raise ValueError("no candles")
@@ -54,20 +64,24 @@ def build_chart_png(
 
     t_min = candles[0].t
     t_max = candles[-1].t
+    t_to_idx = {c.t: i for i, c in enumerate(candles)}
     for f in fractals:
         if f.t < t_min or f.t > t_max:
             continue
-        idx = None
-        for i, c in enumerate(candles):
-            if c.t == f.t:
-                idx = i
-                break
+        idx = t_to_idx.get(f.t)
         if idx is None:
             continue
         if f.kind.upper() == "HIGH":
             ax.scatter([idx], [f.price], marker="^", s=40, color="#7c3aed", zorder=5)
         else:
             ax.scatter([idx], [f.price], marker="v", s=40, color="#7c3aed", zorder=5)
+
+    for lvl in levels:
+        try:
+            price = float(lvl.price)
+        except Exception:
+            continue
+        ax.axhline(y=price, color=lvl.color, linestyle=lvl.linestyle, linewidth=lvl.linewidth, alpha=0.9, label=lvl.label)
 
     ax.set_title(f"{pair} {tf} — Alligator + Fractals")
     ax.grid(True, alpha=0.25)
