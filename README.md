@@ -64,6 +64,68 @@ docker compose logs -f bot
 docker compose down
 ```
 
+## Docker: полезные команды
+
+Запуск/остановка:
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose stop
+docker compose start
+docker compose restart bot
+docker compose down
+docker compose down -v
+```
+
+Логи:
+
+```bash
+docker compose logs -f bot
+docker compose logs -f redis
+docker compose logs --tail 200 bot
+```
+
+Пересборка образа:
+
+```bash
+docker compose build --no-cache bot
+docker compose up -d --build
+```
+
+Обновить базовые образы:
+
+```bash
+docker compose pull
+docker compose up -d --build
+```
+
+Зайти внутрь контейнера:
+
+```bash
+docker compose exec bot /bin/sh
+docker compose exec redis /bin/sh
+```
+
+Redis CLI (внутри Docker):
+
+```bash
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD"
+```
+
+PowerShell вариант:
+
+```powershell
+docker compose exec redis redis-cli -a "$env:REDIS_PASSWORD"
+```
+
+Чистка Docker (осторожно удаляет неиспользуемые ресурсы):
+
+```bash
+docker system prune -f
+docker volume prune -f
+```
+
 ## Локальный запуск (без Docker)
 
 Требования: Python 3.13.
@@ -83,6 +145,44 @@ python -m bill_bot.main
 ```
 
 Логи пишутся в stdout.
+
+## Troubleshooting
+
+### Docker Desktop / Engine не запущен
+
+Симптом: ошибки вида `open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified`.
+
+Решение:
+- Запустить Docker Desktop и дождаться статуса Running
+- Повторить `docker compose up -d --build`
+
+### Бот не стартует из-за зависимостей (pip resolution)
+
+Если сборка Docker падает на зависимостях, проверь `requirements.txt` и пересобери без кэша:
+
+```bash
+docker compose build --no-cache bot
+docker compose up -d
+```
+
+### Redis: неверный пароль
+
+Симптомы: бот пишет `Redis connection failed` или `NOAUTH Authentication required`.
+
+Проверь, что один и тот же `REDIS_PASSWORD` указан:
+- в `.env` (и для сервиса redis, и для сервиса bot через `env_file`)
+
+Проверка:
+
+```bash
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD" PING
+```
+
+### Telegram: бот не отвечает
+
+Проверь:
+- `TELEGRAM_TOKEN` в `.env`
+- логи: `docker compose logs -f bot` (должно быть `Telegram bot polling started`)
 
 ## Как пользоваться в Telegram
 
