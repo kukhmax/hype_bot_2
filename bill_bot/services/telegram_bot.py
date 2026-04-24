@@ -7,6 +7,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bill_bot.core.config import Config
+from bill_bot.services.execution import RedisTradeState, Position, PendingOrder
 from bill_bot.services.subscriptions import SubscriptionStore
 
 
@@ -19,6 +20,8 @@ def _main_menu() -> InlineKeyboardBuilder:
     kb.button(text="⚙️ Риск", callback_data="menu:risk")
     kb.button(text="▶️ Запуск", callback_data="menu:start")
     kb.button(text="⏸ Стоп", callback_data="menu:stop")
+    kb.button(text="📈 Позиции", callback_data="menu:positions")
+    kb.button(text="💰 P&L", callback_data="menu:pnl")
     kb.button(text="📊 Статус", callback_data="menu:status")
     kb.adjust(2)
     return kb
@@ -44,7 +47,7 @@ def _risk_menu(current: float | None) -> InlineKeyboardBuilder:
     return kb
 
 
-async def run_telegram(cfg: Config, subs: SubscriptionStore):
+async def run_telegram(cfg: Config, subs: SubscriptionStore, trade_state: RedisTradeState):
     if not cfg.telegram_token:
         logger.warning("TELEGRAM_TOKEN is not set, telegram bot disabled")
         return
@@ -138,6 +141,53 @@ async def run_telegram(cfg: Config, subs: SubscriptionStore):
             f"Risk%: {st['cfg'].get('risk_pct', cfg.default_risk_pct)}"
         )
         await cb.message.edit_text(text, reply_markup=_main_menu().as_markup())
+
+    @dp.callback_query(F.data == "menu:positions")
+    async def positions(cb: CallbackQuery):
+        uid = cb.from_user.id
+        pairs = await subs.get_user_pairs(uid)
+        if not pairs:
+            await cb.answer()
+            await cb.message.edit_text("Нет выбранных пар.", reply_markup=_main_menu().as_markup())
+            return
+        lines: list[str] = ["Позиции / ордера:\n"]
+        for p in pairs:
+            st = await trade_state.get(uid, p, cfg.timeframe)
+            if st.get("pos"):
+                pos = Position.from_dict(st["pos"])
+                pnl = await trade_state.get_pnl(uid, p, cfg.timeframe)
+                lines.append(
+                    f"{p}: POS {pos.side} entry={pos.entry:.4f} sl={pos.stop_loss:.4f} tp={pos.take_profit:.4f} qty={pos.qty:.6f} uPnL={float(pnl.get('unrealized', 0.0)):.2f}"
+                )
+            elif st.get("ord"):
+                o = PendingOrder.from_dict(st["ord"])
+                lines.append(f"{p}: ORD {o.side} trigger={o.trigger:.4f} sl={o.stop_loss:.4f} tp={o.take_profit:.4f} qty={o.qty:.6f}")
+            else:
+                lines.append(f"{p}: —")
+        await cb.answer()
+        await cb.message.edit_text("\n".join(lines), reply_markup=_main_menu().as_markup())
+
+    @dp.callback_query(F.data == "menu:pnl")
+    async def pnl(cb: CallbackQuery):
+        uid = cb.from_user.id
+        pairs = await subs.get_user_pairs(uid)
+        total_u = 0.0
+        total_r = 0.0
+        for p in pairs:
+            pnl = await trade_state.get_pnl(uid, p, cfg.timeframe)
+            try:
+                total_u += float(pnl.get("unrealized", 0.0))
+            except Exception:
+                pass
+            try:
+                total_r += float(pnl.get("realized", 0.0))
+            except Exception:
+                pass
+        await cb.answer()
+        await cb.message.edit_text(
+            f"P&L по TF {cfg.timeframe}\n\nUnrealized: {total_u:.2f}\nRealized: {total_r:.2f}",
+            reply_markup=_main_menu().as_markup(),
+        )
 
     logger.info("Telegram bot polling started")
     await dp.start_polling(bot)

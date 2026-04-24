@@ -79,36 +79,42 @@ class RedisTradeState:
         self.r = r
 
     @staticmethod
-    def state_key(pair: str, tf: str) -> str:
-        return f"state:{pair}:{tf}"
+    def state_key(user_id: int, pair: str, tf: str) -> str:
+        return f"state:{user_id}:{pair}:{tf}"
 
     @staticmethod
-    def pnl_key(pair: str, tf: str) -> str:
-        return f"pnl:{pair}:{tf}"
+    def pnl_key(user_id: int, pair: str, tf: str) -> str:
+        return f"pnl:{user_id}:{pair}:{tf}"
 
-    async def get(self, pair: str, tf: str) -> dict:
-        raw = await self.r.get(self.state_key(pair, tf))
+    async def get(self, user_id: int, pair: str, tf: str) -> dict:
+        raw = await self.r.get(self.state_key(user_id, pair, tf))
         if not raw:
             return {}
         data = json.loads(raw)
         return data if isinstance(data, dict) else {}
 
-    async def set(self, pair: str, tf: str, state: dict) -> None:
-        await self.r.set(self.state_key(pair, tf), json.dumps(state, separators=(",", ":")))
+    async def set(self, user_id: int, pair: str, tf: str, state: dict) -> None:
+        await self.r.set(self.state_key(user_id, pair, tf), json.dumps(state, separators=(",", ":")))
 
-    async def set_pnl(self, pair: str, tf: str, payload: dict) -> None:
-        await self.r.set(self.pnl_key(pair, tf), json.dumps(payload, separators=(",", ":")))
+    async def get_pnl(self, user_id: int, pair: str, tf: str) -> dict:
+        raw = await self.r.get(self.pnl_key(user_id, pair, tf))
+        if not raw:
+            return {}
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+
+    async def set_pnl(self, user_id: int, pair: str, tf: str, payload: dict) -> None:
+        await self.r.set(self.pnl_key(user_id, pair, tf), json.dumps(payload, separators=(",", ":")))
 
 
 class ExecutionDryRun:
-    def __init__(self, store: RedisTradeState, tf: str, virtual_equity: float, risk_pct: float):
+    def __init__(self, store: RedisTradeState, tf: str, virtual_equity: float):
         self.store = store
         self.tf = tf
         self.virtual_equity = float(virtual_equity)
-        self.risk_pct = float(risk_pct)
 
-    def _qty_from_risk(self, entry: float, sl: float) -> float:
-        risk_amount = self.virtual_equity * (self.risk_pct / 100.0)
+    def _qty_from_risk(self, entry: float, sl: float, risk_pct: float) -> float:
+        risk_amount = self.virtual_equity * (float(risk_pct) / 100.0)
         dist = abs(entry - sl)
         if dist <= 0:
             return 0.0
@@ -126,13 +132,20 @@ class ExecutionDryRun:
             return (exit_price - pos.entry) * pos.qty
         return (pos.entry - exit_price) * pos.qty
 
-    async def maybe_place_order(self, pair: str, candle: Candle, cand: SignalCandidate | None) -> PendingOrder | None:
+    async def maybe_place_order(
+        self,
+        user_id: int,
+        pair: str,
+        candle: Candle,
+        cand: SignalCandidate | None,
+        risk_pct: float,
+    ) -> PendingOrder | None:
         if cand is None:
             return None
-        state = await self.store.get(pair, self.tf)
+        state = await self.store.get(user_id, pair, self.tf)
         if state.get("pos") or state.get("ord"):
             return None
-        qty = self._qty_from_risk(cand.entry_trigger, cand.stop_loss)
+        qty = self._qty_from_risk(cand.entry_trigger, cand.stop_loss, risk_pct=risk_pct)
         if qty <= 0:
             return None
         o = PendingOrder(
@@ -144,12 +157,13 @@ class ExecutionDryRun:
             qty=qty,
         )
         state["ord"] = o.to_dict()
+        state["risk_pct"] = float(risk_pct)
         state["last_t"] = int(candle.t)
-        await self.store.set(pair, self.tf, state)
+        await self.store.set(user_id, pair, self.tf, state)
         return o
 
-    async def on_candle(self, pair: str, candle: Candle) -> dict:
-        state = await self.store.get(pair, self.tf)
+    async def on_candle(self, user_id: int, pair: str, candle: Candle) -> dict:
+        state = await self.store.get(user_id, pair, self.tf)
         last_t = int(state.get("last_t", 0))
         if candle.t <= last_t:
             return {"changed": False}
@@ -177,7 +191,10 @@ class ExecutionDryRun:
                     exit_reason = "TP"
 
                 pnl = self._realized_pnl(pos, exit_price)
+                realized = float(state.get("realized", 0.0)) + float(pnl)
+                state["realized"] = realized
                 state["last_trade"] = {
+                    "user_id": user_id,
                     "pair": pair,
                     "tf": self.tf,
                     "side": pos.side,
@@ -193,10 +210,11 @@ class ExecutionDryRun:
                 state.pop("pos", None)
                 changed = True
                 event = {"changed": True, "event": "position_closed", "reason": exit_reason, "pnl": pnl}
+                await self.store.set_pnl(user_id, pair, self.tf, {"unrealized": 0.0, "realized": realized})
             else:
                 mark = candle.c
                 upnl = self._unrealized_pnl(pos, mark)
-                await self.store.set_pnl(pair, self.tf, {"unrealized": upnl, "realized": float(state.get("realized", 0.0))})
+                await self.store.set_pnl(user_id, pair, self.tf, {"unrealized": upnl, "realized": float(state.get("realized", 0.0))})
 
         elif ord_raw:
             o = PendingOrder.from_dict(ord_raw)
@@ -218,5 +236,5 @@ class ExecutionDryRun:
 
         state["last_t"] = int(candle.t)
         if changed:
-            await self.store.set(pair, self.tf, state)
+            await self.store.set(user_id, pair, self.tf, state)
         return event

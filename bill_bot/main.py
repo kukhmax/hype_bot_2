@@ -32,7 +32,7 @@ async def main():
     fractals_store = RedisFractalStore(r)
     signal_store = RedisSignalStore(r)
     trade_state = RedisTradeState(r)
-    exec_engine = ExecutionDryRun(trade_state, tf=cfg.timeframe, virtual_equity=cfg.virtual_equity, risk_pct=cfg.risk_pct)
+    exec_engine = ExecutionDryRun(trade_state, tf=cfg.timeframe, virtual_equity=cfg.virtual_equity)
     hl = HyperliquidInfoClient()
     subs = SubscriptionStore(r, tf=cfg.timeframe)
 
@@ -130,18 +130,32 @@ async def main():
             tick,
             float(ctx.get("sleep_med_spread", 0.0)),
         )
-        order = await exec_engine.maybe_place_order(pair=pair, candle=window[-1], cand=cand)
-        if order:
-            logger.info(
-                "Dry-run order placed: pair=%s tf=%s side=%s trigger=%.4f sl=%.4f tp=%.4f qty=%.6f",
-                pair,
-                cfg.timeframe,
-                order.side,
-                order.trigger,
-                order.stop_loss,
-                order.take_profit,
-                order.qty,
+        users = await subs.get_pair_users(pair)
+        for uid in users:
+            if not await subs.is_active(uid):
+                continue
+            ucfg = await subs.get_user_cfg(uid)
+            risk_pct = float(ucfg.get("risk_pct", cfg.default_risk_pct))
+            order = await exec_engine.maybe_place_order(
+                user_id=uid,
+                pair=pair,
+                candle=window[-1],
+                cand=cand,
+                risk_pct=risk_pct,
             )
+            if order:
+                logger.info(
+                    "Dry-run order placed: user=%s pair=%s tf=%s side=%s trigger=%.4f sl=%.4f tp=%.4f qty=%.6f risk=%.2f%%",
+                    uid,
+                    pair,
+                    cfg.timeframe,
+                    order.side,
+                    order.trigger,
+                    order.stop_loss,
+                    order.take_profit,
+                    order.qty,
+                    risk_pct,
+                )
 
     async def market_loop():
         tf_ms = 15 * 60 * 1000 if cfg.timeframe == "15m" else None
@@ -195,14 +209,18 @@ async def main():
                     await update_indicators(pair)
                     await update_fractals(pair)
                     await update_signal_candidate(pair)
-                    evt = await exec_engine.on_candle(pair=pair, candle=new_candle)
-                    if evt.get("changed"):
-                        logger.info("Dry-run event: pair=%s tf=%s %s", pair, cfg.timeframe, evt)
+                    users = await subs.get_pair_users(pair)
+                    for uid in users:
+                        if not await subs.is_active(uid):
+                            continue
+                        evt = await exec_engine.on_candle(user_id=uid, pair=pair, candle=new_candle)
+                        if evt.get("changed"):
+                            logger.info("Dry-run event: user=%s pair=%s tf=%s %s", uid, pair, cfg.timeframe, evt)
             await asyncio.sleep(cfg.poll_seconds)
 
     tasks = [asyncio.create_task(market_loop())]
     if cfg.telegram_token:
-        tasks.append(asyncio.create_task(run_telegram(cfg, subs)))
+        tasks.append(asyncio.create_task(run_telegram(cfg, subs, trade_state)))
     await asyncio.gather(*tasks)
 
 

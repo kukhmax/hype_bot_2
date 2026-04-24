@@ -31,6 +31,9 @@ class SubscriptionStore:
 
     async def set_active(self, user_id: int, active: bool) -> None:
         await self.r.set(self.user_active_key(user_id), "1" if active else "0")
+        pairs = await self.get_user_pairs(user_id)
+        for p in pairs:
+            await self._refresh_active_pairs(p)
 
     async def get_user_pairs(self, user_id: int) -> list[str]:
         pairs = await self.r.smembers(self.user_pairs_key(user_id))
@@ -56,8 +59,17 @@ class SubscriptionStore:
 
     async def _refresh_active_pairs(self, pair: str) -> None:
         pair_key = self.pair_users_key(pair)
-        users = await self.r.scard(pair_key)
-        if users > 0:
+        raw_users = await self.r.smembers(pair_key)
+        any_active = False
+        for u in raw_users:
+            try:
+                uid = int(u)
+            except Exception:
+                continue
+            if await self.is_active(uid):
+                any_active = True
+                break
+        if any_active:
             await self.r.sadd(self.active_pairs_key(), pair)
         else:
             await self.r.srem(self.active_pairs_key(), pair)
