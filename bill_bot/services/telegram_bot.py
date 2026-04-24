@@ -42,7 +42,7 @@ def _reply_main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="⚙️ Риск"), KeyboardButton(text="📊 Статус")],
             [KeyboardButton(text="▶️ Запуск"), KeyboardButton(text="⏸ Стоп")],
             [KeyboardButton(text="📈 Позиции"), KeyboardButton(text="💰 P&L")],
-            [KeyboardButton(text="📉 График")],
+            [KeyboardButton(text="📉 График"), KeyboardButton(text="📜 Сделки")],
         ],
         resize_keyboard=True,
     )
@@ -224,6 +224,41 @@ async def run_telegram(
             except Exception:
                 pass
         await message.answer(f"P&L по TF {tf}\n\nUnrealized: {total_u:.2f}\nRealized: {total_r:.2f}")
+        return
+
+    @dp.message(F.text == "📜 Сделки")
+    async def trades_msg(message: Message):
+        uid = message.from_user.id
+        tf, user_subs = await user_ctx(uid)
+        pairs = await user_subs.get_user_pairs(uid)
+        if not pairs:
+            await message.answer("Нет выбранных пар.")
+            await send_menu(message)
+            return
+
+        lines: list[str] = [f"Последние сделки (TF {tf}):\n"]
+        any_rows = False
+        for p in pairs:
+            trades = await trade_state.get_trades(uid, p, tf, limit=3)
+            if not trades:
+                continue
+            any_rows = True
+            lines.append(f"{p}:")
+            for t in trades:
+                try:
+                    side = str(t.get("side", ""))
+                    pnl = float(t.get("pnl", 0.0))
+                    entry = float(t.get("entry", 0.0))
+                    exit_px = float(t.get("exit", 0.0))
+                    reason = str(t.get("reason", ""))
+                    closed_t = int(t.get("closed_t", 0))
+                except Exception:
+                    continue
+                lines.append(f"  {closed_t} {side} entry={entry:.4f} exit={exit_px:.4f} pnl={pnl:.2f} {reason}")
+        if not any_rows:
+            await message.answer("Пока нет закрытых сделок.")
+            return
+        await message.answer("\n".join(lines))
         return
 
     @dp.message(F.text == "📉 График")

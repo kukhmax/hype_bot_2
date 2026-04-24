@@ -86,6 +86,10 @@ class RedisTradeState:
     def pnl_key(user_id: int, pair: str, tf: str) -> str:
         return f"pnl:{user_id}:{pair}:{tf}"
 
+    @staticmethod
+    def trades_key(user_id: int, pair: str, tf: str) -> str:
+        return f"trades:{user_id}:{pair}:{tf}"
+
     async def get(self, user_id: int, pair: str, tf: str) -> dict:
         raw = await self.r.get(self.state_key(user_id, pair, tf))
         if not raw:
@@ -105,6 +109,23 @@ class RedisTradeState:
 
     async def set_pnl(self, user_id: int, pair: str, tf: str, payload: dict) -> None:
         await self.r.set(self.pnl_key(user_id, pair, tf), json.dumps(payload, separators=(",", ":")))
+
+    async def append_trade(self, user_id: int, pair: str, tf: str, trade: dict, max_len: int = 50) -> None:
+        key = self.trades_key(user_id, pair, tf)
+        await self.r.lpush(key, json.dumps(trade, separators=(",", ":")))
+        await self.r.ltrim(key, 0, int(max_len) - 1)
+
+    async def get_trades(self, user_id: int, pair: str, tf: str, limit: int = 10) -> list[dict]:
+        raw = await self.r.lrange(self.trades_key(user_id, pair, tf), 0, int(limit) - 1)
+        out: list[dict] = []
+        for x in raw:
+            try:
+                d = json.loads(x)
+            except Exception:
+                continue
+            if isinstance(d, dict):
+                out.append(d)
+        return out
 
 
 class ExecutionDryRun:
@@ -193,7 +214,7 @@ class ExecutionDryRun:
                 pnl = self._realized_pnl(pos, exit_price)
                 realized = float(state.get("realized", 0.0)) + float(pnl)
                 state["realized"] = realized
-                state["last_trade"] = {
+                trade = {
                     "user_id": user_id,
                     "pair": pair,
                     "tf": self.tf,
@@ -207,9 +228,11 @@ class ExecutionDryRun:
                     "reason": exit_reason,
                     "cluster_t": pos.cluster_t,
                 }
+                state["last_trade"] = trade
                 state.pop("pos", None)
                 changed = True
                 event = {"changed": True, "event": "position_closed", "reason": exit_reason, "pnl": pnl}
+                await self.store.append_trade(user_id, pair, self.tf, trade)
                 await self.store.set_pnl(user_id, pair, self.tf, {"unrealized": 0.0, "realized": realized})
             else:
                 mark = candle.c
