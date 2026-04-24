@@ -16,6 +16,7 @@ class FractalPoint:
     kind: str
     t: int
     price: float
+    idx: int | None = None
 
 
 @dataclass(frozen=True)
@@ -67,14 +68,16 @@ def build_chart_png(
     t_to_idx = {c.t: i for i, c in enumerate(candles)}
     step = (candles[1].t - candles[0].t) if len(candles) >= 2 else None
     for f in fractals:
-        if f.t < t_min or f.t > t_max:
-            continue
-        idx = t_to_idx.get(f.t)
-        if idx is None and step:
-            closest = min(range(len(candles)), key=lambda i: abs(candles[i].t - f.t))
-            if abs(candles[closest].t - f.t) <= abs(step) / 2:
-                idx = closest
+        idx = getattr(f, "idx", None)
         if idx is None:
+            if f.t < t_min or f.t > t_max:
+                continue
+            idx = t_to_idx.get(f.t)
+            if idx is None and step:
+                closest = min(range(len(candles)), key=lambda i: abs(candles[i].t - f.t))
+                if abs(candles[closest].t - f.t) <= abs(step) / 2:
+                    idx = closest
+        if idx is None or idx < 0 or idx >= len(candles):
             continue
         if f.kind.upper() == "HIGH":
             ax.scatter([idx], [f.price], marker="^", s=80, color="#7c3aed", edgecolors="#0f172a", linewidths=0.6, zorder=6)

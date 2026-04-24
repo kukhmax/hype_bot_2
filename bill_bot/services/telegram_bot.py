@@ -99,10 +99,17 @@ def _timeframe_ms(tf: str) -> int:
 
 def _calc_fractal_points(candles, teeth_series) -> list[FractalPoint]:
     out: list[FractalPoint] = []
-    for center_idx in range(2, max(2, len(candles) - 2)):
-        found = detect_confirmed_fractal(candles, teeth_series=teeth_series, center_idx=center_idx)
-        for f in found:
-            out.append(FractalPoint(kind=f.kind, t=f.t, price=f.price))
+    for i in range(2, max(2, len(candles) - 2)):
+        c = candles[i]
+        l2 = candles[i - 2]
+        l1 = candles[i - 1]
+        r1 = candles[i + 1]
+        r2 = candles[i + 2]
+
+        if c.h > l2.h and c.h > l1.h and c.h > r1.h and c.h > r2.h:
+            out.append(FractalPoint(kind="HIGH", t=c.t, price=c.h, idx=i))
+        if c.l < l2.l and c.l < l1.l and c.l < r1.l and c.l < r2.l:
+            out.append(FractalPoint(kind="LOW", t=c.t, price=c.l, idx=i))
     out.sort(key=lambda x: x.t)
     return out
 
