@@ -1,4 +1,4 @@
-aiohttp==3.12.15
+aiohttp==3.10.11
 aiogram==3.15.0
 matplotlib==3.10.8
 redis==6.4.0
