@@ -7,6 +7,7 @@ from bill_bot.core.config import Config
 from bill_bot.core.logger import setup_logger
 from bill_bot.core.redis_client import get_redis
 from bill_bot.services.candle_store import Candle, RedisCandleStore
+from bill_bot.services.fractals import RedisFractalStore, detect_confirmed_fractal
 from bill_bot.services.hyperliquid_api import HyperliquidInfoClient
 from bill_bot.services.indicators import alligator_ema, spread_lines, is_sleep
 
@@ -24,7 +25,33 @@ async def main():
         raise
 
     store = RedisCandleStore(r)
+    fractals_store = RedisFractalStore(r)
     hl = HyperliquidInfoClient()
+
+    async def update_fractals(pair: str):
+        window = await store.get_window(pair, cfg.timeframe)
+        if len(window) < 5:
+            return
+        closes = [c.c for c in window]
+        alli = alligator_ema(closes)
+        teeth = alli["teeth"]
+        center_idx = len(window) - 3
+        found = detect_confirmed_fractal(window, teeth_series=teeth, center_idx=center_idx)
+        if not found:
+            return
+        added = await fractals_store.append_new(pair, cfg.timeframe, found, max_len=cfg.fractals_max)
+        if added:
+            for f in found:
+                logger.info(
+                    "Fractal confirmed: pair=%s tf=%s kind=%s t=%s price=%.4f close=%.4f teeth=%.4f",
+                    pair,
+                    cfg.timeframe,
+                    f.kind,
+                    f.t,
+                    f.price,
+                    f.close,
+                    f.teeth,
+                )
 
     async def update_indicators(pair: str):
         window = await store.get_window(pair, cfg.timeframe)
@@ -86,6 +113,7 @@ async def main():
             )
             if window:
                 await update_indicators(pair)
+                await update_fractals(pair)
 
         logger.info("History bootstrap done. Starting polling for closed candles...")
 
@@ -105,6 +133,7 @@ async def main():
                 if appended:
                     logger.info("New closed candle: pair=%s tf=%s t=%s o=%.4f c=%.4f", pair, cfg.timeframe, new_candle.t, new_candle.o, new_candle.c)
                     await update_indicators(pair)
+                    await update_fractals(pair)
             await asyncio.sleep(cfg.poll_seconds)
 
     logger.info("Bill Bot bootstrap started (dry-run). No PAIRS configured. Waiting...")

@@ -37,6 +37,16 @@
     - ключ `ind:last:<pair>:15m` (JSON: jaw/teeth/lips/spread/sleep/параметры сна)
   - В логи пишется строка `Alligator: ... sleep=... med_spread=...`
 
+- Шаг 4: FractalDetector (MVP) — подтверждённые кластера (фракталы) по окну 5 свечей.
+  - Добавлен детектор подтверждённых фракталов:
+    - HIGH: High[i] выше High[i-1], High[i-2], High[i+1], High[i+2]
+    - LOW: Low[i] ниже Low[i-1], Low[i-2], Low[i+1], Low[i+2]
+    - подтверждение происходит при наличии 2 следующих свечей (в realtime проверяем центр = len(window)-3)
+  - Для каждого фрактала сохраняем: kind, t (время центра), price (high/low), close свечи центра, teeth на свече центра.
+  - Хранение в Redis:
+    - ключ `fractals:<pair>:15m` (JSON-список, ограничение `FRACTALS_MAX`)
+  - В логи пишется строка `Fractal confirmed: ...`
+
 ## 0) Зафиксированные требования
 - Рынок: Hyperliquid.
 - TF: 15m.

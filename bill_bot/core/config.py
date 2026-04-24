@@ -14,6 +14,7 @@ class Config:
     poll_seconds: int
     sleep_window: int
     sleep_k: float
+    fractals_max: int
 
     @staticmethod
     def from_env() -> "Config":
@@ -28,6 +29,7 @@ class Config:
         poll_seconds = int(os.getenv("POLL_SECONDS", "5"))
         sleep_window = int(os.getenv("SLEEP_WINDOW", "20"))
         sleep_k = float(os.getenv("SLEEP_K", "0.001"))
+        fractals_max = int(os.getenv("FRACTALS_MAX", "200"))
         return Config(
             redis_host=host,
             redis_port=port,
@@ -39,4 +41,5 @@ class Config:
             poll_seconds=poll_seconds,
             sleep_window=sleep_window,
             sleep_k=sleep_k,
+            fractals_max=fractals_max,
         )
