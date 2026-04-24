@@ -136,8 +136,30 @@ async def run_telegram(
         if tf not in cfg.timeframes_available:
             await cb.answer("Неподдерживаемый TF")
             return
-        await subs.set_user_timeframe(uid, tf)
-        await cb.answer(f"TF установлен: {tf}")
+        old_tf = await subs.get_user_timeframe(uid, cfg.timeframe)
+        if old_tf != tf:
+            await subs.set_user_timeframe(uid, tf)
+            old_subs = SubscriptionStore(subs.r, tf=old_tf)
+            new_subs = SubscriptionStore(subs.r, tf=tf)
+
+            old_pairs = await old_subs.get_user_pairs(uid)
+            new_pairs = await new_subs.get_user_pairs(uid)
+            if old_pairs and not new_pairs:
+                for p in old_pairs:
+                    await new_subs.toggle_pair(uid, p)
+
+            old_cfg = await old_subs.get_user_cfg(uid)
+            new_cfg = await new_subs.get_user_cfg(uid)
+            if "risk_pct" in old_cfg and "risk_pct" not in new_cfg:
+                try:
+                    await new_subs.set_user_risk(uid, float(old_cfg["risk_pct"]))
+                except Exception:
+                    pass
+
+            await old_subs.set_active(uid, False)
+            await new_subs.set_active(uid, False)
+
+        await cb.answer(f"TF установлен: {tf}. Трекинг выключен.")
         await cb.message.edit_reply_markup(reply_markup=_tf_menu(cfg.timeframes_available, tf).as_markup())
 
     @dp.callback_query(F.data == "menu:pairs")
