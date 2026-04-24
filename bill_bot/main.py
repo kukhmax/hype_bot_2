@@ -36,17 +36,26 @@ async def main():
     subs = SubscriptionStore(r, tf=cfg.timeframe)
 
     def timeframe_ms(tf: str) -> int:
-        m = {
-            "1m": 60_000,
-            "3m": 3 * 60_000,
-            "5m": 5 * 60_000,
-            "15m": 15 * 60_000,
-            "1h": 60 * 60_000,
-        }
-        v = m.get(tf)
-        if not v:
-            raise ValueError(f"Unsupported timeframe: {tf}")
-        return int(v)
+        tf = str(tf).strip()
+        if tf.endswith("m"):
+            n = tf[:-1]
+            try:
+                minutes = int(n)
+            except Exception:
+                raise ValueError(f"Unsupported timeframe: {tf}")
+            if minutes <= 0:
+                raise ValueError(f"Unsupported timeframe: {tf}")
+            return minutes * 60_000
+        if tf.endswith("h"):
+            n = tf[:-1]
+            try:
+                hours = int(n)
+            except Exception:
+                raise ValueError(f"Unsupported timeframe: {tf}")
+            if hours <= 0:
+                raise ValueError(f"Unsupported timeframe: {tf}")
+            return hours * 60 * 60_000
+        raise ValueError(f"Unsupported timeframe: {tf}")
 
     async def update_fractals(pair: str, tf: str):
         window = await store.get_window(pair, tf)
