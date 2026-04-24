@@ -12,6 +12,8 @@ from bill_bot.services.fractals import RedisFractalStore, detect_confirmed_fract
 from bill_bot.services.hyperliquid_api import HyperliquidInfoClient
 from bill_bot.services.indicators import alligator_ema, spread_lines, is_sleep
 from bill_bot.services.strategy import RedisSignalStore, StrategyEngine
+from bill_bot.services.subscriptions import SubscriptionStore
+from bill_bot.services.telegram_bot import run_telegram
 
 
 async def main():
@@ -32,6 +34,7 @@ async def main():
     trade_state = RedisTradeState(r)
     exec_engine = ExecutionDryRun(trade_state, tf=cfg.timeframe, virtual_equity=cfg.virtual_equity, risk_pct=cfg.risk_pct)
     hl = HyperliquidInfoClient()
+    subs = SubscriptionStore(r, tf=cfg.timeframe)
 
     async def update_fractals(pair: str):
         window = await store.get_window(pair, cfg.timeframe)
@@ -140,41 +143,46 @@ async def main():
                 order.qty,
             )
 
-    if cfg.pairs:
+    async def market_loop():
         tf_ms = 15 * 60 * 1000 if cfg.timeframe == "15m" else None
         if tf_ms is None:
             raise ValueError("Only 15m timeframe supported in this step")
 
-        now = int(time.time() * 1000)
-        start = now - tf_ms * max(cfg.history_bars * 3, 300)
-        for pair in cfg.pairs:
-            raw = await hl.candle_snapshot(pair, cfg.timeframe, start, now)
-            candles = [Candle.from_hl(x) for x in raw]
-            candles.sort(key=lambda c: c.t)
-            closed = [c for c in candles if c.T <= now]
-            window = closed[-cfg.history_bars:]
-            await store.set_window(pair, cfg.timeframe, window)
-            logger.info(
-                "History loaded: pair=%s tf=%s bars=%s range_t=%s..%s",
-                pair,
-                cfg.timeframe,
-                len(window),
-                window[0].t if window else None,
-                window[-1].t if window else None,
-            )
-            if window:
-                await update_indicators(pair)
-                await update_fractals(pair)
-                await update_signal_candidate(pair)
-
-        logger.info("History bootstrap done. Starting polling for closed candles...")
-
         max_len = max(cfg.history_bars, 200)
         while True:
+            active_pairs = await subs.get_active_pairs()
+            pairs_to_use = active_pairs or cfg.pairs
+            if not pairs_to_use:
+                await asyncio.sleep(2)
+                continue
+
             now = int(time.time() * 1000)
-            start = now - tf_ms * 10
-            for pair in cfg.pairs:
-                raw = await hl.candle_snapshot(pair, cfg.timeframe, start, now)
+            start = now - tf_ms * max(cfg.history_bars * 3, 300)
+            for pair in pairs_to_use:
+                existing = await store.get_window(pair, cfg.timeframe)
+                if len(existing) < cfg.history_bars:
+                    raw = await hl.candle_snapshot(pair, cfg.timeframe, start, now)
+                    candles = [Candle.from_hl(x) for x in raw]
+                    candles.sort(key=lambda c: c.t)
+                    closed = [c for c in candles if c.T <= now]
+                    window = closed[-cfg.history_bars:]
+                    await store.set_window(pair, cfg.timeframe, window)
+                    logger.info(
+                        "History loaded: pair=%s tf=%s bars=%s range_t=%s..%s",
+                        pair,
+                        cfg.timeframe,
+                        len(window),
+                        window[0].t if window else None,
+                        window[-1].t if window else None,
+                    )
+                    if window:
+                        await update_indicators(pair)
+                        await update_fractals(pair)
+                        await update_signal_candidate(pair)
+                    continue
+
+                start_small = now - tf_ms * 10
+                raw = await hl.candle_snapshot(pair, cfg.timeframe, start_small, now)
                 candles = [Candle.from_hl(x) for x in raw]
                 candles.sort(key=lambda c: c.t)
                 closed = [c for c in candles if c.T <= now]
@@ -192,9 +200,10 @@ async def main():
                         logger.info("Dry-run event: pair=%s tf=%s %s", pair, cfg.timeframe, evt)
             await asyncio.sleep(cfg.poll_seconds)
 
-    logger.info("Bill Bot bootstrap started (dry-run). No PAIRS configured. Waiting...")
-    while True:
-        await asyncio.sleep(60)
+    tasks = [asyncio.create_task(market_loop())]
+    if cfg.telegram_token:
+        tasks.append(asyncio.create_task(run_telegram(cfg, subs)))
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":

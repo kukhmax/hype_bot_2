@@ -19,6 +19,10 @@ class Config:
     tick_sizes: dict[str, float]
     virtual_equity: float
     risk_pct: float
+    telegram_token: str
+    pairs_available: list[str]
+    default_virtual_equity: float
+    default_risk_pct: float
 
     @staticmethod
     def from_env() -> "Config":
@@ -49,8 +53,13 @@ class Config:
                 tick_sizes[sym] = float(val.strip())
             except ValueError:
                 continue
-        virtual_equity = float(os.getenv("VIRTUAL_EQUITY", "10000"))
-        risk_pct = float(os.getenv("RISK_PCT", "1.0"))
+        default_virtual_equity = float(os.getenv("VIRTUAL_EQUITY", "10000"))
+        default_risk_pct = float(os.getenv("RISK_PCT", "1.0"))
+        virtual_equity = default_virtual_equity
+        risk_pct = default_risk_pct
+        telegram_token = os.getenv("TELEGRAM_TOKEN", "")
+        pairs_available_raw = os.getenv("PAIRS_AVAILABLE", pairs_raw)
+        pairs_available = [p.strip().upper() for p in pairs_available_raw.split(",") if p.strip()]
         return Config(
             redis_host=host,
             redis_port=port,
@@ -67,4 +76,8 @@ class Config:
             tick_sizes=tick_sizes,
             virtual_equity=virtual_equity,
             risk_pct=risk_pct,
+            telegram_token=telegram_token,
+            pairs_available=pairs_available,
+            default_virtual_equity=default_virtual_equity,
+            default_risk_pct=default_risk_pct,
         )

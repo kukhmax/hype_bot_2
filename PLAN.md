@@ -88,6 +88,20 @@
     - `pnl:<pair>:15m` (unrealized/realized)
   - В логи пишутся события: `Dry-run order placed`, `Dry-run event: position_opened/position_closed`
 
+- Шаг 8: Telegram (MVP) — управление подписками (пары/risk/старт/стоп).
+  - Добавлен Telegram бот (polling) и простое меню:
+    - выбор пар (multi-select) из `PAIRS_AVAILABLE`
+    - выбор risk% кнопками (0.5/1/2/3/5)
+    - старт/стоп отслеживания (флаг active)
+    - статус (текущие выбранные пары и риск)
+  - Подписки храним в Redis:
+    - пары: `sub:user:<user_id>:pairs:15m`
+    - активность: `sub:user:<user_id>:active:15m`
+    - риск: `sub:user:<user_id>:cfg:15m`
+    - индекс пользователей по паре: `sub:pair:<pair>:15m:users`
+    - активные пары (объединение): `active_pairs:15m`
+  - Market loop теперь обрабатывает пары из `active_pairs:15m` (если пусто, использует fallback `PAIRS` из env).
+
 ## 0) Зафиксированные требования
 - Рынок: Hyperliquid.
 - TF: 15m.
