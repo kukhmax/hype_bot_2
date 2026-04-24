@@ -444,9 +444,10 @@ async def run_telegram(
                 ]
             )
         closes = [c.c for c in candles]
-        jaw = alligator_ema(closes, 13)
-        teeth = alligator_ema(closes, 8)
-        lips = alligator_ema(closes, 5)
+        alli = alligator_ema(closes)
+        jaw = alli["jaw"]
+        teeth = alli["teeth"]
+        lips = alli["lips"]
         fr = await fractals_store.get_all(pair, tf)
         fpts = [FractalPoint(kind=f.kind, t=f.t, price=f.price) for f in fr]
         data = build_chart_png(pair, tf, candles, jaw, teeth, lips, fpts, levels=levels)
