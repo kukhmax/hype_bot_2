@@ -107,7 +107,7 @@ def _calc_fractal_points(candles, teeth_series) -> list[FractalPoint]:
     return out
 
 
-
+def _pairs_menu(cfg: Config, selected: set[str]) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     base = [p for p in cfg.pairs_available]
     extras = sorted([p for p in selected if p not in base])
