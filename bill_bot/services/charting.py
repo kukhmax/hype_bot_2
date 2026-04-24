@@ -65,16 +65,21 @@ def build_chart_png(
     t_min = candles[0].t
     t_max = candles[-1].t
     t_to_idx = {c.t: i for i, c in enumerate(candles)}
+    step = (candles[1].t - candles[0].t) if len(candles) >= 2 else None
     for f in fractals:
         if f.t < t_min or f.t > t_max:
             continue
         idx = t_to_idx.get(f.t)
+        if idx is None and step:
+            closest = min(range(len(candles)), key=lambda i: abs(candles[i].t - f.t))
+            if abs(candles[closest].t - f.t) <= abs(step) / 2:
+                idx = closest
         if idx is None:
             continue
         if f.kind.upper() == "HIGH":
-            ax.scatter([idx], [f.price], marker="^", s=40, color="#7c3aed", zorder=5)
+            ax.scatter([idx], [f.price], marker="^", s=80, color="#7c3aed", edgecolors="#0f172a", linewidths=0.6, zorder=6)
         else:
-            ax.scatter([idx], [f.price], marker="v", s=40, color="#7c3aed", zorder=5)
+            ax.scatter([idx], [f.price], marker="v", s=80, color="#f59e0b", edgecolors="#0f172a", linewidths=0.6, zorder=6)
 
     for lvl in levels:
         try:

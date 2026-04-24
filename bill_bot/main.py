@@ -190,49 +190,52 @@ async def main():
             now = int(time.time() * 1000)
             start = now - tf_ms * max(cfg.history_bars * 3, 300)
             for pair in pairs_to_use:
-                existing = await store.get_window(pair, tf)
-                if len(existing) < cfg.history_bars:
-                    raw = await hl.candle_snapshot(pair, tf, start, now)
+                try:
+                    existing = await store.get_window(pair, tf)
+                    if len(existing) < cfg.history_bars:
+                        raw = await hl.candle_snapshot(pair, tf, start, now)
+                        candles = [Candle.from_hl(x) for x in raw]
+                        candles.sort(key=lambda c: c.t)
+                        closed = [c for c in candles if c.T <= now]
+                        window = closed[-cfg.history_bars:]
+                        await store.set_window(pair, tf, window)
+                        logger.info(
+                            "History loaded: pair=%s tf=%s bars=%s range_t=%s..%s",
+                            pair,
+                            tf,
+                            len(window),
+                            window[0].t if window else None,
+                            window[-1].t if window else None,
+                        )
+                        if window:
+                            await update_indicators(pair, tf)
+                            await update_fractals(pair, tf)
+                            await update_signal_candidate(pair, tf, subs_tf, exec_engine)
+                        continue
+
+                    start_small = now - tf_ms * 10
+                    raw = await hl.candle_snapshot(pair, tf, start_small, now)
                     candles = [Candle.from_hl(x) for x in raw]
                     candles.sort(key=lambda c: c.t)
                     closed = [c for c in candles if c.T <= now]
-                    window = closed[-cfg.history_bars:]
-                    await store.set_window(pair, tf, window)
-                    logger.info(
-                        "History loaded: pair=%s tf=%s bars=%s range_t=%s..%s",
-                        pair,
-                        tf,
-                        len(window),
-                        window[0].t if window else None,
-                        window[-1].t if window else None,
-                    )
-                    if window:
+                    if not closed:
+                        continue
+                    new_candle = closed[-1]
+                    appended = await store.append_if_new(pair, tf, new_candle, max_len=max_len)
+                    if appended:
+                        logger.info("New closed candle: pair=%s tf=%s t=%s o=%.4f c=%.4f", pair, tf, new_candle.t, new_candle.o, new_candle.c)
                         await update_indicators(pair, tf)
                         await update_fractals(pair, tf)
                         await update_signal_candidate(pair, tf, subs_tf, exec_engine)
-                    continue
-
-                start_small = now - tf_ms * 10
-                raw = await hl.candle_snapshot(pair, tf, start_small, now)
-                candles = [Candle.from_hl(x) for x in raw]
-                candles.sort(key=lambda c: c.t)
-                closed = [c for c in candles if c.T <= now]
-                if not closed:
-                    continue
-                new_candle = closed[-1]
-                appended = await store.append_if_new(pair, tf, new_candle, max_len=max_len)
-                if appended:
-                    logger.info("New closed candle: pair=%s tf=%s t=%s o=%.4f c=%.4f", pair, tf, new_candle.t, new_candle.o, new_candle.c)
-                    await update_indicators(pair, tf)
-                    await update_fractals(pair, tf)
-                    await update_signal_candidate(pair, tf, subs_tf, exec_engine)
-                    users = await subs_tf.get_pair_users(pair)
-                    for uid in users:
-                        if not await subs_tf.is_active(uid):
-                            continue
-                        evt = await exec_engine.on_candle(user_id=uid, pair=pair, candle=new_candle)
-                        if evt.get("changed"):
-                            logger.info("Dry-run event: user=%s pair=%s tf=%s %s", uid, pair, tf, evt)
+                        users = await subs_tf.get_pair_users(pair)
+                        for uid in users:
+                            if not await subs_tf.is_active(uid):
+                                continue
+                            evt = await exec_engine.on_candle(user_id=uid, pair=pair, candle=new_candle)
+                            if evt.get("changed"):
+                                logger.info("Dry-run event: user=%s pair=%s tf=%s %s", uid, pair, tf, evt)
+                except Exception as e:
+                    logger.error("Market loop error: pair=%s tf=%s err=%s", pair, tf, e)
             await asyncio.sleep(cfg.poll_seconds)
 
     timeframes = list(dict.fromkeys([*cfg.timeframes_available, cfg.timeframe]))
