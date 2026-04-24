@@ -1,7 +1,0 @@
-aiogram>=3.0.0b7
-pandas
-pandas-ta @ https://downloads.sourceforge.net/project/pandas-ta.mirror/0.3.14/PandasTA-v0.3.14b%20source%20code.tar.gz
-mplfinance
-aiohttp
-matplotlib
-numpy<2
