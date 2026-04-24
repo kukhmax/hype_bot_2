@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery
@@ -13,10 +14,11 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from bill_bot.core.config import Config
-from bill_bot.services.candle_store import RedisCandleStore
+from bill_bot.services.candle_store import Candle, RedisCandleStore
 from bill_bot.services.charting import FractalPoint, PriceLevel, build_chart_png
 from bill_bot.services.execution import RedisTradeState, Position, PendingOrder
-from bill_bot.services.fractals import RedisFractalStore
+from bill_bot.services.fractals import RedisFractalStore, detect_confirmed_fractal
+from bill_bot.services.hyperliquid_api import HyperliquidInfoClient
 from bill_bot.services.indicators import alligator_ema
 from bill_bot.services.subscriptions import SubscriptionStore
 
@@ -25,6 +27,10 @@ logger = logging.getLogger(__name__)
 
 
 class AddPairFlow(StatesGroup):
+    waiting_pair = State()
+
+
+class ChartPairFlow(StatesGroup):
     waiting_pair = State()
 
 
@@ -76,8 +82,32 @@ def _parse_pair_input(raw: str) -> str | None:
     return s
 
 
+def _timeframe_ms(tf: str) -> int:
+    tf = str(tf).strip()
+    if tf.endswith("m"):
+        minutes = int(tf[:-1])
+        if minutes <= 0:
+            raise ValueError(f"Unsupported timeframe: {tf}")
+        return minutes * 60_000
+    if tf.endswith("h"):
+        hours = int(tf[:-1])
+        if hours <= 0:
+            raise ValueError(f"Unsupported timeframe: {tf}")
+        return hours * 60 * 60_000
+    raise ValueError(f"Unsupported timeframe: {tf}")
 
-def _pairs_menu(cfg: Config, selected: set[str]) -> InlineKeyboardBuilder:
+
+def _calc_fractal_points(candles, teeth_series) -> list[FractalPoint]:
+    out: list[FractalPoint] = []
+    for center_idx in range(2, max(2, len(candles) - 2)):
+        found = detect_confirmed_fractal(candles, teeth_series=teeth_series, center_idx=center_idx)
+        for f in found:
+            out.append(FractalPoint(kind=f.kind, t=f.t, price=f.price))
+    out.sort(key=lambda x: x.t)
+    return out
+
+
+
     kb = InlineKeyboardBuilder()
     base = [p for p in cfg.pairs_available]
     extras = sorted([p for p in selected if p not in base])
@@ -114,6 +144,7 @@ def _chart_pairs_menu(pairs: list[str]) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     for p in pairs:
         kb.button(text=_display_pair(p), callback_data=f"chart:{p}")
+    kb.button(text="⌨️ Ввести пару", callback_data="chart_input:prompt")
     kb.button(text="⬅️ Назад", callback_data="menu:back")
     kb.adjust(3)
     return kb
@@ -132,6 +163,7 @@ async def run_telegram(
 
     bot = Bot(token=cfg.telegram_token)
     dp = Dispatcher(storage=MemoryStorage())
+    hl = HyperliquidInfoClient()
 
     async def user_ctx(user_id: int) -> tuple[str, SubscriptionStore]:
         tf = await subs.get_user_timeframe(user_id, cfg.timeframe)
@@ -324,12 +356,56 @@ async def run_telegram(
         logger.info("tg:btn user=%s text=%s", uid, message.text)
         _, user_subs = await user_ctx(uid)
         pairs = await user_subs.get_user_pairs(uid)
-        if not pairs:
-            await message.answer("Нет выбранных пар.")
-            await send_menu(message)
-            return
-        await message.answer("Выбери пару для графика:", reply_markup=_chart_pairs_menu(pairs).as_markup())
+        await message.answer("Выбери пару для графика (или введи вручную):", reply_markup=_chart_pairs_menu(pairs).as_markup())
         return
+
+    @dp.callback_query(F.data == "chart_input:prompt")
+    async def chart_input_prompt(cb: CallbackQuery, state: FSMContext):
+        logger.info("tg:cb user=%s data=%s", cb.from_user.id, cb.data)
+        await state.set_state(ChartPairFlow.waiting_pair)
+        await cb.answer()
+        await cb.message.answer("Введи пару в формате HYPE-USDC (можно просто HYPE).")
+
+    @dp.message(ChartPairFlow.waiting_pair)
+    async def chart_input_message(message: Message, state: FSMContext):
+        uid = message.from_user.id
+        tf, _ = await user_ctx(uid)
+        raw = message.text or ""
+        coin = _parse_pair_input(raw)
+        logger.info("tg:input user=%s flow=chart raw=%s parsed=%s tf=%s", uid, raw, coin, tf)
+        if not coin:
+            await message.answer("Не понял формат. Пример: HYPE-USDC")
+            return
+        await state.clear()
+
+        candles = await candle_store.get_window(coin, tf)
+        if not candles:
+            try:
+                now = int(time.time() * 1000)
+                tf_ms = _timeframe_ms(tf)
+                start = now - tf_ms * max(cfg.history_bars * 3, 300)
+                raw_c = await hl.candle_snapshot(coin, tf, start, now)
+                candles = [Candle.from_hl(x) for x in raw_c]
+                candles.sort(key=lambda c: c.t)
+                candles = [c for c in candles if c.T <= now]
+                candles = candles[-cfg.history_bars :]
+            except Exception as e:
+                logger.info("tg:chart_fetch_failed user=%s tf=%s coin=%s err=%s", uid, tf, coin, e)
+                await message.answer("Не удалось загрузить свечи по этой паре.")
+                return
+
+        if len(candles) < 5:
+            await message.answer("Недостаточно свечей для построения графика.")
+            return
+
+        closes = [c.c for c in candles]
+        alli = alligator_ema(closes)
+        jaw = alli["jaw"]
+        teeth = alli["teeth"]
+        lips = alli["lips"]
+        fpts = _calc_fractal_points(candles, teeth_series=teeth)
+        data = build_chart_png(coin, tf, candles, jaw, teeth, lips, fpts, levels=[])
+        await message.answer_photo(BufferedInputFile(data, filename=f"{coin}_{tf}.png"))
 
     @dp.callback_query(F.data == "pair_add:prompt")
     async def pair_add_prompt(cb: CallbackQuery, state: FSMContext):
@@ -536,12 +612,8 @@ async def run_telegram(
         uid = cb.from_user.id
         _, user_subs = await user_ctx(uid)
         pairs = await user_subs.get_user_pairs(uid)
-        if not pairs:
-            await cb.answer()
-            await cb.message.edit_text("Нет выбранных пар.", reply_markup=_main_menu().as_markup())
-            return
         await cb.answer()
-        await cb.message.edit_text("Выбери пару для графика:", reply_markup=_chart_pairs_menu(pairs).as_markup())
+        await cb.message.edit_text("Выбери пару для графика (или введи вручную):", reply_markup=_chart_pairs_menu(pairs).as_markup())
 
     @dp.callback_query(F.data.startswith("chart:"))
     async def chart_pair(cb: CallbackQuery):
@@ -578,9 +650,8 @@ async def run_telegram(
         jaw = alli["jaw"]
         teeth = alli["teeth"]
         lips = alli["lips"]
-        fr = await fractals_store.get_all(pair, tf)
-        logger.info("tg:chart user=%s tf=%s pair=%s fractals=%s candles=%s", uid, tf, pair, len(fr), len(candles))
-        fpts = [FractalPoint(kind=f.kind, t=f.t, price=f.price) for f in fr]
+        fpts = _calc_fractal_points(candles, teeth_series=teeth)
+        logger.info("tg:chart user=%s tf=%s pair=%s fractals=%s candles=%s", uid, tf, pair, len(fpts), len(candles))
         data = build_chart_png(pair, tf, candles, jaw, teeth, lips, fpts, levels=levels)
         await cb.answer()
         await cb.message.answer_photo(BufferedInputFile(data, filename=f"{pair}_{tf}.png"))
