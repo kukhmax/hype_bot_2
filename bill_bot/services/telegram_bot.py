@@ -4,6 +4,7 @@ import logging
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.types.input_file import BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -32,6 +33,19 @@ def _main_menu() -> InlineKeyboardBuilder:
     kb.button(text="📊 Статус", callback_data="menu:status")
     kb.adjust(2)
     return kb
+
+
+def _reply_main_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📌 Пары"), KeyboardButton(text="⏱ TF")],
+            [KeyboardButton(text="⚙️ Риск"), KeyboardButton(text="📊 Статус")],
+            [KeyboardButton(text="▶️ Запуск"), KeyboardButton(text="⏸ Стоп")],
+            [KeyboardButton(text="📈 Позиции"), KeyboardButton(text="💰 P&L")],
+            [KeyboardButton(text="📉 График")],
+        ],
+        resize_keyboard=True,
+    )
 
 
 def _pairs_menu(cfg: Config, selected: set[str]) -> InlineKeyboardBuilder:
@@ -93,24 +107,8 @@ async def run_telegram(
             tf = cfg.timeframe
         return tf, SubscriptionStore(subs.r, tf=tf)
 
-    @dp.message(F.text == "/start")
-    async def start_handler(message: Message):
+    async def send_menu(message: Message) -> None:
         uid = message.from_user.id
-        tf, user_subs = await user_ctx(uid)
-        st = await user_subs.dump_user_state(uid)
-        text = (
-            "Bill Bot (Hyperliquid) запущен.\n\n"
-            f"TF: {tf}\n"
-            f"Активен: {st['active']}\n"
-            f"Пары: {', '.join(st['pairs']) if st['pairs'] else '-'}\n"
-            f"Risk%: {st['cfg'].get('risk_pct', cfg.default_risk_pct)}\n\n"
-            "Выберите действие:"
-        )
-        await message.answer(text, reply_markup=_main_menu().as_markup())
-
-    @dp.callback_query(F.data == "menu:back")
-    async def back(cb: CallbackQuery):
-        uid = cb.from_user.id
         tf, user_subs = await user_ctx(uid)
         st = await user_subs.dump_user_state(uid)
         text = (
@@ -120,7 +118,125 @@ async def run_telegram(
             f"Пары: {', '.join(st['pairs']) if st['pairs'] else '-'}\n"
             f"Risk%: {st['cfg'].get('risk_pct', cfg.default_risk_pct)}"
         )
-        await cb.message.edit_text(text, reply_markup=_main_menu().as_markup())
+        await message.answer(text, reply_markup=_reply_main_menu())
+
+    @dp.message(F.text == "/start")
+    async def start_handler(message: Message):
+        text = (
+            "Bill Bot (Hyperliquid) запущен.\n\n"
+            "Выберите действие кнопками снизу:"
+        )
+        await message.answer(text, reply_markup=_reply_main_menu())
+        await send_menu(message)
+
+    @dp.callback_query(F.data == "menu:back")
+    async def back(cb: CallbackQuery):
+        await cb.answer()
+        await send_menu(cb.message)
+
+    @dp.message(F.text == "📊 Статус")
+    async def menu_status_msg(message: Message):
+        await send_menu(message)
+        return
+
+    @dp.message(F.text == "📌 Пары")
+    async def menu_pairs_msg(message: Message):
+        uid = message.from_user.id
+        _, user_subs = await user_ctx(uid)
+        pairs = set(await user_subs.get_user_pairs(uid))
+        await message.answer("Выберите пары для отслеживания:", reply_markup=_pairs_menu(cfg, pairs).as_markup())
+        return
+
+    @dp.message(F.text == "⚙️ Риск")
+    async def menu_risk_msg(message: Message):
+        uid = message.from_user.id
+        _, user_subs = await user_ctx(uid)
+        st = await user_subs.get_user_cfg(uid)
+        cur = st.get("risk_pct")
+        await message.answer("Выберите риск на сделку (% от виртуального депозита):", reply_markup=_risk_menu(cur).as_markup())
+        return
+
+    @dp.message(F.text == "⏱ TF")
+    async def menu_tf_msg(message: Message):
+        tf, _ = await user_ctx(message.from_user.id)
+        await message.answer("Выберите таймфрейм:", reply_markup=_tf_menu(cfg.timeframes_available, tf).as_markup())
+        return
+
+    @dp.message(F.text == "▶️ Запуск")
+    async def start_tracking_msg(message: Message):
+        uid = message.from_user.id
+        _, user_subs = await user_ctx(uid)
+        await user_subs.set_active(uid, True)
+        await message.answer("Отслеживание включено.")
+        await send_menu(message)
+        return
+
+    @dp.message(F.text == "⏸ Стоп")
+    async def stop_tracking_msg(message: Message):
+        uid = message.from_user.id
+        _, user_subs = await user_ctx(uid)
+        await user_subs.set_active(uid, False)
+        await message.answer("Отслеживание выключено.")
+        await send_menu(message)
+        return
+
+    @dp.message(F.text == "📈 Позиции")
+    async def positions_msg(message: Message):
+        uid = message.from_user.id
+        tf, user_subs = await user_ctx(uid)
+        pairs = await user_subs.get_user_pairs(uid)
+        if not pairs:
+            await message.answer("Нет выбранных пар.")
+            await send_menu(message)
+            return
+        lines: list[str] = ["Позиции / ордера:\n"]
+        for p in pairs:
+            st = await trade_state.get(uid, p, tf)
+            if st.get("pos"):
+                pos = Position.from_dict(st["pos"])
+                pnl = await trade_state.get_pnl(uid, p, tf)
+                lines.append(
+                    f"{p}: POS {pos.side} entry={pos.entry:.4f} sl={pos.stop_loss:.4f} tp={pos.take_profit:.4f} qty={pos.qty:.6f} uPnL={float(pnl.get('unrealized', 0.0)):.2f}"
+                )
+            elif st.get("ord"):
+                o = PendingOrder.from_dict(st["ord"])
+                lines.append(f"{p}: ORD {o.side} trigger={o.trigger:.4f} sl={o.stop_loss:.4f} tp={o.take_profit:.4f} qty={o.qty:.6f}")
+            else:
+                lines.append(f"{p}: —")
+        await message.answer("\n".join(lines))
+        return
+
+    @dp.message(F.text == "💰 P&L")
+    async def pnl_msg(message: Message):
+        uid = message.from_user.id
+        tf, user_subs = await user_ctx(uid)
+        pairs = await user_subs.get_user_pairs(uid)
+        total_u = 0.0
+        total_r = 0.0
+        for p in pairs:
+            pnl = await trade_state.get_pnl(uid, p, tf)
+            try:
+                total_u += float(pnl.get("unrealized", 0.0))
+            except Exception:
+                pass
+            try:
+                total_r += float(pnl.get("realized", 0.0))
+            except Exception:
+                pass
+        await message.answer(f"P&L по TF {tf}\n\nUnrealized: {total_u:.2f}\nRealized: {total_r:.2f}")
+        return
+
+    @dp.message(F.text == "📉 График")
+    async def chart_menu_msg(message: Message):
+        uid = message.from_user.id
+        _, user_subs = await user_ctx(uid)
+        pairs = await user_subs.get_user_pairs(uid)
+        if not pairs:
+            await message.answer("Нет выбранных пар.")
+            await send_menu(message)
+            return
+        await message.answer("Выбери пару для графика:", reply_markup=_chart_pairs_menu(pairs).as_markup())
+        return
         await cb.answer()
 
     @dp.callback_query(F.data == "menu:tf")
