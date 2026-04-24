@@ -15,6 +15,8 @@ class Config:
     sleep_window: int
     sleep_k: float
     fractals_max: int
+    tick_size_default: float
+    tick_sizes: dict[str, float]
 
     @staticmethod
     def from_env() -> "Config":
@@ -30,6 +32,21 @@ class Config:
         sleep_window = int(os.getenv("SLEEP_WINDOW", "20"))
         sleep_k = float(os.getenv("SLEEP_K", "0.001"))
         fractals_max = int(os.getenv("FRACTALS_MAX", "200"))
+        tick_size_default = float(os.getenv("TICK_SIZE", "0.01"))
+        tick_sizes_raw = os.getenv("TICK_SIZES", "")
+        tick_sizes: dict[str, float] = {}
+        for part in tick_sizes_raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if ":" not in part:
+                continue
+            sym, val = part.split(":", 1)
+            sym = sym.strip().upper()
+            try:
+                tick_sizes[sym] = float(val.strip())
+            except ValueError:
+                continue
         return Config(
             redis_host=host,
             redis_port=port,
@@ -42,4 +59,6 @@ class Config:
             sleep_window=sleep_window,
             sleep_k=sleep_k,
             fractals_max=fractals_max,
+            tick_size_default=tick_size_default,
+            tick_sizes=tick_sizes,
         )

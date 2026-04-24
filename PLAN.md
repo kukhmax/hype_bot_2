@@ -47,6 +47,22 @@
     - ключ `fractals:<pair>:15m` (JSON-список, ограничение `FRACTALS_MAX`)
   - В логи пишется строка `Fractal confirmed: ...`
 
+- Шаг 5: StrategyEngine (MVP) — генерация “кандидата сигнала” по правилам Bill Williams.
+  - Условия кандидата:
+    - sleep=true (из SpreadLines)
+    - LONG: последний HIGH-фрактал, у которого close кластера > teeth кластера
+    - SHORT: последний LOW-фрактал, у которого close кластера < teeth кластера
+  - Вход:
+    - stop-market trigger = cluster_price ± 1 tick (tick берём из `TICK_SIZES` или `TICK_SIZE`)
+  - SL:
+    - LONG: ближайший LOW-фрактал до HIGH-кластера, у которого close < teeth (на свече кластера)
+    - SHORT: ближайший HIGH-фрактал до LOW-кластера, у которого close > teeth (на свече кластера)
+  - TP:
+    - RR = 1 : 1.5
+  - Хранение кандидата в Redis:
+    - `signal_candidate:last:<pair>:15m`
+  - В логи пишется строка `Signal candidate: ...`
+
 ## 0) Зафиксированные требования
 - Рынок: Hyperliquid.
 - TF: 15m.

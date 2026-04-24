@@ -10,6 +10,7 @@ from bill_bot.services.candle_store import Candle, RedisCandleStore
 from bill_bot.services.fractals import RedisFractalStore, detect_confirmed_fractal
 from bill_bot.services.hyperliquid_api import HyperliquidInfoClient
 from bill_bot.services.indicators import alligator_ema, spread_lines, is_sleep
+from bill_bot.services.strategy import RedisSignalStore, StrategyEngine
 
 
 async def main():
@@ -26,6 +27,7 @@ async def main():
 
     store = RedisCandleStore(r)
     fractals_store = RedisFractalStore(r)
+    signal_store = RedisSignalStore(r)
     hl = HyperliquidInfoClient()
 
     async def update_fractals(pair: str):
@@ -89,6 +91,37 @@ async def main():
             med_spread,
         )
 
+    async def update_signal_candidate(pair: str):
+        window = await store.get_window(pair, cfg.timeframe)
+        fr = await fractals_store.get_all(pair, cfg.timeframe)
+        tick = cfg.tick_sizes.get(pair, cfg.tick_size_default)
+        engine = StrategyEngine(
+            tf=cfg.timeframe,
+            sleep_window=cfg.sleep_window,
+            sleep_k=cfg.sleep_k,
+            tick_size=tick,
+            rr=1.5,
+        )
+        cand, ctx = engine.evaluate(pair=pair, candles=window, fractals=fr)
+        if not cand:
+            return
+        prev = await signal_store.get_last(pair, cfg.timeframe)
+        if prev and prev.get("side") == cand.side and int(prev.get("cluster_t", 0)) == cand.cluster_t:
+            return
+        await signal_store.set_last(cand)
+        logger.info(
+            "Signal candidate: pair=%s tf=%s side=%s cluster_t=%s entry=%.4f sl=%.4f tp=%.4f tick=%.8f sleep_med=%.6f",
+            pair,
+            cfg.timeframe,
+            cand.side,
+            cand.cluster_t,
+            cand.entry_trigger,
+            cand.stop_loss,
+            cand.take_profit,
+            tick,
+            float(ctx.get("sleep_med_spread", 0.0)),
+        )
+
     if cfg.pairs:
         tf_ms = 15 * 60 * 1000 if cfg.timeframe == "15m" else None
         if tf_ms is None:
@@ -114,6 +147,7 @@ async def main():
             if window:
                 await update_indicators(pair)
                 await update_fractals(pair)
+                await update_signal_candidate(pair)
 
         logger.info("History bootstrap done. Starting polling for closed candles...")
 
@@ -134,6 +168,7 @@ async def main():
                     logger.info("New closed candle: pair=%s tf=%s t=%s o=%.4f c=%.4f", pair, cfg.timeframe, new_candle.t, new_candle.o, new_candle.c)
                     await update_indicators(pair)
                     await update_fractals(pair)
+                    await update_signal_candidate(pair)
             await asyncio.sleep(cfg.poll_seconds)
 
     logger.info("Bill Bot bootstrap started (dry-run). No PAIRS configured. Waiting...")
