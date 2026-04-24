@@ -1,5 +1,23 @@
 # Пошаговый план реализации Bill Bot (Alligator EMA + подтверждённые фракталы) для Hyperliquid
 
+## Реализовано
+- Шаг 1: создан каркас проекта (Python 3.13) и инфраструктура запуска (Docker + защищённый Redis).
+  - Добавлены файлы инфраструктуры:
+    - `requirements.txt` (зависимости: aiohttp, redis)
+    - `Dockerfile` (сборка образа, запуск `python -m bill_bot.main`)
+    - `docker-compose.yml` (сервисы `bot` и `redis`)
+    - `.env.example` (пример переменных окружения, включая `REDIS_PASSWORD`)
+  - Защита Redis:
+    - Redis стартует с `--requirepass ${REDIS_PASSWORD}`
+    - Подключение бота к Redis идёт по URL с паролем (если пароль задан)
+  - Каркас приложения:
+    - `bill_bot/` пакет
+    - `bill_bot/core/config.py` (чтение env)
+    - `bill_bot/core/redis_client.py` (инициализация Redis-клиента)
+    - `bill_bot/main.py` (bootstrap: Redis PING и дальнейший цикл ожидания; dry-run)
+  - Верификация:
+    - `python -m compileall bill_bot` проходит без ошибок
+
 ## 0) Зафиксированные требования
 - Рынок: Hyperliquid.
 - TF: 15m.
@@ -236,4 +254,3 @@ MVP считается готовым, когда бот:
 - Правило приоритета, если на одной свече “достигли” и SL, и TP.
 - Размер позиции: считаем от депозита “виртуально” или берём баланс из Hyperliquid (даже в dry-run)?
 - Мультипользовательский режим нужен сразу или один пользователь (админ)?
-
