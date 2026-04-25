@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Iterable
 
@@ -26,6 +27,18 @@ class PriceLevel:
     color: str
     linestyle: str = "-"
     linewidth: float = 1.0
+
+
+def _fmt_ts_ms(ts_ms: int) -> str:
+    try:
+        ts_ms = int(ts_ms)
+    except Exception:
+        return str(ts_ms)
+    try:
+        dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
+    except Exception:
+        return str(ts_ms)
+    return dt.strftime("%H:%M %d/%m/%y")
 
 
 def build_chart_png(
@@ -97,7 +110,7 @@ def build_chart_png(
 
     step = max(1, len(candles) // 10)
     ax.set_xticks(list(range(0, len(candles), step)))
-    ax.set_xticklabels([str(candles[i].t) for i in range(0, len(candles), step)], rotation=30, fontsize=8)
+    ax.set_xticklabels([_fmt_ts_ms(candles[i].t) for i in range(0, len(candles), step)], rotation=30, fontsize=8)
 
     fig.tight_layout()
     buf = BytesIO()

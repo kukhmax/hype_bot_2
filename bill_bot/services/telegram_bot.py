@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 import re
 import time
@@ -80,6 +81,18 @@ def _parse_pair_input(raw: str) -> str | None:
     if not re.fullmatch(r"[A-Z0-9]{2,20}", s):
         return None
     return s
+
+
+def _fmt_ts_ms(ts_ms: int) -> str:
+    try:
+        ts_ms = int(ts_ms)
+    except Exception:
+        return str(ts_ms)
+    try:
+        dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
+    except Exception:
+        return str(ts_ms)
+    return dt.strftime("%H:%M %d/%m/%y")
 
 
 def _timeframe_ms(tf: str) -> int:
@@ -331,14 +344,34 @@ async def run_telegram(
             await send_menu(message)
             return
 
-        lines: list[str] = [f"Последние сделки (TF {tf}):\n"]
+        total_u = 0.0
+        total_r = 0.0
+        for p in pairs:
+            pnl = await trade_state.get_pnl(uid, p, tf)
+            try:
+                total_u += float(pnl.get("unrealized", 0.0))
+            except Exception:
+                pass
+            try:
+                total_r += float(pnl.get("realized", 0.0))
+            except Exception:
+                pass
+        balance = float(cfg.virtual_equity) + float(total_r) + float(total_u)
+
+        lines: list[str] = [
+            f"📜 Сделки (TF {tf})",
+            f"💼 Баланс: {balance:.2f} USDC",
+            f"💰 Realized: {total_r:.2f} USDC",
+            f"📈 Unrealized: {total_u:.2f} USDC",
+            "",
+        ]
         any_rows = False
         for p in pairs:
             trades = await trade_state.get_trades(uid, p, tf, limit=3)
             if not trades:
                 continue
             any_rows = True
-            lines.append(f"{_display_pair(p)}:")
+            lines.append(f"🔹 {_display_pair(p)}")
             for t in trades:
                 try:
                     side = str(t.get("side", ""))
@@ -349,7 +382,21 @@ async def run_telegram(
                     closed_t = int(t.get("closed_t", 0))
                 except Exception:
                     continue
-                lines.append(f"  {closed_t} {side} entry={entry:.4f} exit={exit_px:.4f} pnl={pnl:.2f} {reason}")
+                when = _fmt_ts_ms(closed_t)
+                side_u = side.upper()
+                side_emoji = "🟢" if side_u == "LONG" else "🔴"
+                pnl_emoji = "🟩" if pnl >= 0 else "🟥"
+                reason_u = reason.upper()
+                if reason_u == "TP":
+                    reason_txt = "✅ TP"
+                elif reason_u == "SL":
+                    reason_txt = "🛑 SL"
+                elif "SL_AND_TP" in reason_u:
+                    reason_txt = "⚠️ SL/TP (в одной свече)"
+                else:
+                    reason_txt = reason
+                lines.append(f"{when} {side_emoji} {side_u} | вход {entry:.4f} → выход {exit_px:.4f} | {pnl_emoji} PnL {pnl:+.2f} | {reason_txt}")
+            lines.append("")
         if not any_rows:
             await message.answer("Пока нет закрытых сделок.")
             return
