@@ -231,7 +231,24 @@ class ExecutionDryRun:
                 state["last_trade"] = trade
                 state.pop("pos", None)
                 changed = True
-                event = {"changed": True, "event": "position_closed", "reason": exit_reason, "pnl": pnl}
+                event = {
+                    "changed": True,
+                    "event": "position_closed",
+                    "pair": pair,
+                    "tf": self.tf,
+                    "side": pos.side,
+                    "entry": pos.entry,
+                    "exit": exit_price,
+                    "qty": pos.qty,
+                    "stop_loss": pos.stop_loss,
+                    "take_profit": pos.take_profit,
+                    "opened_t": pos.opened_t,
+                    "closed_t": candle.t,
+                    "reason": exit_reason,
+                    "pnl": pnl,
+                    "realized_total": realized,
+                    "cluster_t": pos.cluster_t,
+                }
                 await self.store.append_trade(user_id, pair, self.tf, trade)
                 await self.store.set_pnl(user_id, pair, self.tf, {"unrealized": 0.0, "realized": realized})
             else:
@@ -255,7 +272,19 @@ class ExecutionDryRun:
                 state["pos"] = pos.to_dict()
                 state.pop("ord", None)
                 changed = True
-                event = {"changed": True, "event": "position_opened"}
+                event = {
+                    "changed": True,
+                    "event": "position_opened",
+                    "pair": pair,
+                    "tf": self.tf,
+                    "side": pos.side,
+                    "entry": pos.entry,
+                    "qty": pos.qty,
+                    "stop_loss": pos.stop_loss,
+                    "take_profit": pos.take_profit,
+                    "opened_t": pos.opened_t,
+                    "cluster_t": pos.cluster_t,
+                }
 
         state["last_t"] = int(candle.t)
         if changed:

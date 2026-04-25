@@ -1,7 +1,10 @@
 import asyncio
+from datetime import datetime, timezone
 import logging
 import json
 import time
+
+from aiogram import Bot
 
 from bill_bot.core.config import Config
 from bill_bot.core.logger import setup_logger
@@ -20,6 +23,8 @@ async def main():
     cfg = Config.from_env()
     logger = setup_logger(cfg.log_level)
 
+    tg_bot = Bot(token=cfg.telegram_token) if cfg.telegram_token else None
+
     r = get_redis(cfg)
     try:
         pong = await r.ping()
@@ -34,6 +39,45 @@ async def main():
     trade_state = RedisTradeState(r)
     hl = HyperliquidInfoClient()
     subs = SubscriptionStore(r, tf=cfg.timeframe)
+
+    def fmt_ts_ms(ts_ms: int) -> str:
+        try:
+            ts_ms = int(ts_ms)
+        except Exception:
+            return str(ts_ms)
+        try:
+            dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
+        except Exception:
+            return str(ts_ms)
+        return dt.strftime("%H:%M %d/%m/%y")
+
+    def display_pair(coin: str) -> str:
+        return f"{str(coin).upper().strip()}-USDC"
+
+    async def tg_send(user_id: int, text: str) -> None:
+        if tg_bot is None:
+            return
+        try:
+            await tg_bot.send_message(chat_id=int(user_id), text=text)
+        except Exception as e:
+            logger.info("Telegram send failed: user=%s err=%s", user_id, e)
+
+    async def user_balance(subs_tf: SubscriptionStore, user_id: int, tf: str) -> tuple[float, float, float, float]:
+        pairs = await subs_tf.get_user_pairs(user_id)
+        total_u = 0.0
+        total_r = 0.0
+        for p in pairs:
+            pnl = await trade_state.get_pnl(user_id, p, tf)
+            try:
+                total_u += float(pnl.get("unrealized", 0.0))
+            except Exception:
+                pass
+            try:
+                total_r += float(pnl.get("realized", 0.0))
+            except Exception:
+                pass
+        balance = float(cfg.virtual_equity) + total_r + total_u
+        return balance, total_r, total_u, float(cfg.virtual_equity)
 
     def timeframe_ms(tf: str) -> int:
         tf = str(tf).strip()
@@ -157,6 +201,23 @@ async def main():
                 continue
             ucfg = await subs_tf.get_user_cfg(uid)
             risk_pct = float(ucfg.get("risk_pct", cfg.default_risk_pct))
+
+            setup_text = (
+                "🔔 Найден сетап\n\n"
+                f"📌 Пара: {display_pair(pair)}\n"
+                f"⏱ TF: {tf}\n"
+                f"➡️ Направление: {cand.side}\n"
+                f"🕒 Кластер: {fmt_ts_ms(cand.cluster_t)}\n"
+                f"🏷 Цена кластера: {cand.cluster_price:.4f}\n"
+                f"🎯 Вход (trigger): {cand.entry_trigger:.4f}\n"
+                f"🛑 SL: {cand.stop_loss:.4f}\n"
+                f"✅ TP: {cand.take_profit:.4f}\n"
+                f"⚖️ RR: {cand.rr}\n"
+                f"📏 Tick: {tick:.8f}\n"
+                f"⚙️ Риск: {risk_pct:.2f}%\n"
+            )
+            await tg_send(uid, setup_text)
+
             order = await exec_engine.maybe_place_order(
                 user_id=uid,
                 pair=pair,
@@ -243,6 +304,51 @@ async def main():
                             evt = await exec_engine.on_candle(user_id=uid, pair=pair, candle=new_candle)
                             if evt.get("changed"):
                                 logger.info("Dry-run event: user=%s pair=%s tf=%s %s", uid, pair, tf, evt)
+                                if evt.get("event") == "position_opened":
+                                    opened_text = (
+                                        "🚀 Позиция открыта\n\n"
+                                        f"📌 Пара: {display_pair(pair)}\n"
+                                        f"⏱ TF: {tf}\n"
+                                        f"➡️ Направление: {str(evt.get('side', '')).upper()}\n"
+                                        f"🕒 Время: {fmt_ts_ms(int(evt.get('opened_t', new_candle.t)))}\n"
+                                        f"🎯 Вход: {float(evt.get('entry', 0.0)):.4f}\n"
+                                        f"🛑 SL: {float(evt.get('stop_loss', 0.0)):.4f}\n"
+                                        f"✅ TP: {float(evt.get('take_profit', 0.0)):.4f}\n"
+                                        f"📦 Qty: {float(evt.get('qty', 0.0)):.6f}\n"
+                                    )
+                                    await tg_send(uid, opened_text)
+                                elif evt.get("event") == "position_closed":
+                                    balance, total_r, total_u, base = await user_balance(subs_tf, uid, tf)
+                                    pnl = float(evt.get("pnl", 0.0))
+                                    pnl_emoji = "🟩" if pnl >= 0 else "🟥"
+                                    reason_u = str(evt.get("reason", "")).upper()
+                                    if reason_u == "TP":
+                                        reason_txt = "✅ TP"
+                                    elif reason_u == "SL":
+                                        reason_txt = "🛑 SL"
+                                    elif "SL_AND_TP" in reason_u:
+                                        reason_txt = "⚠️ SL/TP (в одной свече)"
+                                    else:
+                                        reason_txt = str(evt.get("reason", ""))
+                                    closed_text = (
+                                        "🏁 Позиция закрыта\n\n"
+                                        f"📌 Пара: {display_pair(pair)}\n"
+                                        f"⏱ TF: {tf}\n"
+                                        f"➡️ Направление: {str(evt.get('side', '')).upper()}\n"
+                                        f"🕒 Закрытие: {fmt_ts_ms(int(evt.get('closed_t', new_candle.t)))}\n"
+                                        f"🎯 Вход: {float(evt.get('entry', 0.0)):.4f}\n"
+                                        f"🏷 Выход: {float(evt.get('exit', 0.0)):.4f}\n"
+                                        f"🛑 SL: {float(evt.get('stop_loss', 0.0)):.4f}\n"
+                                        f"✅ TP: {float(evt.get('take_profit', 0.0)):.4f}\n"
+                                        f"📦 Qty: {float(evt.get('qty', 0.0)):.6f}\n"
+                                        f"{pnl_emoji} PnL: {pnl:+.2f} USDC\n"
+                                        f"📌 Причина: {reason_txt}\n\n"
+                                        f"💼 Баланс: {balance:.2f} USDC\n"
+                                        f"💰 Realized: {total_r:.2f} USDC\n"
+                                        f"📈 Unrealized: {total_u:.2f} USDC\n"
+                                        f"🏦 База: {base:.2f} USDC"
+                                    )
+                                    await tg_send(uid, closed_text)
                 except Exception as e:
                     logger.error("Market loop error: pair=%s tf=%s err=%s", pair, tf, e)
             await asyncio.sleep(cfg.poll_seconds)
