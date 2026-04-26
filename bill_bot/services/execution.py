@@ -153,6 +153,32 @@ class ExecutionDryRun:
             return (exit_price - pos.entry) * pos.qty
         return (pos.entry - exit_price) * pos.qty
 
+    @staticmethod
+    def _get_orders(state: dict) -> list[PendingOrder]:
+        if "ords" in state and isinstance(state["ords"], list):
+            out: list[PendingOrder] = []
+            for x in state["ords"]:
+                if isinstance(x, dict):
+                    try:
+                        out.append(PendingOrder.from_dict(x))
+                    except Exception:
+                        pass
+            return out
+        if "ord" in state and isinstance(state["ord"], dict):
+            try:
+                return [PendingOrder.from_dict(state["ord"])]
+            except Exception:
+                return []
+        return []
+
+    @staticmethod
+    def _set_orders(state: dict, orders: list[PendingOrder]) -> None:
+        state.pop("ord", None)
+        if not orders:
+            state.pop("ords", None)
+            return
+        state["ords"] = [o.to_dict() for o in orders]
+
     async def maybe_place_order(
         self,
         user_id: int,
@@ -160,15 +186,25 @@ class ExecutionDryRun:
         candle: Candle,
         cand: SignalCandidate | None,
         risk_pct: float,
-    ) -> PendingOrder | None:
+    ) -> tuple[str, PendingOrder | None, PendingOrder | None]:
         if cand is None:
-            return None
+            return "skipped", None, None
         state = await self.store.get(user_id, pair, self.tf)
-        if state.get("pos") or state.get("ord"):
-            return None
+        if state.get("pos"):
+            return "skipped", None, None
+
+        orders = self._get_orders(state)
+        existing_same: PendingOrder | None = None
+        for o in orders:
+            if str(o.side).upper() == str(cand.side).upper():
+                existing_same = o
+                break
+        if existing_same and int(existing_same.cluster_t) == int(cand.cluster_t):
+            return "unchanged", existing_same, None
+
         qty = self._qty_from_risk(cand.entry_trigger, cand.stop_loss, risk_pct=risk_pct)
         if qty <= 0:
-            return None
+            return "skipped", None, None
         o = PendingOrder(
             side=cand.side,
             trigger=cand.entry_trigger,
@@ -177,11 +213,21 @@ class ExecutionDryRun:
             take_profit=cand.take_profit,
             qty=qty,
         )
-        state["ord"] = o.to_dict()
+        canceled: PendingOrder | None = None
+        if existing_same:
+            canceled = existing_same
+            orders = [x for x in orders if str(x.side).upper() != str(cand.side).upper()]
+            orders.append(o)
+            self._set_orders(state, orders)
+            action = "replaced"
+        else:
+            orders.append(o)
+            self._set_orders(state, orders)
+            action = "placed"
         state["risk_pct"] = float(risk_pct)
         state["last_t"] = int(candle.t)
         await self.store.set(user_id, pair, self.tf, state)
-        return o
+        return action, o, canceled
 
     async def on_candle(self, user_id: int, pair: str, candle: Candle) -> dict:
         state = await self.store.get(user_id, pair, self.tf)
@@ -189,7 +235,7 @@ class ExecutionDryRun:
         if candle.t <= last_t:
             return {"changed": False}
 
-        ord_raw = state.get("ord")
+        orders = self._get_orders(state)
         pos_raw = state.get("pos")
 
         changed = False
@@ -256,21 +302,26 @@ class ExecutionDryRun:
                 upnl = self._unrealized_pnl(pos, mark)
                 await self.store.set_pnl(user_id, pair, self.tf, {"unrealized": upnl, "realized": float(state.get("realized", 0.0))})
 
-        elif ord_raw:
-            o = PendingOrder.from_dict(ord_raw)
-            triggered = candle.h >= o.trigger if o.side == "LONG" else candle.l <= o.trigger
-            if triggered:
+        elif orders:
+            triggered_order: PendingOrder | None = None
+            for o in orders:
+                side_u = str(o.side).upper()
+                triggered = candle.h >= o.trigger if side_u == "LONG" else candle.l <= o.trigger
+                if triggered:
+                    triggered_order = o
+                    break
+            if triggered_order:
                 pos = Position(
-                    side=o.side,
-                    entry=o.trigger,
-                    stop_loss=o.stop_loss,
-                    take_profit=o.take_profit,
-                    qty=o.qty,
+                    side=str(triggered_order.side).upper(),
+                    entry=triggered_order.trigger,
+                    stop_loss=triggered_order.stop_loss,
+                    take_profit=triggered_order.take_profit,
+                    qty=triggered_order.qty,
                     opened_t=candle.t,
-                    cluster_t=o.cluster_t,
+                    cluster_t=triggered_order.cluster_t,
                 )
                 state["pos"] = pos.to_dict()
-                state.pop("ord", None)
+                self._set_orders(state, [])
                 changed = True
                 event = {
                     "changed": True,

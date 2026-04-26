@@ -192,6 +192,23 @@ async def run_telegram(
     dp = Dispatcher(storage=MemoryStorage())
     hl = HyperliquidInfoClient()
 
+    def _extract_orders(st: dict) -> list[PendingOrder]:
+        if isinstance(st.get("ords"), list):
+            out: list[PendingOrder] = []
+            for x in st["ords"]:
+                if isinstance(x, dict):
+                    try:
+                        out.append(PendingOrder.from_dict(x))
+                    except Exception:
+                        pass
+            return out
+        if isinstance(st.get("ord"), dict):
+            try:
+                return [PendingOrder.from_dict(st["ord"])]
+            except Exception:
+                return []
+        return []
+
     def _pnl_realized(side: str, entry: float, exit_price: float, qty: float) -> float:
         if str(side).upper() == "LONG":
             return (float(exit_price) - float(entry)) * float(qty)
@@ -245,18 +262,20 @@ async def run_telegram(
                     f"📦 Qty {pos.qty:.6f} | {upnl_emoji} uPnL {upnl:+.2f}"
                 )
                 kb.button(text=f"🔻 Закрыть {pair_txt}", callback_data=f"pos_close:{p}")
-            elif st.get("ord"):
-                o = PendingOrder.from_dict(st["ord"])
-                side_u = o.side.upper()
-                side_emoji = "🟢" if side_u == "LONG" else "🔴"
-                lines.append(
-                    f"{side_emoji} {pair_txt} — ORD {side_u}\n"
-                    f"🎯 Trigger {o.trigger:.4f} | 🛑 SL {o.stop_loss:.4f} | ✅ TP {o.take_profit:.4f}\n"
-                    f"📦 Qty {o.qty:.6f}"
-                )
-                kb.button(text=f"❌ Отменить {pair_txt}", callback_data=f"ord_cancel:{p}")
             else:
-                lines.append(f"⚪ {pair_txt} — нет позиции/ордера")
+                orders = _extract_orders(st)
+                if orders:
+                    for o in orders:
+                        side_u = o.side.upper()
+                        side_emoji = "🟢" if side_u == "LONG" else "🔴"
+                        lines.append(
+                            f"{side_emoji} {pair_txt} — ORD {side_u}\n"
+                            f"🎯 Trigger {o.trigger:.4f} | 🛑 SL {o.stop_loss:.4f} | ✅ TP {o.take_profit:.4f}\n"
+                            f"📦 Qty {o.qty:.6f}"
+                        )
+                        kb.button(text=f"❌ Отменить {side_u} {pair_txt}", callback_data=f"ord_cancel:{p}:{side_u}")
+                else:
+                    lines.append(f"⚪ {pair_txt} — нет позиции/ордера")
             lines.append("")
 
         kb.button(text="🔄 Обновить", callback_data="positions:refresh")
@@ -536,12 +555,20 @@ async def run_telegram(
     async def cancel_order(cb: CallbackQuery):
         uid = cb.from_user.id
         tf, _ = await user_ctx(uid)
-        pair = cb.data.split(":", 1)[1].upper()
+        _, pair, side = cb.data.split(":", 2)
+        pair = pair.upper()
+        side = side.upper()
         st = await trade_state.get(uid, pair, tf)
-        if not st.get("ord"):
+        orders = _extract_orders(st)
+        kept = [o for o in orders if o.side.upper() != side]
+        if len(kept) == len(orders):
             await cb.answer("Нет ордера")
             return
         st.pop("ord", None)
+        if kept:
+            st["ords"] = [o.to_dict() for o in kept]
+        else:
+            st.pop("ords", None)
         await trade_state.set(uid, pair, tf, st)
         await cb.answer("Ордер отменён")
         text, kb = await _build_positions_view(uid)
@@ -861,13 +888,14 @@ async def run_telegram(
             return
         st = await trade_state.get(uid, pair, tf)
         levels: list[PriceLevel] = []
-        if st.get("ord"):
-            o = PendingOrder.from_dict(st["ord"])
+        orders = _extract_orders(st)
+        for o in orders:
+            side_u = o.side.upper()
             levels.extend(
                 [
-                    PriceLevel(price=o.trigger, label="Trigger", color="#0ea5e9", linestyle="--", linewidth=1.2),
-                    PriceLevel(price=o.stop_loss, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
-                    PriceLevel(price=o.take_profit, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+                    PriceLevel(price=o.trigger, label=f"Trigger {side_u}", color="#0ea5e9", linestyle="--", linewidth=1.2),
+                    PriceLevel(price=o.stop_loss, label=f"SL {side_u}", color="#ef4444", linestyle="-", linewidth=1.0),
+                    PriceLevel(price=o.take_profit, label=f"TP {side_u}", color="#22c55e", linestyle="-", linewidth=1.0),
                 ]
             )
         if st.get("pos"):

@@ -226,69 +226,78 @@ async def main():
             max_decimals=6,
             tick_size_fallback=cfg.tick_size_default,
         )
-        cand, ctx = engine.evaluate(pair=pair, candles=window, fractals=fr)
-        if not cand:
+        cands, ctx = engine.evaluate(pair=pair, candles=window, fractals=fr)
+        if not cands:
             return
-        prev = await signal_store.get_last(pair, tf)
-        if prev and prev.get("side") == cand.side and int(prev.get("cluster_t", 0)) == cand.cluster_t:
-            return
-        await signal_store.set_last(cand)
-        tick = engine.tick_size_for_price(cand.cluster_price)
-        logger.info(
-            "Signal candidate: pair=%s tf=%s side=%s cluster_t=%s entry=%.4f sl=%.4f tp=%.4f tick=%.8f sleep_med=%.6f",
-            pair,
-            tf,
-            cand.side,
-            cand.cluster_t,
-            cand.entry_trigger,
-            cand.stop_loss,
-            cand.take_profit,
-            tick,
-            float(ctx.get("sleep_med_spread", 0.0)),
-        )
         users = await subs_tf.get_pair_users(pair)
-        levels_setup = [
-            PriceLevel(price=cand.cluster_price, label="Cluster", color="#7c3aed", linestyle=":", linewidth=1.0),
-            PriceLevel(price=cand.entry_trigger, label="Trigger", color="#0ea5e9", linestyle="--", linewidth=1.2),
-            PriceLevel(price=cand.stop_loss, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
-            PriceLevel(price=cand.take_profit, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
-        ]
-        setup_png = await build_signal_chart(pair, tf, levels=levels_setup)
-        for uid in users:
-            if not await subs_tf.is_active(uid):
+        for cand in cands:
+            prev = await signal_store.get_last(pair, tf, cand.side)
+            if prev and int(prev.get("cluster_t", 0)) == int(cand.cluster_t):
                 continue
-            ucfg = await subs_tf.get_user_cfg(uid)
-            risk_pct = float(ucfg.get("risk_pct", cfg.default_risk_pct))
+            await signal_store.set_last(cand)
+            tick = engine.tick_size_for_price(cand.cluster_price)
+            logger.info(
+                "Signal candidate: pair=%s tf=%s side=%s cluster_t=%s entry=%.4f sl=%.4f tp=%.4f tick=%.8f sleep_med=%.6f",
+                pair,
+                tf,
+                cand.side,
+                cand.cluster_t,
+                cand.entry_trigger,
+                cand.stop_loss,
+                cand.take_profit,
+                tick,
+                float(ctx.get("sleep_med_spread", 0.0)),
+            )
 
-            state = await trade_state.get(uid, pair, tf)
-            if state.get("pos") or state.get("ord"):
-                note = "ℹ️ Уже есть позиция/ордер, новый ордер не выставлен"
-            else:
+            levels_setup = [
+                PriceLevel(price=cand.cluster_price, label="Cluster", color="#7c3aed", linestyle=":", linewidth=1.0),
+                PriceLevel(price=cand.entry_trigger, label="Trigger", color="#0ea5e9", linestyle="--", linewidth=1.2),
+                PriceLevel(price=cand.stop_loss, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
+                PriceLevel(price=cand.take_profit, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+            ]
+            setup_png = await build_signal_chart(pair, tf, levels=levels_setup)
+
+            for uid in users:
+                if not await subs_tf.is_active(uid):
+                    continue
+                ucfg = await subs_tf.get_user_cfg(uid)
+                risk_pct = float(ucfg.get("risk_pct", cfg.default_risk_pct))
+
+                state = await trade_state.get(uid, pair, tf)
+                if state.get("pos"):
+                    continue
+
+                action, order, canceled = await exec_engine.maybe_place_order(
+                    user_id=uid,
+                    pair=pair,
+                    candle=window[-1],
+                    cand=cand,
+                    risk_pct=risk_pct,
+                )
+                if action not in ("placed", "replaced") or order is None:
+                    continue
+
                 note = ""
+                if action == "replaced" and canceled is not None:
+                    note = f"♻️ Предыдущий ордер {str(canceled.side).upper()} отменён"
 
-            order = await exec_engine.maybe_place_order(
-                user_id=uid,
-                pair=pair,
-                candle=window[-1],
-                cand=cand,
-                risk_pct=risk_pct,
-            )
-            qty = float(order.qty) if order else 0.0
-            setup_caption = (
-                f"� Сетап {cand.side} {display_pair(pair)} ({tf})\n"
-                f"🕒 {fmt_ts_ms(cand.cluster_t)}\n"
-                f"🎯 Trigger {cand.entry_trigger:.4f} | 🛑 SL {cand.stop_loss:.4f} | ✅ TP {cand.take_profit:.4f}\n"
-                f"� Qty {qty:.6f} | ⚙️ Risk {risk_pct:.2f}%"
-            )
-            if note:
-                setup_caption = f"{setup_caption}\n{note}"
-            if setup_png:
-                await tg_send_photo(uid, setup_png, setup_caption)
-            else:
-                await tg_send(uid, setup_caption)
-            if order:
+                setup_caption = (
+                    f"🔔 Сетап {cand.side} {display_pair(pair)} ({tf})\n"
+                    f"🕒 {fmt_ts_ms(cand.cluster_t)}\n"
+                    f"🎯 Trigger {cand.entry_trigger:.4f} | 🛑 SL {cand.stop_loss:.4f} | ✅ TP {cand.take_profit:.4f}\n"
+                    f"📦 Qty {order.qty:.6f} | ⚙️ Risk {risk_pct:.2f}%"
+                )
+                if note:
+                    setup_caption = f"{setup_caption}\n{note}"
+
+                if setup_png:
+                    await tg_send_photo(uid, setup_png, setup_caption)
+                else:
+                    await tg_send(uid, setup_caption)
+
                 logger.info(
-                    "Dry-run order placed: user=%s pair=%s tf=%s side=%s trigger=%.4f sl=%.4f tp=%.4f qty=%.6f risk=%.2f%%",
+                    "Dry-run order %s: user=%s pair=%s tf=%s side=%s trigger=%.4f sl=%.4f tp=%.4f qty=%.6f risk=%.2f%%",
+                    action,
                     uid,
                     pair,
                     tf,
