@@ -59,6 +59,7 @@ def _reply_main_menu(active: bool) -> ReplyKeyboardMarkup:
             [KeyboardButton(text=start_stop)],
             [KeyboardButton(text="📈 Позиции"), KeyboardButton(text="💰 P&L")],
             [KeyboardButton(text="📉 График"), KeyboardButton(text="📜 Сделки")],
+            [KeyboardButton(text="🗑 Удалить")],
         ],
         resize_keyboard=True,
     )
@@ -191,6 +192,7 @@ async def run_telegram(
     bot = Bot(token=cfg.telegram_token)
     dp = Dispatcher(storage=MemoryStorage())
     hl = HyperliquidInfoClient()
+    last_msg_key = lambda uid: f"tg:last_bot_msg:{int(uid)}"
 
     def _extract_orders(st: dict) -> list[PendingOrder]:
         if isinstance(st.get("ords"), list):
@@ -213,6 +215,34 @@ async def run_telegram(
         if str(side).upper() == "LONG":
             return (float(exit_price) - float(entry)) * float(qty)
         return (float(entry) - float(exit_price)) * float(qty)
+
+    async def _remember_last(uid: int, msg_id: int) -> None:
+        try:
+            await subs.r.set(last_msg_key(uid), int(msg_id))
+        except Exception:
+            pass
+
+    async def _get_last(uid: int) -> int | None:
+        try:
+            raw = await subs.r.get(last_msg_key(uid))
+        except Exception:
+            return None
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except Exception:
+            return None
+
+    async def _delete_last(uid: int) -> bool:
+        mid = await _get_last(uid)
+        if not mid:
+            return False
+        try:
+            await bot.delete_message(chat_id=int(uid), message_id=int(mid))
+            return True
+        except Exception:
+            return False
 
     async def _build_positions_view(uid: int) -> tuple[str, InlineKeyboardBuilder]:
         tf, user_subs = await user_ctx(uid)
@@ -324,7 +354,8 @@ async def run_telegram(
             f"💰 Realized: {total_r:.2f} USDC\n"
             f"📈 Unrealized: {total_u:.2f} USDC"
         )
-        await message.answer(text, reply_markup=_reply_main_menu(active=active))
+        sent = await message.answer(text, reply_markup=_reply_main_menu(active=active))
+        await _remember_last(uid, sent.message_id)
 
     @dp.message(F.text == "/start")
     async def start_handler(message: Message, state: FSMContext):
@@ -336,6 +367,21 @@ async def run_telegram(
         )
         await message.answer(text, reply_markup=_reply_main_menu(active=False))
         await send_menu(message)
+
+    @dp.message(F.text == "🗑 Удалить")
+    async def delete_last_msg(message: Message, state: FSMContext):
+        await state.clear()
+        uid = message.from_user.id
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        ok = await _delete_last(uid)
+        if not ok:
+            tf, user_subs = await user_ctx(uid)
+            st = await user_subs.dump_user_state(uid)
+            await message.answer("Нечего удалять.", reply_markup=_reply_main_menu(active=bool(st.get("active", False))))
+        return
 
     @dp.callback_query(F.data == "menu:back")
     async def back(cb: CallbackQuery, state: FSMContext):
@@ -457,7 +503,19 @@ async def run_telegram(
                 total_r += float(pnl.get("realized", 0.0))
             except Exception:
                 pass
-        await message.answer(f"P&L по TF {tf}\n\nUnrealized: {total_u:.2f}\nRealized: {total_r:.2f}")
+        balance = float(cfg.virtual_equity) + float(total_r) + float(total_u)
+        u_emoji = "🟩" if total_u >= 0 else "🟥"
+        r_emoji = "🟩" if total_r >= 0 else "🟥"
+        b_emoji = "💰" if balance >= float(cfg.virtual_equity) else "💸"
+        text = (
+            f"💰 P&L (TF {tf})\n\n"
+            f"{b_emoji} Баланс: {balance:.2f} USDC\n"
+            f"{r_emoji} Realized: {total_r:+.2f} USDC\n"
+            f"{u_emoji} Unrealized: {total_u:+.2f} USDC\n"
+            f"🏦 База: {float(cfg.virtual_equity):.2f} USDC"
+        )
+        sent = await message.answer(text, reply_markup=_msg_controls_menu().as_markup())
+        await _remember_last(uid, sent.message_id)
         return
 
     @dp.message(F.text == "📜 Сделки")
@@ -836,7 +894,8 @@ async def run_telegram(
             f"Пары: {', '.join(st['pairs']) if st['pairs'] else '-'}\n"
             f"Risk%: {st['cfg'].get('risk_pct', cfg.default_risk_pct)}"
         )
-        await cb.message.edit_text(text, reply_markup=_main_menu().as_markup())
+        await cb.message.edit_text(text, reply_markup=_msg_controls_menu().as_markup())
+        await _remember_last(uid, cb.message.message_id)
 
     @dp.callback_query(F.data == "menu:positions")
     async def positions(cb: CallbackQuery):
@@ -862,11 +921,16 @@ async def run_telegram(
                 total_r += float(pnl.get("realized", 0.0))
             except Exception:
                 pass
+        balance = float(cfg.virtual_equity) + float(total_r) + float(total_u)
+        u_emoji = "🟩" if total_u >= 0 else "🟥"
+        r_emoji = "🟩" if total_r >= 0 else "🟥"
+        b_emoji = "💰" if balance >= float(cfg.virtual_equity) else "💸"
         await cb.answer()
         await cb.message.edit_text(
-            f"P&L по TF {tf}\n\nUnrealized: {total_u:.2f}\nRealized: {total_r:.2f}",
-            reply_markup=_main_menu().as_markup(),
+            f"💰 P&L (TF {tf})\n\n{b_emoji} Баланс: {balance:.2f} USDC\n{r_emoji} Realized: {total_r:+.2f} USDC\n{u_emoji} Unrealized: {total_u:+.2f} USDC\n🏦 База: {float(cfg.virtual_equity):.2f} USDC",
+            reply_markup=_msg_controls_menu().as_markup(),
         )
+        await _remember_last(uid, cb.message.message_id)
 
     @dp.callback_query(F.data == "menu:chart")
     async def chart_menu(cb: CallbackQuery):
