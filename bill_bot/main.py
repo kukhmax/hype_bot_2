@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import logging
 import json
 import time
@@ -49,7 +50,7 @@ async def main():
         except Exception:
             return str(ts_ms)
         try:
-            dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
+            dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).astimezone(ZoneInfo("Europe/Warsaw"))
         except Exception:
             return str(ts_ms)
         return dt.strftime("%H:%M %d/%m/%y")

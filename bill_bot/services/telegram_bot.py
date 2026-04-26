@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import logging
 import re
 import time
@@ -90,7 +91,7 @@ def _fmt_ts_ms(ts_ms: int) -> str:
     except Exception:
         return str(ts_ms)
     try:
-        dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
+        dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).astimezone(ZoneInfo("Europe/Warsaw"))
     except Exception:
         return str(ts_ms)
     return dt.strftime("%H:%M %d/%m/%y")
