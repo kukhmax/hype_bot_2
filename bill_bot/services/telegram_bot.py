@@ -185,6 +185,78 @@ async def run_telegram(
     dp = Dispatcher(storage=MemoryStorage())
     hl = HyperliquidInfoClient()
 
+    def _pnl_realized(side: str, entry: float, exit_price: float, qty: float) -> float:
+        if str(side).upper() == "LONG":
+            return (float(exit_price) - float(entry)) * float(qty)
+        return (float(entry) - float(exit_price)) * float(qty)
+
+    async def _build_positions_view(uid: int) -> tuple[str, InlineKeyboardBuilder]:
+        tf, user_subs = await user_ctx(uid)
+        pairs = await user_subs.get_user_pairs(uid)
+        if not pairs:
+            kb = InlineKeyboardBuilder()
+            kb.button(text="⬅️ Назад", callback_data="menu:back")
+            kb.adjust(1)
+            return "Нет выбранных пар.", kb
+
+        total_u = 0.0
+        total_r = 0.0
+        for p in pairs:
+            pnl = await trade_state.get_pnl(uid, p, tf)
+            try:
+                total_u += float(pnl.get("unrealized", 0.0))
+            except Exception:
+                pass
+            try:
+                total_r += float(pnl.get("realized", 0.0))
+            except Exception:
+                pass
+        balance = float(cfg.virtual_equity) + float(total_r) + float(total_u)
+
+        lines: list[str] = [
+            f"📈 Позиции / ордера (TF {tf})",
+            f"💼 Баланс: {balance:.2f} USDC",
+            f"💰 Realized: {total_r:.2f} USDC",
+            f"📈 Unrealized: {total_u:.2f} USDC",
+            "",
+        ]
+
+        kb = InlineKeyboardBuilder()
+        for p in pairs:
+            st = await trade_state.get(uid, p, tf)
+            pair_txt = _display_pair(p)
+            if st.get("pos"):
+                pos = Position.from_dict(st["pos"])
+                pnl = await trade_state.get_pnl(uid, p, tf)
+                upnl = float(pnl.get("unrealized", 0.0))
+                side_u = pos.side.upper()
+                side_emoji = "🟢" if side_u == "LONG" else "🔴"
+                upnl_emoji = "🟩" if upnl >= 0 else "🟥"
+                lines.append(
+                    f"{side_emoji} {pair_txt} — POS {side_u}\n"
+                    f"🎯 Entry {pos.entry:.4f} | 🛑 SL {pos.stop_loss:.4f} | ✅ TP {pos.take_profit:.4f}\n"
+                    f"📦 Qty {pos.qty:.6f} | {upnl_emoji} uPnL {upnl:+.2f}"
+                )
+                kb.button(text=f"🔻 Закрыть {pair_txt}", callback_data=f"pos_close:{p}")
+            elif st.get("ord"):
+                o = PendingOrder.from_dict(st["ord"])
+                side_u = o.side.upper()
+                side_emoji = "🟢" if side_u == "LONG" else "🔴"
+                lines.append(
+                    f"{side_emoji} {pair_txt} — ORD {side_u}\n"
+                    f"🎯 Trigger {o.trigger:.4f} | 🛑 SL {o.stop_loss:.4f} | ✅ TP {o.take_profit:.4f}\n"
+                    f"📦 Qty {o.qty:.6f}"
+                )
+                kb.button(text=f"❌ Отменить {pair_txt}", callback_data=f"ord_cancel:{p}")
+            else:
+                lines.append(f"⚪ {pair_txt} — нет позиции/ордера")
+            lines.append("")
+
+        kb.button(text="🔄 Обновить", callback_data="positions:refresh")
+        kb.button(text="⬅️ Назад", callback_data="menu:back")
+        kb.adjust(2)
+        return "\n".join(lines), kb
+
     async def user_ctx(user_id: int) -> tuple[str, SubscriptionStore]:
         tf = await subs.get_user_timeframe(user_id, cfg.timeframe)
         if tf not in cfg.timeframes_available:
@@ -287,27 +359,8 @@ async def run_telegram(
         await state.clear()
         uid = message.from_user.id
         logger.info("tg:btn user=%s text=%s", uid, message.text)
-        tf, user_subs = await user_ctx(uid)
-        pairs = await user_subs.get_user_pairs(uid)
-        if not pairs:
-            await message.answer("Нет выбранных пар.")
-            await send_menu(message)
-            return
-        lines: list[str] = ["Позиции / ордера:\n"]
-        for p in pairs:
-            st = await trade_state.get(uid, p, tf)
-            if st.get("pos"):
-                pos = Position.from_dict(st["pos"])
-                pnl = await trade_state.get_pnl(uid, p, tf)
-                lines.append(
-                    f"{_display_pair(p)}: POS {pos.side} entry={pos.entry:.4f} sl={pos.stop_loss:.4f} tp={pos.take_profit:.4f} qty={pos.qty:.6f} uPnL={float(pnl.get('unrealized', 0.0)):.2f}"
-                )
-            elif st.get("ord"):
-                o = PendingOrder.from_dict(st["ord"])
-                lines.append(f"{_display_pair(p)}: ORD {o.side} trigger={o.trigger:.4f} sl={o.stop_loss:.4f} tp={o.take_profit:.4f} qty={o.qty:.6f}")
-            else:
-                lines.append(f"{_display_pair(p)}: —")
-        await message.answer("\n".join(lines))
+        text, kb = await _build_positions_view(uid)
+        await message.answer(text, reply_markup=kb.as_markup())
         return
 
     @dp.message(F.text == "💰 P&L")
@@ -378,11 +431,14 @@ async def run_telegram(
                     pnl = float(t.get("pnl", 0.0))
                     entry = float(t.get("entry", 0.0))
                     exit_px = float(t.get("exit", 0.0))
+                    qty = float(t.get("qty", 0.0))
                     reason = str(t.get("reason", ""))
+                    opened_t = int(t.get("opened_t", 0))
                     closed_t = int(t.get("closed_t", 0))
                 except Exception:
                     continue
                 when = _fmt_ts_ms(closed_t)
+                opened_when = _fmt_ts_ms(opened_t) if opened_t else ""
                 side_u = side.upper()
                 side_emoji = "🟢" if side_u == "LONG" else "🔴"
                 pnl_emoji = "🟩" if pnl >= 0 else "🟥"
@@ -393,15 +449,86 @@ async def run_telegram(
                     reason_txt = "🛑 SL"
                 elif "SL_AND_TP" in reason_u:
                     reason_txt = "⚠️ SL/TP (в одной свече)"
+                elif "MANUAL" in reason_u:
+                    reason_txt = "✋ Закрыто вручную"
                 else:
                     reason_txt = reason
-                lines.append(f"{when} {side_emoji} {side_u} | вход {entry:.4f} → выход {exit_px:.4f} | {pnl_emoji} PnL {pnl:+.2f} | {reason_txt}")
+                if opened_when:
+                    lines.append(f"🕒 {opened_when} → {when}")
+                lines.append(
+                    f"{side_emoji} {side_u} | 🎯 {entry:.4f} → {exit_px:.4f} | 📦 {qty:.6f} | {pnl_emoji} PnL {pnl:+.2f} | {reason_txt}"
+                )
             lines.append("")
         if not any_rows:
             await message.answer("Пока нет закрытых сделок.")
             return
         await message.answer("\n".join(lines))
         return
+
+    @dp.callback_query(F.data == "positions:refresh")
+    async def positions_refresh(cb: CallbackQuery):
+        uid = cb.from_user.id
+        text, kb = await _build_positions_view(uid)
+        await cb.answer()
+        await cb.message.edit_text(text, reply_markup=kb.as_markup())
+
+    @dp.callback_query(F.data.startswith("ord_cancel:"))
+    async def cancel_order(cb: CallbackQuery):
+        uid = cb.from_user.id
+        tf, _ = await user_ctx(uid)
+        pair = cb.data.split(":", 1)[1].upper()
+        st = await trade_state.get(uid, pair, tf)
+        if not st.get("ord"):
+            await cb.answer("Нет ордера")
+            return
+        st.pop("ord", None)
+        await trade_state.set(uid, pair, tf, st)
+        await cb.answer("Ордер отменён")
+        text, kb = await _build_positions_view(uid)
+        await cb.message.edit_text(text, reply_markup=kb.as_markup())
+
+    @dp.callback_query(F.data.startswith("pos_close:"))
+    async def close_position(cb: CallbackQuery):
+        uid = cb.from_user.id
+        tf, _ = await user_ctx(uid)
+        pair = cb.data.split(":", 1)[1].upper()
+        st = await trade_state.get(uid, pair, tf)
+        if not st.get("pos"):
+            await cb.answer("Нет позиции")
+            return
+        candles = await candle_store.get_window(pair, tf)
+        if not candles:
+            await cb.answer("Нет свечей")
+            return
+        last = candles[-1]
+        pos = Position.from_dict(st["pos"])
+        exit_px = float(last.c)
+        pnl = _pnl_realized(pos.side, pos.entry, exit_px, pos.qty)
+        realized = float(st.get("realized", 0.0)) + float(pnl)
+        st["realized"] = realized
+        trade = {
+            "user_id": uid,
+            "pair": pair,
+            "tf": tf,
+            "side": pos.side,
+            "entry": pos.entry,
+            "exit": exit_px,
+            "qty": pos.qty,
+            "pnl": pnl,
+            "opened_t": pos.opened_t,
+            "closed_t": int(last.t),
+            "reason": "MANUAL_CLOSE",
+            "cluster_t": pos.cluster_t,
+        }
+        st["last_trade"] = trade
+        st.pop("pos", None)
+        st["last_t"] = int(last.t)
+        await trade_state.append_trade(uid, pair, tf, trade)
+        await trade_state.set(uid, pair, tf, st)
+        await trade_state.set_pnl(uid, pair, tf, {"unrealized": 0.0, "realized": realized})
+        await cb.answer("Позиция закрыта")
+        text, kb = await _build_positions_view(uid)
+        await cb.message.edit_text(text, reply_markup=kb.as_markup())
 
     @dp.message(F.text == "📉 График")
     async def chart_menu_msg(message: Message, state: FSMContext):
@@ -615,28 +742,9 @@ async def run_telegram(
     @dp.callback_query(F.data == "menu:positions")
     async def positions(cb: CallbackQuery):
         uid = cb.from_user.id
-        tf, user_subs = await user_ctx(uid)
-        pairs = await user_subs.get_user_pairs(uid)
-        if not pairs:
-            await cb.answer()
-            await cb.message.edit_text("Нет выбранных пар.", reply_markup=_main_menu().as_markup())
-            return
-        lines: list[str] = ["Позиции / ордера:\n"]
-        for p in pairs:
-            st = await trade_state.get(uid, p, tf)
-            if st.get("pos"):
-                pos = Position.from_dict(st["pos"])
-                pnl = await trade_state.get_pnl(uid, p, tf)
-                lines.append(
-                    f"{p}: POS {pos.side} entry={pos.entry:.4f} sl={pos.stop_loss:.4f} tp={pos.take_profit:.4f} qty={pos.qty:.6f} uPnL={float(pnl.get('unrealized', 0.0)):.2f}"
-                )
-            elif st.get("ord"):
-                o = PendingOrder.from_dict(st["ord"])
-                lines.append(f"{p}: ORD {o.side} trigger={o.trigger:.4f} sl={o.stop_loss:.4f} tp={o.take_profit:.4f} qty={o.qty:.6f}")
-            else:
-                lines.append(f"{p}: —")
         await cb.answer()
-        await cb.message.edit_text("\n".join(lines), reply_markup=_main_menu().as_markup())
+        text, kb = await _build_positions_view(uid)
+        await cb.message.edit_text(text, reply_markup=kb.as_markup())
 
     @dp.callback_query(F.data == "menu:pnl")
     async def pnl(cb: CallbackQuery):
