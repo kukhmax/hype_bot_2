@@ -114,6 +114,17 @@ async def main():
             logger.info("Chart build failed: pair=%s tf=%s err=%s", pair, tf, e)
             return None
 
+    async def fmt_close_ts_from_open(pair: str, tf: str, open_t_ms: int) -> str:
+        try:
+            open_t_ms = int(open_t_ms)
+        except Exception:
+            return fmt_ts_ms(open_t_ms)
+        candles = await store.get_window(pair, tf)
+        for c in candles:
+            if int(c.t) == open_t_ms:
+                return fmt_ts_ms(int(c.T))
+        return fmt_ts_ms(open_t_ms)
+
     async def user_balance(subs_tf: SubscriptionStore, user_id: int, tf: str) -> tuple[float, float, float, float]:
         pairs = await subs_tf.get_user_pairs(user_id)
         total_u = 0.0
@@ -222,7 +233,7 @@ async def main():
             tf=tf,
             sleep_window=cfg.sleep_window,
             sleep_k=cfg.sleep_k,
-            rr=1.5,
+            rr=1.0,
             sz_decimals=sz_dec,
             max_decimals=6,
             tick_size_fallback=cfg.tick_size_default,
@@ -284,7 +295,7 @@ async def main():
 
                 setup_caption = (
                     f"🔔 Сетап {cand.side} {display_pair(pair)} ({tf})\n"
-                    f"🕒 {fmt_ts_ms(cand.cluster_t)}\n"
+                    f"🕒 {await fmt_close_ts_from_open(pair, tf, cand.cluster_t)}\n"
                     f"🎯 Trigger {cand.entry_trigger:.4f} | 🛑 SL {cand.stop_loss:.4f} | ✅ TP {cand.take_profit:.4f}\n"
                     f"📦 Qty {order.qty:.6f} | ⚙️ Risk {risk_pct:.2f}%"
                 )
@@ -389,9 +400,9 @@ async def main():
                                     opened_png = await build_signal_chart(pair, tf, levels=levels_open)
                                     opened_caption = (
                                         f"🚀 Открыта {str(evt.get('side', '')).upper()} {display_pair(pair)} ({tf})\n"
-                                        f"🕒 {fmt_ts_ms(opened_t)}\n"
+                                        f"🕒 {await fmt_close_ts_from_open(pair, tf, opened_t)}\n"
                                         f"🎯 Entry {entry:.4f} | 🛑 SL {sl:.4f} | ✅ TP {tp:.4f}\n"
-                                        f"� Qty {qty:.6f}"
+                                        f"📦 Qty {qty:.6f}"
                                     )
                                     if opened_png:
                                         await tg_send_photo(uid, opened_png, opened_caption)
@@ -425,9 +436,9 @@ async def main():
                                     closed_png = await build_signal_chart(pair, tf, levels=levels_close)
                                     closed_caption = (
                                         f"🏁 Закрыта {str(evt.get('side', '')).upper()} {display_pair(pair)} ({tf})\n"
-                                        f"� {fmt_ts_ms(closed_t)} | {reason_txt}\n"
+                                        f"🕒 {await fmt_close_ts_from_open(pair, tf, closed_t)} | {reason_txt}\n"
                                         f"🎯 Entry {entry:.4f} → Exit {exit_px:.4f} | {pnl_emoji} PnL {pnl:+.2f}\n"
-                                        f"� Баланс {balance:.2f} | 💰 R {total_r:.2f} | 📈 U {total_u:.2f}"
+                                        f"💼 Баланс {balance:.2f} | 💰 R {total_r:.2f} | 📈 U {total_u:.2f}"
                                     )
                                     if closed_png:
                                         await tg_send_photo(uid, closed_png, closed_caption)

@@ -111,7 +111,7 @@ def build_chart_png(
 
     step = max(1, len(candles) // 10)
     ax.set_xticks(list(range(0, len(candles), step)))
-    ax.set_xticklabels([_fmt_ts_ms(candles[i].t) for i in range(0, len(candles), step)], rotation=30, fontsize=8)
+    ax.set_xticklabels([_fmt_ts_ms(candles[i].T) for i in range(0, len(candles), step)], rotation=30, fontsize=8)
 
     fig.tight_layout()
     buf = BytesIO()
