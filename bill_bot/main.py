@@ -6,6 +6,7 @@ import time
 
 from aiogram import Bot
 from aiogram.types.input_file import BufferedInputFile
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bill_bot.core.config import Config
 from bill_bot.core.logger import setup_logger
@@ -60,7 +61,10 @@ async def main():
         if tg_bot is None:
             return
         try:
-            await tg_bot.send_message(chat_id=int(user_id), text=text)
+            kb = InlineKeyboardBuilder()
+            kb.button(text="🗑 Удалить", callback_data="msg:delete")
+            kb.adjust(1)
+            await tg_bot.send_message(chat_id=int(user_id), text=text, reply_markup=kb.as_markup())
         except Exception as e:
             logger.info("Telegram send failed: user=%s err=%s", user_id, e)
 
@@ -68,10 +72,14 @@ async def main():
         if tg_bot is None:
             return
         try:
+            kb = InlineKeyboardBuilder()
+            kb.button(text="🗑 Удалить", callback_data="msg:delete")
+            kb.adjust(1)
             await tg_bot.send_photo(
                 chat_id=int(user_id),
                 photo=BufferedInputFile(png, filename="signal.png"),
                 caption=caption,
+                reply_markup=kb.as_markup(),
             )
         except Exception as e:
             logger.info("Telegram send_photo failed: user=%s err=%s", user_id, e)

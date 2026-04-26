@@ -170,6 +170,13 @@ def _chart_pairs_menu(pairs: list[str]) -> InlineKeyboardBuilder:
     return kb
 
 
+def _msg_controls_menu() -> InlineKeyboardBuilder:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🗑 Удалить", callback_data="msg:delete")
+    kb.adjust(1)
+    return kb
+
+
 async def run_telegram(
     cfg: Config,
     subs: SubscriptionStore,
@@ -253,6 +260,7 @@ async def run_telegram(
             lines.append("")
 
         kb.button(text="🔄 Обновить", callback_data="positions:refresh")
+        kb.button(text="🗑 Удалить", callback_data="msg:delete")
         kb.button(text="⬅️ Назад", callback_data="menu:back")
         kb.adjust(2)
         return "\n".join(lines), kb
@@ -300,6 +308,10 @@ async def run_telegram(
     @dp.message(F.text == "📊 Статус")
     async def menu_status_msg(message: Message, state: FSMContext):
         await state.clear()
+        try:
+            await message.delete()
+        except Exception:
+            pass
         logger.info("tg:btn user=%s text=%s", message.from_user.id, message.text)
         await send_menu(message)
         return
@@ -308,6 +320,10 @@ async def run_telegram(
     async def menu_pairs_msg(message: Message, state: FSMContext):
         await state.clear()
         uid = message.from_user.id
+        try:
+            await message.delete()
+        except Exception:
+            pass
         logger.info("tg:btn user=%s text=%s", uid, message.text)
         _, user_subs = await user_ctx(uid)
         pairs = set(await user_subs.get_user_pairs(uid))
@@ -321,6 +337,10 @@ async def run_telegram(
     async def menu_risk_msg(message: Message, state: FSMContext):
         await state.clear()
         uid = message.from_user.id
+        try:
+            await message.delete()
+        except Exception:
+            pass
         logger.info("tg:btn user=%s text=%s", uid, message.text)
         _, user_subs = await user_ctx(uid)
         st = await user_subs.get_user_cfg(uid)
@@ -331,6 +351,10 @@ async def run_telegram(
     @dp.message(F.text == "⏱ TF")
     async def menu_tf_msg(message: Message, state: FSMContext):
         await state.clear()
+        try:
+            await message.delete()
+        except Exception:
+            pass
         logger.info("tg:btn user=%s text=%s", message.from_user.id, message.text)
         tf, _ = await user_ctx(message.from_user.id)
         await message.answer("Выберите таймфрейм:", reply_markup=_tf_menu(cfg.timeframes_available, tf).as_markup())
@@ -340,6 +364,10 @@ async def run_telegram(
     async def start_stop_tracking_msg(message: Message, state: FSMContext):
         await state.clear()
         uid = message.from_user.id
+        try:
+            await message.delete()
+        except Exception:
+            pass
         _, user_subs = await user_ctx(uid)
         st = await user_subs.dump_user_state(uid)
         active = bool(st["active"])
@@ -358,6 +386,10 @@ async def run_telegram(
     async def positions_msg(message: Message, state: FSMContext):
         await state.clear()
         uid = message.from_user.id
+        try:
+            await message.delete()
+        except Exception:
+            pass
         logger.info("tg:btn user=%s text=%s", uid, message.text)
         text, kb = await _build_positions_view(uid)
         await message.answer(text, reply_markup=kb.as_markup())
@@ -367,6 +399,10 @@ async def run_telegram(
     async def pnl_msg(message: Message, state: FSMContext):
         await state.clear()
         uid = message.from_user.id
+        try:
+            await message.delete()
+        except Exception:
+            pass
         logger.info("tg:btn user=%s text=%s", uid, message.text)
         tf, user_subs = await user_ctx(uid)
         pairs = await user_subs.get_user_pairs(uid)
@@ -389,6 +425,10 @@ async def run_telegram(
     async def trades_msg(message: Message, state: FSMContext):
         await state.clear()
         uid = message.from_user.id
+        try:
+            await message.delete()
+        except Exception:
+            pass
         logger.info("tg:btn user=%s text=%s", uid, message.text)
         tf, user_subs = await user_ctx(uid)
         pairs = await user_subs.get_user_pairs(uid)
@@ -462,7 +502,7 @@ async def run_telegram(
         if not any_rows:
             await message.answer("Пока нет закрытых сделок.")
             return
-        await message.answer("\n".join(lines))
+        await message.answer("\n".join(lines), reply_markup=_msg_controls_menu().as_markup())
         return
 
     @dp.callback_query(F.data == "positions:refresh")
@@ -534,6 +574,10 @@ async def run_telegram(
     async def chart_menu_msg(message: Message, state: FSMContext):
         await state.clear()
         uid = message.from_user.id
+        try:
+            await message.delete()
+        except Exception:
+            pass
         logger.info("tg:btn user=%s text=%s", uid, message.text)
         _, user_subs = await user_ctx(uid)
         pairs = await user_subs.get_user_pairs(uid)
@@ -557,6 +601,10 @@ async def run_telegram(
         if not coin:
             await message.answer("Не понял формат. Пример: HYPE-USDC")
             return
+        try:
+            await message.delete()
+        except Exception:
+            pass
         await state.clear()
 
         candles = await candle_store.get_window(coin, tf)
@@ -586,7 +634,7 @@ async def run_telegram(
         lips = alli["lips"]
         fpts = _calc_fractal_points(candles, teeth_series=teeth)
         data = build_chart_png(coin, tf, candles, jaw, teeth, lips, fpts, levels=[])
-        await message.answer_photo(BufferedInputFile(data, filename=f"{coin}_{tf}.png"))
+        await message.answer_photo(BufferedInputFile(data, filename=f"{coin}_{tf}.png"), reply_markup=_msg_controls_menu().as_markup())
 
     @dp.callback_query(F.data == "pair_add:prompt")
     async def pair_add_prompt(cb: CallbackQuery, state: FSMContext):
@@ -604,6 +652,10 @@ async def run_telegram(
         if not coin:
             await message.answer("Не понял формат. Пример: HYPE-USDC")
             return
+        try:
+            await message.delete()
+        except Exception:
+            pass
         _, user_subs = await user_ctx(uid)
         current = set(await user_subs.get_user_pairs(uid))
         if coin not in current:
@@ -816,7 +868,15 @@ async def run_telegram(
         logger.info("tg:chart user=%s tf=%s pair=%s fractals=%s candles=%s", uid, tf, pair, len(fpts), len(candles))
         data = build_chart_png(pair, tf, candles, jaw, teeth, lips, fpts, levels=levels)
         await cb.answer()
-        await cb.message.answer_photo(BufferedInputFile(data, filename=f"{pair}_{tf}.png"))
+        await cb.message.answer_photo(BufferedInputFile(data, filename=f"{pair}_{tf}.png"), reply_markup=_msg_controls_menu().as_markup())
+
+    @dp.callback_query(F.data == "msg:delete")
+    async def delete_message(cb: CallbackQuery):
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+        await cb.answer()
 
     logger.info("Telegram bot polling started")
     await dp.start_polling(bot)
