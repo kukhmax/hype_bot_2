@@ -288,7 +288,7 @@ async def run_telegram(
                 side_emoji = "🟢" if side_u == "LONG" else "🔴"
                 upnl_emoji = "🟩" if upnl >= 0 else "🟥"
                 lines.append(
-                    f"[POS] {side_emoji} {pair_txt} — {side_u}\n"
+                    f"{side_emoji} [POS] {pair_txt} — {side_u}\n"
                     f"🎯 Entry {pos.entry:.4f} | 🛑 SL {pos.stop_loss:.4f} | ✅ TP {pos.take_profit:.4f}\n"
                     f"📦 Qty {pos.qty:.6f} | {upnl_emoji} uPnL {upnl:+.2f}"
                 )
