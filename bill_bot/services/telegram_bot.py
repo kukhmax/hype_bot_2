@@ -271,19 +271,39 @@ async def run_telegram(
             tf = cfg.timeframe
         return tf, SubscriptionStore(subs.r, tf=tf)
 
-    async def send_menu(message: Message) -> None:
-        uid = message.from_user.id
+    async def send_menu(message: Message, user_id: int | None = None) -> None:
+        uid = int(user_id) if user_id is not None else int(message.from_user.id)
         tf, user_subs = await user_ctx(uid)
         st = await user_subs.dump_user_state(uid)
-        active = bool(st["active"])
-        pairs = st["pairs"]
-        pairs_text = ", ".join(_display_pair(p) for p in pairs) if pairs else "-"
+        active = bool(st.get("active", False))
+        pairs = list(st.get("pairs") or [])
+        pairs_text = ", ".join(_display_pair(p) for p in pairs) if pairs else "—"
+        risk = float(st.get("cfg", {}).get("risk_pct", cfg.default_risk_pct))
+
+        total_u = 0.0
+        total_r = 0.0
+        for p in pairs:
+            pnl = await trade_state.get_pnl(uid, p, tf)
+            try:
+                total_u += float(pnl.get("unrealized", 0.0))
+            except Exception:
+                pass
+            try:
+                total_r += float(pnl.get("realized", 0.0))
+            except Exception:
+                pass
+        balance = float(cfg.virtual_equity) + float(total_r) + float(total_u)
+
+        active_txt = "✅ ВКЛ" if active else "⏸ ВЫКЛ"
         text = (
-            "Меню.\n\n"
-            f"TF: {tf}\n"
-            f"Активен: {st['active']}\n"
-            f"Пары: {pairs_text}\n"
-            f"Risk%: {st['cfg'].get('risk_pct', cfg.default_risk_pct)}"
+            "🏠 Меню\n\n"
+            f"⏱ TF: {tf}\n"
+            f"▶️ Отслеживание: {active_txt}\n"
+            f"📌 Пары: {pairs_text}\n"
+            f"⚙️ Риск: {risk:.2f}%\n\n"
+            f"💼 Баланс: {balance:.2f} USDC\n"
+            f"💰 Realized: {total_r:.2f} USDC\n"
+            f"📈 Unrealized: {total_u:.2f} USDC"
         )
         await message.answer(text, reply_markup=_reply_main_menu(active=active))
 
@@ -303,7 +323,7 @@ async def run_telegram(
         await state.clear()
         logger.info("tg:cb user=%s data=%s", cb.from_user.id, cb.data)
         await cb.answer()
-        await send_menu(cb.message)
+        await send_menu(cb.message, user_id=cb.from_user.id)
 
     @dp.message(F.text == "📊 Статус")
     async def menu_status_msg(message: Message, state: FSMContext):
