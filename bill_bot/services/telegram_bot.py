@@ -257,7 +257,7 @@ async def run_telegram(
                 side_emoji = "🟢" if side_u == "LONG" else "🔴"
                 upnl_emoji = "🟩" if upnl >= 0 else "🟥"
                 lines.append(
-                    f"{side_emoji} {pair_txt} — POS {side_u}\n"
+                    f"[POS] {side_emoji} {pair_txt} — {side_u}\n"
                     f"🎯 Entry {pos.entry:.4f} | 🛑 SL {pos.stop_loss:.4f} | ✅ TP {pos.take_profit:.4f}\n"
                     f"📦 Qty {pos.qty:.6f} | {upnl_emoji} uPnL {upnl:+.2f}"
                 )
@@ -269,7 +269,7 @@ async def run_telegram(
                         side_u = o.side.upper()
                         side_emoji = "🟢" if side_u == "LONG" else "🔴"
                         lines.append(
-                            f"{side_emoji} {pair_txt} — ORD {side_u}\n"
+                            f"🚩[ORD] {pair_txt} — {side_emoji} {side_u}\n"
                             f"🎯 Trigger {o.trigger:.4f} | 🛑 SL {o.stop_loss:.4f} | ✅ TP {o.take_profit:.4f}\n"
                             f"📦 Qty {o.qty:.6f}"
                         )
