@@ -217,6 +217,15 @@ async def run_telegram(
             return (float(exit_price) - float(entry)) * float(qty)
         return (float(entry) - float(exit_price)) * float(qty)
 
+    def _tp_from_rr(side: str, entry: float, stop_loss: float, rr: float = 1.0) -> float:
+        side_u = str(side).upper()
+        entry = float(entry)
+        stop_loss = float(stop_loss)
+        rr = float(rr)
+        if side_u == "LONG":
+            return entry + rr * (entry - stop_loss)
+        return entry - rr * (stop_loss - entry)
+
     async def _remember_last(uid: int, msg_id: int) -> None:
         try:
             await subs.r.set(last_msg_key(uid), int(msg_id))
@@ -956,20 +965,22 @@ async def run_telegram(
         orders = _extract_orders(st)
         for o in orders:
             side_u = o.side.upper()
+            tp = _tp_from_rr(side_u, o.trigger, o.stop_loss, rr=1.0)
             levels.extend(
                 [
                     PriceLevel(price=o.trigger, label=f"Trigger {side_u}", color="#0ea5e9", linestyle="--", linewidth=1.2),
                     PriceLevel(price=o.stop_loss, label=f"SL {side_u}", color="#ef4444", linestyle="-", linewidth=1.0),
-                    PriceLevel(price=o.take_profit, label=f"TP {side_u}", color="#22c55e", linestyle="-", linewidth=1.0),
+                    PriceLevel(price=tp, label=f"TP {side_u}", color="#22c55e", linestyle="-", linewidth=1.0),
                 ]
             )
         if st.get("pos"):
             p = Position.from_dict(st["pos"])
+            tp = _tp_from_rr(p.side, p.entry, p.stop_loss, rr=1.0)
             levels.extend(
                 [
                     PriceLevel(price=p.entry, label="Entry", color="#0ea5e9", linestyle="-", linewidth=1.2),
                     PriceLevel(price=p.stop_loss, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
-                    PriceLevel(price=p.take_profit, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+                    PriceLevel(price=tp, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
                 ]
             )
         closes = [c.c for c in candles]
