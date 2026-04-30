@@ -46,6 +46,9 @@ class Position:
     entry: float
     stop_loss: float
     take_profit: float
+    tp0: float
+    tr1_done: bool
+    tr2_done: bool
     qty: float
     opened_t: int
     cluster_t: int
@@ -56,6 +59,9 @@ class Position:
             "entry": self.entry,
             "stop_loss": self.stop_loss,
             "take_profit": self.take_profit,
+            "tp0": self.tp0,
+            "tr1_done": self.tr1_done,
+            "tr2_done": self.tr2_done,
             "qty": self.qty,
             "opened_t": self.opened_t,
             "cluster_t": self.cluster_t,
@@ -63,11 +69,15 @@ class Position:
 
     @staticmethod
     def from_dict(d: dict) -> "Position":
+        tp = float(d["take_profit"])
         return Position(
             side=str(d["side"]),
             entry=float(d["entry"]),
             stop_loss=float(d["stop_loss"]),
-            take_profit=float(d["take_profit"]),
+            take_profit=tp,
+            tp0=float(d.get("tp0", tp)),
+            tr1_done=bool(d.get("tr1_done", False)),
+            tr2_done=bool(d.get("tr2_done", False)),
             qty=float(d["qty"]),
             opened_t=int(d["opened_t"]),
             cluster_t=int(d["cluster_t"]),
@@ -153,6 +163,80 @@ class ExecutionDryRun:
         if pos.side == "LONG":
             return (exit_price - pos.entry) * pos.qty
         return (pos.entry - exit_price) * pos.qty
+
+    @staticmethod
+    def _apply_trailing(pos: Position, candle: Candle) -> Position:
+        side = str(pos.side).upper()
+        dist0 = abs(float(pos.tp0) - float(pos.entry))
+        if dist0 <= 0:
+            return pos
+
+        if side == "LONG":
+            h = float(candle.h)
+            hit_60 = h >= float(pos.entry) + 0.60 * dist0
+            hit_95 = h >= float(pos.entry) + 0.95 * dist0
+            if hit_95 and not pos.tr2_done:
+                new_sl = float(pos.entry) + 0.85 * dist0
+                new_tp = float(pos.entry) + 1.50 * dist0
+                return Position(
+                    side=pos.side,
+                    entry=pos.entry,
+                    stop_loss=max(float(pos.stop_loss), new_sl),
+                    take_profit=max(float(pos.take_profit), new_tp),
+                    tp0=pos.tp0,
+                    tr1_done=True,
+                    tr2_done=True,
+                    qty=pos.qty,
+                    opened_t=pos.opened_t,
+                    cluster_t=pos.cluster_t,
+                )
+            if hit_60 and not pos.tr1_done:
+                return Position(
+                    side=pos.side,
+                    entry=pos.entry,
+                    stop_loss=max(float(pos.stop_loss), float(pos.entry)),
+                    take_profit=pos.take_profit,
+                    tp0=pos.tp0,
+                    tr1_done=True,
+                    tr2_done=pos.tr2_done,
+                    qty=pos.qty,
+                    opened_t=pos.opened_t,
+                    cluster_t=pos.cluster_t,
+                )
+            return pos
+
+        l = float(candle.l)
+        hit_60 = l <= float(pos.entry) - 0.60 * dist0
+        hit_95 = l <= float(pos.entry) - 0.95 * dist0
+        if hit_95 and not pos.tr2_done:
+            new_sl = float(pos.entry) - 0.85 * dist0
+            new_tp = float(pos.entry) - 1.50 * dist0
+            return Position(
+                side=pos.side,
+                entry=pos.entry,
+                stop_loss=min(float(pos.stop_loss), new_sl),
+                take_profit=min(float(pos.take_profit), new_tp),
+                tp0=pos.tp0,
+                tr1_done=True,
+                tr2_done=True,
+                qty=pos.qty,
+                opened_t=pos.opened_t,
+                cluster_t=pos.cluster_t,
+            )
+        if hit_60 and not pos.tr1_done:
+            return Position(
+                side=pos.side,
+                entry=pos.entry,
+                stop_loss=min(float(pos.stop_loss), float(pos.entry)),
+                take_profit=pos.take_profit,
+                tp0=pos.tp0,
+                tr1_done=True,
+                tr2_done=pos.tr2_done,
+                qty=pos.qty,
+                opened_t=pos.opened_t,
+                cluster_t=pos.cluster_t,
+            )
+        return pos
 
     @staticmethod
     def _get_orders(state: dict) -> list[PendingOrder]:
@@ -244,6 +328,10 @@ class ExecutionDryRun:
 
         if pos_raw:
             pos = Position.from_dict(pos_raw)
+            pos2 = self._apply_trailing(pos, candle)
+            if pos2 != pos:
+                pos = pos2
+                state["pos"] = pos.to_dict()
             hit_sl = candle.l <= pos.stop_loss if pos.side == "LONG" else candle.h >= pos.stop_loss
             hit_tp = candle.h >= pos.take_profit if pos.side == "LONG" else candle.l <= pos.take_profit
 
@@ -317,6 +405,9 @@ class ExecutionDryRun:
                     entry=triggered_order.trigger,
                     stop_loss=triggered_order.stop_loss,
                     take_profit=triggered_order.take_profit,
+                    tp0=triggered_order.take_profit,
+                    tr1_done=False,
+                    tr2_done=False,
                     qty=triggered_order.qty,
                     opened_t=candle.t,
                     cluster_t=triggered_order.cluster_t,
