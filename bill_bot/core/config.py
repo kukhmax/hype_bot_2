@@ -16,6 +16,7 @@ class Config:
     sleep_window: int
     sleep_k: float
     fractals_max: int
+    trades_max: int
     tick_size_default: float
     tick_sizes: dict[str, float]
     virtual_equity: float
@@ -43,6 +44,7 @@ class Config:
         sleep_window = int(os.getenv("SLEEP_WINDOW", "20"))
         sleep_k = float(os.getenv("SLEEP_K", "0.001"))
         fractals_max = int(os.getenv("FRACTALS_MAX", "200"))
+        trades_max = int(os.getenv("TRADES_MAX", "5000"))
         tick_size_default = float(os.getenv("TICK_SIZE", "0.01"))
         tick_sizes_raw = os.getenv("TICK_SIZES", "")
         tick_sizes: dict[str, float] = {}
@@ -78,6 +80,7 @@ class Config:
             sleep_window=sleep_window,
             sleep_k=sleep_k,
             fractals_max=fractals_max,
+            trades_max=trades_max,
             tick_size_default=tick_size_default,
             tick_sizes=tick_sizes,
             virtual_equity=virtual_equity,

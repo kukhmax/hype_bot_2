@@ -23,6 +23,7 @@ from bill_bot.services.fractals import RedisFractalStore, detect_confirmed_fract
 from bill_bot.services.hyperliquid_api import HyperliquidInfoClient
 from bill_bot.services.indicators import alligator_ema
 from bill_bot.services.subscriptions import SubscriptionStore
+from bill_bot.services.reporting import build_trades_xlsx
 
 
 logger = logging.getLogger(__name__)
@@ -176,6 +177,14 @@ def _msg_controls_menu() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     kb.button(text="🗑 Удалить", callback_data="msg:delete")
     kb.adjust(1)
+    return kb
+
+
+def _trades_controls_menu() -> InlineKeyboardBuilder:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📥 Excel", callback_data="trades:excel")
+    kb.button(text="🗑 Удалить", callback_data="msg:delete")
+    kb.adjust(2)
     return kb
 
 
@@ -609,7 +618,34 @@ async def run_telegram(
         if not any_rows:
             await message.answer("Пока нет закрытых сделок.")
             return
-        await message.answer("\n".join(lines), reply_markup=_msg_controls_menu().as_markup())
+        await message.answer("\n".join(lines), reply_markup=_trades_controls_menu().as_markup())
+        return
+
+    @dp.callback_query(F.data == "trades:excel")
+    async def trades_excel(cb: CallbackQuery):
+        uid = cb.from_user.id
+        tf, user_subs = await user_ctx(uid)
+        pairs = await user_subs.get_user_pairs(uid)
+        if not pairs:
+            await cb.answer("Нет выбранных пар")
+            return
+        limit = int(getattr(cfg, "trades_max", 5000))
+        all_trades: list[dict] = []
+        for p in pairs:
+            rows = await trade_state.get_trades(uid, p, tf, limit=limit)
+            all_trades.extend(rows)
+        if not all_trades:
+            await cb.answer("Пока нет сделок")
+            return
+        tf_ms = _timeframe_ms(tf)
+        xlsx = build_trades_xlsx(all_trades, tf=tf, tf_ms=tf_ms, base_equity=float(cfg.virtual_equity))
+        fname = f"trades_{tf}_{uid}.xlsx"
+        await cb.answer()
+        await cb.message.answer_document(
+            BufferedInputFile(xlsx, filename=fname),
+            caption=f"📥 Отчёт по сделкам (TF {tf})",
+            reply_markup=_msg_controls_menu().as_markup(),
+        )
         return
 
     @dp.callback_query(F.data == "positions:refresh")
@@ -678,7 +714,7 @@ async def run_telegram(
         st["last_trade"] = trade
         st.pop("pos", None)
         st["last_t"] = int(last.t)
-        await trade_state.append_trade(uid, pair, tf, trade)
+        await trade_state.append_trade(uid, pair, tf, trade, max_len=cfg.trades_max)
         await trade_state.set(uid, pair, tf, st)
         await trade_state.set_pnl(uid, pair, tf, {"unrealized": 0.0, "realized": realized})
         await cb.answer("Позиция закрыта")

@@ -110,7 +110,7 @@ class RedisTradeState:
     async def set_pnl(self, user_id: int, pair: str, tf: str, payload: dict) -> None:
         await self.r.set(self.pnl_key(user_id, pair, tf), json.dumps(payload, separators=(",", ":")))
 
-    async def append_trade(self, user_id: int, pair: str, tf: str, trade: dict, max_len: int = 50) -> None:
+    async def append_trade(self, user_id: int, pair: str, tf: str, trade: dict, max_len: int = 5000) -> None:
         key = self.trades_key(user_id, pair, tf)
         await self.r.lpush(key, json.dumps(trade, separators=(",", ":")))
         await self.r.ltrim(key, 0, int(max_len) - 1)
@@ -129,10 +129,11 @@ class RedisTradeState:
 
 
 class ExecutionDryRun:
-    def __init__(self, store: RedisTradeState, tf: str, virtual_equity: float):
+    def __init__(self, store: RedisTradeState, tf: str, virtual_equity: float, trades_max: int = 5000):
         self.store = store
         self.tf = tf
         self.virtual_equity = float(virtual_equity)
+        self.trades_max = int(trades_max)
 
     def _qty_from_risk(self, entry: float, sl: float, risk_pct: float) -> float:
         risk_amount = self.virtual_equity * (float(risk_pct) / 100.0)
@@ -295,7 +296,7 @@ class ExecutionDryRun:
                     "realized_total": realized,
                     "cluster_t": pos.cluster_t,
                 }
-                await self.store.append_trade(user_id, pair, self.tf, trade)
+                await self.store.append_trade(user_id, pair, self.tf, trade, max_len=self.trades_max)
                 await self.store.set_pnl(user_id, pair, self.tf, {"unrealized": 0.0, "realized": realized})
             else:
                 mark = candle.c

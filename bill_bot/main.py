@@ -324,7 +324,7 @@ async def main():
     async def market_loop(tf: str):
         tf_ms = timeframe_ms(tf)
         subs_tf = SubscriptionStore(r, tf=tf)
-        exec_engine = ExecutionDryRun(trade_state, tf=tf, virtual_equity=cfg.virtual_equity)
+        exec_engine = ExecutionDryRun(trade_state, tf=tf, virtual_equity=cfg.virtual_equity, trades_max=cfg.trades_max)
 
         max_len = max(cfg.history_bars, 200)
         while True:
