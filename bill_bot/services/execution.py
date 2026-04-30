@@ -307,7 +307,14 @@ class ExecutionDryRun:
                 existing_same = o
                 break
         if existing_same and int(existing_same.cluster_t) == int(cand.cluster_t):
-            return "unchanged", existing_same, None
+            eps = 1e-9
+            same = (
+                abs(float(existing_same.trigger) - float(cand.entry_trigger)) < eps
+                and abs(float(existing_same.stop_loss) - float(cand.stop_loss)) < eps
+                and abs(float(existing_same.take_profit) - float(cand.take_profit)) < eps
+            )
+            if same:
+                return "unchanged", existing_same, None
 
         qty = self._qty_from_risk(cand.entry_trigger, cand.stop_loss, risk_pct=risk_pct)
         if qty <= 0:

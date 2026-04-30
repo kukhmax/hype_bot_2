@@ -233,7 +233,7 @@ async def main():
             tf=tf,
             sleep_window=cfg.sleep_window,
             sleep_k=cfg.sleep_k,
-            rr=1.0,
+            rr=float(cfg.default_rr),
             sz_decimals=sz_dec,
             max_decimals=6,
             tick_size_fallback=cfg.tick_size_default,
@@ -260,20 +260,30 @@ async def main():
                 tick,
                 float(ctx.get("sleep_med_spread", 0.0)),
             )
-
-            levels_setup = [
-                PriceLevel(price=cand.cluster_price, label="Cluster", color="#7c3aed", linestyle=":", linewidth=1.0),
-                PriceLevel(price=cand.entry_trigger, label="Trigger", color="#0ea5e9", linestyle="--", linewidth=1.2),
-                PriceLevel(price=cand.stop_loss, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
-                PriceLevel(price=cand.take_profit, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
-            ]
-            setup_png = await build_signal_chart(pair, tf, levels=levels_setup)
+            setup_png_cache: dict[float, bytes | None] = {}
 
             for uid in users:
                 if not await subs_tf.is_active(uid):
                     continue
                 ucfg = await subs_tf.get_user_cfg(uid)
                 risk_pct = float(ucfg.get("risk_pct", cfg.default_risk_pct))
+                rr = float(ucfg.get("rr", cfg.default_rr))
+
+                if str(cand.side).upper() == "LONG":
+                    tp_u = float(cand.entry_trigger) + float(rr) * (float(cand.entry_trigger) - float(cand.stop_loss))
+                else:
+                    tp_u = float(cand.entry_trigger) - float(rr) * (float(cand.stop_loss) - float(cand.entry_trigger))
+                cand_u = type(cand)(
+                    pair=cand.pair,
+                    tf=cand.tf,
+                    side=cand.side,
+                    cluster_t=cand.cluster_t,
+                    cluster_price=cand.cluster_price,
+                    entry_trigger=cand.entry_trigger,
+                    stop_loss=cand.stop_loss,
+                    take_profit=tp_u,
+                    rr=rr,
+                )
 
                 state = await trade_state.get(uid, pair, tf)
                 if state.get("pos"):
@@ -283,7 +293,7 @@ async def main():
                     user_id=uid,
                     pair=pair,
                     candle=window[-1],
-                    cand=cand,
+                    cand=cand_u,
                     risk_pct=risk_pct,
                 )
                 if action not in ("placed", "replaced") or order is None:
@@ -293,17 +303,27 @@ async def main():
                 if action == "replaced" and canceled is not None:
                     note = f"♻️ Предыдущий ордер {str(canceled.side).upper()} отменён"
 
+                rr_key = float(rr)
+                if rr_key not in setup_png_cache:
+                    levels_setup_u = [
+                        PriceLevel(price=cand.cluster_price, label="Cluster", color="#7c3aed", linestyle=":", linewidth=1.0),
+                        PriceLevel(price=order.trigger, label="Trigger", color="#0ea5e9", linestyle="--", linewidth=1.2),
+                        PriceLevel(price=order.stop_loss, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
+                        PriceLevel(price=order.take_profit, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+                    ]
+                    setup_png_cache[rr_key] = await build_signal_chart(pair, tf, levels=levels_setup_u)
+
                 setup_caption = (
                     f"🔔 Сетап {cand.side} {display_pair(pair)} ({tf})\n"
                     f"🕒 {await fmt_close_ts_from_open(pair, tf, cand.cluster_t)}\n"
-                    f"🎯 Trigger {cand.entry_trigger:.4f} | 🛑 SL {cand.stop_loss:.4f} | ✅ TP {cand.take_profit:.4f}\n"
-                    f"📦 Qty {order.qty:.6f} | ⚙️ Risk {risk_pct:.2f}%"
+                    f"🎯 Trigger {order.trigger:.4f} | 🛑 SL {order.stop_loss:.4f} | ✅ TP {order.take_profit:.4f}\n"
+                    f"📦 Qty {order.qty:.6f} | ⚙️ Risk {risk_pct:.2f}% | 📐 RR {rr:.2f}"
                 )
                 if note:
                     setup_caption = f"{setup_caption}\n{note}"
 
-                if setup_png:
-                    await tg_send_photo(uid, setup_png, setup_caption)
+                if setup_png_cache.get(rr_key):
+                    await tg_send_photo(uid, setup_png_cache[rr_key] or b"", setup_caption)
                 else:
                     await tg_send(uid, setup_caption)
 

@@ -106,6 +106,9 @@ class SubscriptionStore:
     async def set_user_risk(self, user_id: int, risk_pct: float) -> None:
         await self.r.hset(self.user_cfg_key(user_id), mapping={"risk_pct": float(risk_pct)})
 
+    async def set_user_rr(self, user_id: int, rr: float) -> None:
+        await self.r.hset(self.user_cfg_key(user_id), mapping={"rr": float(rr)})
+
     async def get_user_cfg(self, user_id: int) -> dict:
         raw = await self.r.hgetall(self.user_cfg_key(user_id))
         cfg: dict = {}

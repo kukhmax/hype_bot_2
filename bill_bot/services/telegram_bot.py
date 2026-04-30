@@ -37,11 +37,16 @@ class ChartPairFlow(StatesGroup):
     waiting_pair = State()
 
 
+class RrFlow(StatesGroup):
+    waiting_rr = State()
+
+
 def _main_menu() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     kb.button(text="📌 Пары", callback_data="menu:pairs")
     kb.button(text="⏱ TF", callback_data="menu:tf")
     kb.button(text="⚙️ Риск", callback_data="menu:risk")
+    kb.button(text="📐 RR", callback_data="menu:rr")
     kb.button(text="▶️ Запуск", callback_data="menu:start")
     kb.button(text="⏸ Стоп", callback_data="menu:stop")
     kb.button(text="📈 Позиции", callback_data="menu:positions")
@@ -57,7 +62,8 @@ def _reply_main_menu(active: bool) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📌 Пары"), KeyboardButton(text="⏱ TF")],
-            [KeyboardButton(text="⚙️ Риск"), KeyboardButton(text="📊 Статус")],
+            [KeyboardButton(text="⚙️ Риск"), KeyboardButton(text="📐 RR")],
+            [KeyboardButton(text="📊 Статус")],
             [KeyboardButton(text=start_stop)],
             [KeyboardButton(text="📈 Позиции"), KeyboardButton(text="💰 P&L")],
             [KeyboardButton(text="📉 График"), KeyboardButton(text="📜 Сделки")],
@@ -185,6 +191,17 @@ def _trades_controls_menu() -> InlineKeyboardBuilder:
     kb.button(text="📥 Excel", callback_data="trades:excel")
     kb.button(text="🗑 Удалить", callback_data="msg:delete")
     kb.adjust(2)
+    return kb
+
+
+def _rr_menu(current: float | None) -> InlineKeyboardBuilder:
+    kb = InlineKeyboardBuilder()
+    for v in (0.5, 1.0, 1.2, 1.5, 2.0, 3.0):
+        mark = "✅" if current is not None and abs(float(current) - float(v)) < 1e-9 else "⬜"
+        kb.button(text=f"{mark} {v}", callback_data=f"rr:{v}")
+    kb.button(text="⌨️ Ввести", callback_data="rr_input:prompt")
+    kb.button(text="⬅️ Назад", callback_data="menu:back")
+    kb.adjust(3)
     return kb
 
 
@@ -338,6 +355,7 @@ async def run_telegram(
         pairs = list(st.get("pairs") or [])
         pairs_text = ", ".join(_display_pair(p) for p in pairs) if pairs else "—"
         risk = float(st.get("cfg", {}).get("risk_pct", cfg.default_risk_pct))
+        rr = float(st.get("cfg", {}).get("rr", cfg.default_rr))
 
         total_u = 0.0
         total_r = 0.0
@@ -360,6 +378,7 @@ async def run_telegram(
             f"▶️ Отслеживание: {active_txt}\n"
             f"📌 Пары: {pairs_text}\n"
             f"⚙️ Риск: {risk:.2f}%\n\n"
+            f"📐 RR: {rr:.2f}\n\n"
             f"💼 Баланс: {balance:.2f} USDC\n"
             f"💰 Realized: {total_r:.2f} USDC\n"
             f"📈 Unrealized: {total_u:.2f} USDC"
@@ -441,6 +460,21 @@ async def run_telegram(
         st = await user_subs.get_user_cfg(uid)
         cur = st.get("risk_pct")
         await message.answer("Выберите риск на сделку (% от виртуального депозита):", reply_markup=_risk_menu(cur).as_markup())
+        return
+
+    @dp.message(F.text == "📐 RR")
+    async def menu_rr_msg(message: Message, state: FSMContext):
+        await state.clear()
+        uid = message.from_user.id
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        logger.info("tg:btn user=%s text=%s", uid, message.text)
+        _, user_subs = await user_ctx(uid)
+        st = await user_subs.get_user_cfg(uid)
+        cur = st.get("rr")
+        await message.answer("Выберите RR (отношение TP к SL):", reply_markup=_rr_menu(cur).as_markup())
         return
 
     @dp.message(F.text == "⏱ TF")
@@ -778,6 +812,35 @@ async def run_telegram(
         data = build_chart_png(coin, tf, candles, jaw, teeth, lips, fpts, levels=[])
         await message.answer_photo(BufferedInputFile(data, filename=f"{coin}_{tf}.png"), reply_markup=_msg_controls_menu().as_markup())
 
+    @dp.callback_query(F.data == "rr_input:prompt")
+    async def rr_input_prompt(cb: CallbackQuery, state: FSMContext):
+        logger.info("tg:cb user=%s data=%s", cb.from_user.id, cb.data)
+        await state.set_state(RrFlow.waiting_rr)
+        await cb.answer()
+        await cb.message.answer("Введи RR числом (например 1.0, 1.5, 2.0).")
+
+    @dp.message(RrFlow.waiting_rr)
+    async def rr_input_message(message: Message, state: FSMContext):
+        uid = message.from_user.id
+        raw = str(message.text or "").strip().replace(",", ".")
+        try:
+            rr = float(raw)
+        except Exception:
+            await message.answer("Некорректное значение. Пример: 1.5")
+            return
+        if not (0.05 <= rr <= 20.0):
+            await message.answer("RR должен быть в диапазоне 0.05..20.0")
+            return
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        _, user_subs = await user_ctx(uid)
+        await user_subs.set_user_rr(uid, rr)
+        await state.clear()
+        st = await user_subs.get_user_cfg(uid)
+        await message.answer("RR установлен.", reply_markup=_rr_menu(st.get("rr")).as_markup())
+
     @dp.callback_query(F.data == "pair_add:prompt")
     async def pair_add_prompt(cb: CallbackQuery, state: FSMContext):
         logger.info("tg:cb user=%s data=%s", cb.from_user.id, cb.data)
@@ -843,6 +906,11 @@ async def run_telegram(
                     await new_subs.set_user_risk(uid, float(old_cfg["risk_pct"]))
                 except Exception:
                     pass
+            if "rr" in old_cfg and "rr" not in new_cfg:
+                try:
+                    await new_subs.set_user_rr(uid, float(old_cfg["rr"]))
+                except Exception:
+                    pass
 
             await old_subs.set_active(uid, False)
             await new_subs.set_active(uid, False)
@@ -884,6 +952,16 @@ async def run_telegram(
         await cb.message.edit_text("Выберите риск на сделку (% от виртуального депозита):", reply_markup=_risk_menu(cur).as_markup())
         await cb.answer()
 
+    @dp.callback_query(F.data == "menu:rr")
+    async def menu_rr(cb: CallbackQuery):
+        uid = cb.from_user.id
+        logger.info("tg:cb user=%s data=%s", uid, cb.data)
+        _, user_subs = await user_ctx(uid)
+        st = await user_subs.get_user_cfg(uid)
+        cur = st.get("rr")
+        await cb.message.edit_text("Выберите RR (отношение TP к SL):", reply_markup=_rr_menu(cur).as_markup())
+        await cb.answer()
+
     @dp.callback_query(F.data.startswith("risk:"))
     async def set_risk(cb: CallbackQuery):
         uid = cb.from_user.id
@@ -899,6 +977,25 @@ async def run_telegram(
         await cb.answer(f"Risk установлен: {v}%")
         st = await user_subs.get_user_cfg(uid)
         await cb.message.edit_reply_markup(reply_markup=_risk_menu(st.get("risk_pct")).as_markup())
+
+    @dp.callback_query(F.data.startswith("rr:"))
+    async def set_rr(cb: CallbackQuery):
+        uid = cb.from_user.id
+        raw = cb.data.split(":", 1)[1]
+        try:
+            v = float(raw)
+        except Exception:
+            await cb.answer("Некорректное значение")
+            return
+        if not (0.05 <= v <= 20.0):
+            await cb.answer("RR вне диапазона")
+            return
+        logger.info("tg:rr user=%s rr=%s", uid, v)
+        _, user_subs = await user_ctx(uid)
+        await user_subs.set_user_rr(uid, v)
+        await cb.answer(f"RR установлен: {v}")
+        st = await user_subs.get_user_cfg(uid)
+        await cb.message.edit_reply_markup(reply_markup=_rr_menu(st.get("rr")).as_markup())
 
     @dp.callback_query(F.data == "menu:start")
     async def start_tracking(cb: CallbackQuery):
@@ -929,7 +1026,8 @@ async def run_telegram(
             f"TF: {tf}\n"
             f"Активен: {st['active']}\n"
             f"Пары: {', '.join(st['pairs']) if st['pairs'] else '-'}\n"
-            f"Risk%: {st['cfg'].get('risk_pct', cfg.default_risk_pct)}"
+            f"Risk%: {st['cfg'].get('risk_pct', cfg.default_risk_pct)}\n"
+            f"RR: {st['cfg'].get('rr', cfg.default_rr)}"
         )
         await cb.message.edit_text(text, reply_markup=_msg_controls_menu().as_markup())
         await _remember_last(uid, cb.message.message_id)
