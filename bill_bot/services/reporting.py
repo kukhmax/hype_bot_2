@@ -64,6 +64,7 @@ def build_trades_xlsx(trades: list[dict], tf: str, tf_ms: int, base_equity: floa
     sum_win = 0.0
     sum_loss = 0.0
     total_pnl = 0.0
+    per_pair: dict[str, dict] = {}
 
     for t in sorted_trades:
         pair = str(t.get("pair", "")).upper()
@@ -100,6 +101,17 @@ def build_trades_xlsx(trades: list[dict], tf: str, tf_ms: int, base_equity: floa
         else:
             losses += 1
             sum_loss += pnl
+
+        p = per_pair.get(pair)
+        if p is None:
+            p = {"tp": 0, "sl": 0, "pnl": 0.0}
+            per_pair[pair] = p
+        p["pnl"] = float(p.get("pnl", 0.0)) + float(pnl)
+        r_u = str(reason).upper()
+        if r_u in ("TP", "MANUAL_CLOSE"):
+            p["tp"] = int(p.get("tp", 0)) + 1
+        elif "SL" in r_u:
+            p["sl"] = int(p.get("sl", 0)) + 1
 
         ws.append(
             [
@@ -138,7 +150,22 @@ def build_trades_xlsx(trades: list[dict], tf: str, tf_ms: int, base_equity: floa
     ws2.append(["profit_factor", profit_factor])
     ws2.append(["equity_end", float(base_equity) + total_pnl])
 
+    ws2.append([])
+    ws2.append(["pair", "TP(+manual)", "SL", "win_rate_pct"])
+    for pair in sorted(per_pair.keys()):
+        p = per_pair[pair]
+        tp = int(p.get("tp", 0))
+        sl = int(p.get("sl", 0))
+        denom = tp + sl
+        wr = (tp / denom * 100.0) if denom > 0 else 0.0
+        ws2.append([pair, tp, sl, wr])
+
+    ws2.append([])
+    ws2.append(["pair", "pnl"])
+    for pair in sorted(per_pair.keys()):
+        p = per_pair[pair]
+        ws2.append([pair, float(p.get("pnl", 0.0))])
+
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
-
