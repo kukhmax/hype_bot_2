@@ -17,7 +17,7 @@ from bill_bot.services.charting import FractalPoint, PriceLevel, build_chart_png
 from bill_bot.services.execution import ExecutionDryRun, RedisTradeState
 from bill_bot.services.fractals import RedisFractalStore, detect_confirmed_fractal
 from bill_bot.services.hyperliquid_api import HyperliquidInfoClient
-from bill_bot.services.indicators import alligator_ema, spread_lines, is_sleep
+from bill_bot.services.indicators import alligator_ema, is_alligator_tangled, spread_lines, is_sleep
 from bill_bot.services.strategy import RedisSignalStore, StrategyEngine
 from bill_bot.services.subscriptions import SubscriptionStore
 from bill_bot.services.telegram_bot import run_telegram
@@ -196,7 +196,9 @@ async def main():
         closes = [c.c for c in window]
         alli = alligator_ema(closes)
         spreads = spread_lines(alli["jaw"], alli["teeth"], alli["lips"])
-        sleep, med_spread = is_sleep(spreads, last_close=closes[-1], window=cfg.sleep_window, k=cfg.sleep_k)
+        sleep_spread, med_spread = is_sleep(spreads, last_close=closes[-1], window=cfg.sleep_window, k=cfg.sleep_k)
+        tangled = is_alligator_tangled(alli["jaw"], alli["teeth"], alli["lips"], window=cfg.sleep_window)
+        sleep = bool(sleep_spread and tangled)
 
         payload = {
             "pair": pair,
@@ -208,13 +210,15 @@ async def main():
             "lips": alli["lips"][-1],
             "spread": spreads[-1] if spreads else 0.0,
             "sleep": sleep,
+            "sleep_spread": sleep_spread,
+            "tangled": tangled,
             "sleep_med_spread": med_spread,
             "sleep_k": cfg.sleep_k,
             "sleep_window": cfg.sleep_window,
         }
         await r.set(f"ind:last:{pair}:{tf}", json.dumps(payload, separators=(",", ":")))
         logger.info(
-            "Alligator: pair=%s tf=%s close=%.4f jaw=%.4f teeth=%.4f lips=%.4f sleep=%s med_spread=%.6f",
+            "Alligator: pair=%s tf=%s close=%.4f jaw=%.4f teeth=%.4f lips=%.4f sleep=%s tangled=%s med_spread=%.6f",
             pair,
             tf,
             closes[-1],
@@ -222,6 +226,7 @@ async def main():
             payload["teeth"],
             payload["lips"],
             sleep,
+            tangled,
             med_spread,
         )
 
@@ -246,6 +251,17 @@ async def main():
             prev = await signal_store.get_last(pair, tf, cand.side)
             if prev and int(prev.get("cluster_t", 0)) == int(cand.cluster_t):
                 continue
+            if prev:
+                try:
+                    prev_price = float(prev.get("cluster_price", 0.0))
+                except Exception:
+                    prev_price = 0.0
+                if str(cand.side).upper() == "LONG":
+                    if float(cand.cluster_price) >= float(prev_price):
+                        continue
+                else:
+                    if float(cand.cluster_price) <= float(prev_price):
+                        continue
             await signal_store.set_last(cand)
             tick = engine.tick_size_for_price(cand.cluster_price)
             logger.info(

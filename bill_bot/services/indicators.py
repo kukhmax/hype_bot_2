@@ -46,3 +46,26 @@ def is_sleep(spreads: list[float], last_close: float, window: int, k: float) -> 
     med = float(statistics.median(chunk))
     threshold = float(k) * float(last_close) if last_close else 0.0
     return med < threshold, med
+
+
+def is_alligator_tangled(jaw: list[float], teeth: list[float], lips: list[float], window: int) -> bool:
+    if window <= 1:
+        return False
+    n = min(len(jaw), len(teeth), len(lips))
+    if n < 3:
+        return False
+    start = max(0, n - window)
+    eps = 1e-12
+
+    def crossed(a: list[float], b: list[float]) -> bool:
+        prev = float(a[start]) - float(b[start])
+        for i in range(start + 1, n):
+            cur = float(a[i]) - float(b[i])
+            if abs(cur) <= eps:
+                return True
+            if (prev < -eps and cur > eps) or (prev > eps and cur < -eps):
+                return True
+            prev = cur
+        return False
+
+    return crossed(jaw, teeth) and crossed(teeth, lips)
