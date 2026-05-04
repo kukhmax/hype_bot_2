@@ -7,7 +7,7 @@ import redis.asyncio as redis
 
 from bill_bot.services.candle_store import Candle
 from bill_bot.services.fractals import Fractal
-from bill_bot.services.indicators import alligator_ema, is_sleep, spread_lines
+from bill_bot.services.indicators import alligator_ema, is_alligator_tangled, is_sleep, spread_lines
 
 
 @dataclass(frozen=True)
@@ -87,8 +87,10 @@ class StrategyEngine:
         alli = alligator_ema(closes)
         spreads = spread_lines(alli["jaw"], alli["teeth"], alli["lips"])
         sleep, med_spread = is_sleep(spreads, last_close=closes[-1], window=self.sleep_window, k=self.sleep_k)
+        tangled = is_alligator_tangled(alli["jaw"], alli["teeth"], alli["lips"], window=self.sleep_window)
         ctx: dict = {
             "sleep": sleep,
+            "tangled": tangled,
             "sleep_med_spread": med_spread,
             "last_close": closes[-1],
             "jaw": alli["jaw"][-1],
@@ -97,6 +99,9 @@ class StrategyEngine:
         }
         if not sleep:
             ctx["reason"] = "not_sleep"
+            return [], ctx
+        if not tangled:
+            ctx["reason"] = "not_tangled"
             return [], ctx
 
         highs = [f for f in fractals if f.kind == "HIGH"]
@@ -118,7 +123,7 @@ class StrategyEngine:
         out: list[SignalCandidate] = []
 
         if long_entry is not None:
-            sl = self._find_long_sl(lows, before_t=long_entry.t)
+            sl = self._find_long_sl(lows)
             if sl is None:
                 ctx["reason"] = "no_long_sl_cluster"
                 return out, ctx
@@ -144,7 +149,7 @@ class StrategyEngine:
             )
 
         if short_entry is not None:
-            sl = self._find_short_sl(highs, before_t=short_entry.t)
+            sl = self._find_short_sl(highs)
             if sl is None:
                 ctx["reason"] = "no_short_sl_cluster"
                 return out, ctx
@@ -175,40 +180,28 @@ class StrategyEngine:
 
     @staticmethod
     def _pick_long_entry(highs: list[Fractal]) -> Fractal | None:
-        if len(highs) < 2:
-            return None
-        for i in range(len(highs) - 1, 0, -1):
-            cur = highs[i]
-            prev = highs[i - 1]
-            if cur.close > cur.teeth and cur.price < prev.price:
-                return cur
+        for f in reversed(highs):
+            if f.close > f.teeth:
+                return f
         return None
 
     @staticmethod
     def _pick_short_entry(lows: list[Fractal]) -> Fractal | None:
-        if len(lows) < 2:
-            return None
-        for i in range(len(lows) - 1, 0, -1):
-            cur = lows[i]
-            prev = lows[i - 1]
-            if cur.close < cur.teeth and cur.price > prev.price:
-                return cur
-        return None
-
-    @staticmethod
-    def _find_long_sl(lows: list[Fractal], before_t: int) -> Fractal | None:
         for f in reversed(lows):
-            if f.t >= before_t:
-                continue
             if f.close < f.teeth:
                 return f
         return None
 
     @staticmethod
-    def _find_short_sl(highs: list[Fractal], before_t: int) -> Fractal | None:
+    def _find_long_sl(lows: list[Fractal]) -> Fractal | None:
+        for f in reversed(lows):
+            if f.close < f.teeth:
+                return f
+        return None
+
+    @staticmethod
+    def _find_short_sl(highs: list[Fractal]) -> Fractal | None:
         for f in reversed(highs):
-            if f.t >= before_t:
-                continue
             if f.close > f.teeth:
                 return f
         return None
