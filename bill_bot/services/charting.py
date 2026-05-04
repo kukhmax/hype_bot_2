@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from io import BytesIO
 from typing import Iterable
 
@@ -16,6 +18,7 @@ class FractalPoint:
     kind: str
     t: int
     price: float
+    idx: int | None = None
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,18 @@ class PriceLevel:
     color: str
     linestyle: str = "-"
     linewidth: float = 1.0
+
+
+def _fmt_ts_ms(ts_ms: int) -> str:
+    try:
+        ts_ms = int(ts_ms)
+    except Exception:
+        return str(ts_ms)
+    try:
+        dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).astimezone(ZoneInfo("Europe/Warsaw"))
+    except Exception:
+        return str(ts_ms)
+    return dt.strftime("%H:%M %d/%m/%y")
 
 
 def build_chart_png(
@@ -67,14 +82,16 @@ def build_chart_png(
     t_to_idx = {c.t: i for i, c in enumerate(candles)}
     step = (candles[1].t - candles[0].t) if len(candles) >= 2 else None
     for f in fractals:
-        if f.t < t_min or f.t > t_max:
-            continue
-        idx = t_to_idx.get(f.t)
-        if idx is None and step:
-            closest = min(range(len(candles)), key=lambda i: abs(candles[i].t - f.t))
-            if abs(candles[closest].t - f.t) <= abs(step) / 2:
-                idx = closest
+        idx = getattr(f, "idx", None)
         if idx is None:
+            if f.t < t_min or f.t > t_max:
+                continue
+            idx = t_to_idx.get(f.t)
+            if idx is None and step:
+                closest = min(range(len(candles)), key=lambda i: abs(candles[i].t - f.t))
+                if abs(candles[closest].t - f.t) <= abs(step) / 2:
+                    idx = closest
+        if idx is None or idx < 0 or idx >= len(candles):
             continue
         if f.kind.upper() == "HIGH":
             ax.scatter([idx], [f.price], marker="^", s=80, color="#7c3aed", edgecolors="#0f172a", linewidths=0.6, zorder=6)
@@ -94,7 +111,7 @@ def build_chart_png(
 
     step = max(1, len(candles) // 10)
     ax.set_xticks(list(range(0, len(candles), step)))
-    ax.set_xticklabels([str(candles[i].t) for i in range(0, len(candles), step)], rotation=30, fontsize=8)
+    ax.set_xticklabels([_fmt_ts_ms(candles[i].T) for i in range(0, len(candles), step)], rotation=30, fontsize=8)
 
     fig.tight_layout()
     buf = BytesIO()

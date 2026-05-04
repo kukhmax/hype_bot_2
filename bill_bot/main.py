@@ -1,12 +1,19 @@
 import asyncio
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import logging
 import json
 import time
+
+from aiogram import Bot
+from aiogram.types.input_file import BufferedInputFile
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bill_bot.core.config import Config
 from bill_bot.core.logger import setup_logger
 from bill_bot.core.redis_client import get_redis
 from bill_bot.services.candle_store import Candle, RedisCandleStore
+from bill_bot.services.charting import FractalPoint, PriceLevel, build_chart_png
 from bill_bot.services.execution import ExecutionDryRun, RedisTradeState
 from bill_bot.services.fractals import RedisFractalStore, detect_confirmed_fractal
 from bill_bot.services.hyperliquid_api import HyperliquidInfoClient
@@ -19,6 +26,8 @@ from bill_bot.services.telegram_bot import run_telegram
 async def main():
     cfg = Config.from_env()
     logger = setup_logger(cfg.log_level)
+
+    tg_bot = Bot(token=cfg.telegram_token) if cfg.telegram_token else None
 
     r = get_redis(cfg)
     try:
@@ -34,6 +43,104 @@ async def main():
     trade_state = RedisTradeState(r)
     hl = HyperliquidInfoClient()
     subs = SubscriptionStore(r, tf=cfg.timeframe)
+
+    def fmt_ts_ms(ts_ms: int) -> str:
+        try:
+            ts_ms = int(ts_ms)
+        except Exception:
+            return str(ts_ms)
+        try:
+            dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).astimezone(ZoneInfo("Europe/Warsaw"))
+        except Exception:
+            return str(ts_ms)
+        return dt.strftime("%H:%M %d/%m/%y")
+
+    def display_pair(coin: str) -> str:
+        return f"{str(coin).upper().strip()}-USDC"
+
+    async def tg_send(user_id: int, text: str) -> None:
+        if tg_bot is None:
+            return
+        try:
+            kb = InlineKeyboardBuilder()
+            kb.button(text="🗑 Удалить", callback_data="msg:delete")
+            kb.adjust(1)
+            await tg_bot.send_message(chat_id=int(user_id), text=text, reply_markup=kb.as_markup())
+        except Exception as e:
+            logger.info("Telegram send failed: user=%s err=%s", user_id, e)
+
+    async def tg_send_photo(user_id: int, png: bytes, caption: str) -> None:
+        if tg_bot is None:
+            return
+        try:
+            kb = InlineKeyboardBuilder()
+            kb.button(text="🗑 Удалить", callback_data="msg:delete")
+            kb.adjust(1)
+            await tg_bot.send_photo(
+                chat_id=int(user_id),
+                photo=BufferedInputFile(png, filename="signal.png"),
+                caption=caption,
+                reply_markup=kb.as_markup(),
+            )
+        except Exception as e:
+            logger.info("Telegram send_photo failed: user=%s err=%s", user_id, e)
+
+    def calc_fractal_points(candles: list[Candle], teeth_series: list[float]) -> list[FractalPoint]:
+        out: list[FractalPoint] = []
+        for i in range(2, max(2, len(candles) - 2)):
+            c = candles[i]
+            l2 = candles[i - 2]
+            l1 = candles[i - 1]
+            r1 = candles[i + 1]
+            r2 = candles[i + 2]
+
+            if c.h > l2.h and c.h > l1.h and c.h > r1.h and c.h > r2.h:
+                out.append(FractalPoint(kind="HIGH", t=c.t, price=c.h, idx=i))
+            if c.l < l2.l and c.l < l1.l and c.l < r1.l and c.l < r2.l:
+                out.append(FractalPoint(kind="LOW", t=c.t, price=c.l, idx=i))
+        out.sort(key=lambda x: x.t)
+        return out
+
+    async def build_signal_chart(pair: str, tf: str, levels: list[PriceLevel]) -> bytes | None:
+        candles = await store.get_window(pair, tf)
+        if len(candles) < 5:
+            return None
+        closes = [c.c for c in candles]
+        alli = alligator_ema(closes)
+        fpts = calc_fractal_points(candles, teeth_series=alli["teeth"])
+        try:
+            return build_chart_png(pair, tf, candles, alli["jaw"], alli["teeth"], alli["lips"], fpts, levels=levels)
+        except Exception as e:
+            logger.info("Chart build failed: pair=%s tf=%s err=%s", pair, tf, e)
+            return None
+
+    async def fmt_close_ts_from_open(pair: str, tf: str, open_t_ms: int) -> str:
+        try:
+            open_t_ms = int(open_t_ms)
+        except Exception:
+            return fmt_ts_ms(open_t_ms)
+        candles = await store.get_window(pair, tf)
+        for c in candles:
+            if int(c.t) == open_t_ms:
+                return fmt_ts_ms(int(c.T))
+        return fmt_ts_ms(open_t_ms)
+
+    async def user_balance(subs_tf: SubscriptionStore, user_id: int, tf: str) -> tuple[float, float, float, float]:
+        pairs = await subs_tf.get_user_pairs(user_id)
+        total_u = 0.0
+        total_r = 0.0
+        for p in pairs:
+            pnl = await trade_state.get_pnl(user_id, p, tf)
+            try:
+                total_u += float(pnl.get("unrealized", 0.0))
+            except Exception:
+                pass
+            try:
+                total_r += float(pnl.get("realized", 0.0))
+            except Exception:
+                pass
+        balance = float(cfg.virtual_equity) + total_r + total_u
+        return balance, total_r, total_u, float(cfg.virtual_equity)
 
     def timeframe_ms(tf: str) -> int:
         tf = str(tf).strip()
@@ -126,47 +233,103 @@ async def main():
             tf=tf,
             sleep_window=cfg.sleep_window,
             sleep_k=cfg.sleep_k,
-            rr=1.5,
+            rr=float(cfg.default_rr),
             sz_decimals=sz_dec,
             max_decimals=6,
             tick_size_fallback=cfg.tick_size_default,
         )
-        cand, ctx = engine.evaluate(pair=pair, candles=window, fractals=fr)
-        if not cand:
+        cands, ctx = engine.evaluate(pair=pair, candles=window, fractals=fr)
+        if not cands:
             return
-        prev = await signal_store.get_last(pair, tf)
-        if prev and prev.get("side") == cand.side and int(prev.get("cluster_t", 0)) == cand.cluster_t:
-            return
-        await signal_store.set_last(cand)
-        tick = engine.tick_size_for_price(cand.cluster_price)
-        logger.info(
-            "Signal candidate: pair=%s tf=%s side=%s cluster_t=%s entry=%.4f sl=%.4f tp=%.4f tick=%.8f sleep_med=%.6f",
-            pair,
-            tf,
-            cand.side,
-            cand.cluster_t,
-            cand.entry_trigger,
-            cand.stop_loss,
-            cand.take_profit,
-            tick,
-            float(ctx.get("sleep_med_spread", 0.0)),
-        )
         users = await subs_tf.get_pair_users(pair)
-        for uid in users:
-            if not await subs_tf.is_active(uid):
+        for cand in cands:
+            prev = await signal_store.get_last(pair, tf, cand.side)
+            if prev and int(prev.get("cluster_t", 0)) == int(cand.cluster_t):
                 continue
-            ucfg = await subs_tf.get_user_cfg(uid)
-            risk_pct = float(ucfg.get("risk_pct", cfg.default_risk_pct))
-            order = await exec_engine.maybe_place_order(
-                user_id=uid,
-                pair=pair,
-                candle=window[-1],
-                cand=cand,
-                risk_pct=risk_pct,
+            await signal_store.set_last(cand)
+            tick = engine.tick_size_for_price(cand.cluster_price)
+            logger.info(
+                "Signal candidate: pair=%s tf=%s side=%s cluster_t=%s entry=%.4f sl=%.4f tp=%.4f tick=%.8f sleep_med=%.6f",
+                pair,
+                tf,
+                cand.side,
+                cand.cluster_t,
+                cand.entry_trigger,
+                cand.stop_loss,
+                cand.take_profit,
+                tick,
+                float(ctx.get("sleep_med_spread", 0.0)),
             )
-            if order:
+            setup_png_cache: dict[float, bytes | None] = {}
+
+            for uid in users:
+                if not await subs_tf.is_active(uid):
+                    continue
+                ucfg = await subs_tf.get_user_cfg(uid)
+                risk_pct = float(ucfg.get("risk_pct", cfg.default_risk_pct))
+                rr = float(ucfg.get("rr", cfg.default_rr))
+
+                if str(cand.side).upper() == "LONG":
+                    tp_u = float(cand.entry_trigger) + float(rr) * (float(cand.entry_trigger) - float(cand.stop_loss))
+                else:
+                    tp_u = float(cand.entry_trigger) - float(rr) * (float(cand.stop_loss) - float(cand.entry_trigger))
+                cand_u = type(cand)(
+                    pair=cand.pair,
+                    tf=cand.tf,
+                    side=cand.side,
+                    cluster_t=cand.cluster_t,
+                    cluster_price=cand.cluster_price,
+                    entry_trigger=cand.entry_trigger,
+                    stop_loss=cand.stop_loss,
+                    take_profit=tp_u,
+                    rr=rr,
+                )
+
+                state = await trade_state.get(uid, pair, tf)
+                if state.get("pos"):
+                    continue
+
+                action, order, canceled = await exec_engine.maybe_place_order(
+                    user_id=uid,
+                    pair=pair,
+                    candle=window[-1],
+                    cand=cand_u,
+                    risk_pct=risk_pct,
+                )
+                if action not in ("placed", "replaced") or order is None:
+                    continue
+
+                note = ""
+                if action == "replaced" and canceled is not None:
+                    note = f"♻️ Предыдущий ордер {str(canceled.side).upper()} отменён"
+
+                rr_key = float(rr)
+                if rr_key not in setup_png_cache:
+                    levels_setup_u = [
+                        PriceLevel(price=cand.cluster_price, label="Cluster", color="#7c3aed", linestyle=":", linewidth=1.0),
+                        PriceLevel(price=order.trigger, label="Trigger", color="#0ea5e9", linestyle="--", linewidth=1.2),
+                        PriceLevel(price=order.stop_loss, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
+                        PriceLevel(price=order.take_profit, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+                    ]
+                    setup_png_cache[rr_key] = await build_signal_chart(pair, tf, levels=levels_setup_u)
+
+                setup_caption = (
+                    f"🔔 Сетап {cand.side} {display_pair(pair)} ({tf})\n"
+                    f"🕒 {await fmt_close_ts_from_open(pair, tf, cand.cluster_t)}\n"
+                    f"🎯 Trigger {order.trigger:.4f} | 🛑 SL {order.stop_loss:.4f} | ✅ TP {order.take_profit:.4f}\n"
+                    f"📦 Qty {order.qty:.6f} | ⚙️ Risk {risk_pct:.2f}% | 📐 RR {rr:.2f}"
+                )
+                if note:
+                    setup_caption = f"{setup_caption}\n{note}"
+
+                if setup_png_cache.get(rr_key):
+                    await tg_send_photo(uid, setup_png_cache[rr_key] or b"", setup_caption)
+                else:
+                    await tg_send(uid, setup_caption)
+
                 logger.info(
-                    "Dry-run order placed: user=%s pair=%s tf=%s side=%s trigger=%.4f sl=%.4f tp=%.4f qty=%.6f risk=%.2f%%",
+                    "Dry-run order %s: user=%s pair=%s tf=%s side=%s trigger=%.4f sl=%.4f tp=%.4f qty=%.6f risk=%.2f%%",
+                    action,
                     uid,
                     pair,
                     tf,
@@ -181,7 +344,7 @@ async def main():
     async def market_loop(tf: str):
         tf_ms = timeframe_ms(tf)
         subs_tf = SubscriptionStore(r, tf=tf)
-        exec_engine = ExecutionDryRun(trade_state, tf=tf, virtual_equity=cfg.virtual_equity)
+        exec_engine = ExecutionDryRun(trade_state, tf=tf, virtual_equity=cfg.virtual_equity, trades_max=cfg.trades_max)
 
         max_len = max(cfg.history_bars, 200)
         while True:
@@ -243,6 +406,64 @@ async def main():
                             evt = await exec_engine.on_candle(user_id=uid, pair=pair, candle=new_candle)
                             if evt.get("changed"):
                                 logger.info("Dry-run event: user=%s pair=%s tf=%s %s", uid, pair, tf, evt)
+                                if evt.get("event") == "position_opened":
+                                    entry = float(evt.get("entry", 0.0))
+                                    sl = float(evt.get("stop_loss", 0.0))
+                                    tp = float(evt.get("take_profit", 0.0))
+                                    qty = float(evt.get("qty", 0.0))
+                                    opened_t = int(evt.get("opened_t", new_candle.t))
+                                    levels_open = [
+                                        PriceLevel(price=entry, label="Entry", color="#0ea5e9", linestyle="-", linewidth=1.2),
+                                        PriceLevel(price=sl, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
+                                        PriceLevel(price=tp, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+                                    ]
+                                    opened_png = await build_signal_chart(pair, tf, levels=levels_open)
+                                    opened_caption = (
+                                        f"🚀 Открыта {str(evt.get('side', '')).upper()} {display_pair(pair)} ({tf})\n"
+                                        f"🕒 {await fmt_close_ts_from_open(pair, tf, opened_t)}\n"
+                                        f"🎯 Entry {entry:.4f} | 🛑 SL {sl:.4f} | ✅ TP {tp:.4f}\n"
+                                        f"📦 Qty {qty:.6f}"
+                                    )
+                                    if opened_png:
+                                        await tg_send_photo(uid, opened_png, opened_caption)
+                                    else:
+                                        await tg_send(uid, opened_caption)
+                                elif evt.get("event") == "position_closed":
+                                    balance, total_r, total_u, base = await user_balance(subs_tf, uid, tf)
+                                    pnl = float(evt.get("pnl", 0.0))
+                                    pnl_emoji = "🟩" if pnl >= 0 else "🟥"
+                                    reason_u = str(evt.get("reason", "")).upper()
+                                    if reason_u == "TP":
+                                        reason_txt = "✅ TP"
+                                    elif reason_u == "SL":
+                                        reason_txt = "🛑 SL"
+                                    elif "SL_AND_TP" in reason_u:
+                                        reason_txt = "⚠️ SL/TP (в одной свече)"
+                                    else:
+                                        reason_txt = str(evt.get("reason", ""))
+                                    entry = float(evt.get("entry", 0.0))
+                                    exit_px = float(evt.get("exit", 0.0))
+                                    sl = float(evt.get("stop_loss", 0.0))
+                                    tp = float(evt.get("take_profit", 0.0))
+                                    qty = float(evt.get("qty", 0.0))
+                                    closed_t = int(evt.get("closed_t", new_candle.t))
+                                    levels_close = [
+                                        PriceLevel(price=entry, label="Entry", color="#0ea5e9", linestyle="-", linewidth=1.2),
+                                        PriceLevel(price=exit_px, label="Exit", color="#f59e0b", linestyle="--", linewidth=1.2),
+                                        PriceLevel(price=sl, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
+                                        PriceLevel(price=tp, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+                                    ]
+                                    closed_png = await build_signal_chart(pair, tf, levels=levels_close)
+                                    closed_caption = (
+                                        f"🏁 Закрыта {str(evt.get('side', '')).upper()} {display_pair(pair)} ({tf})\n"
+                                        f"🕒 {await fmt_close_ts_from_open(pair, tf, closed_t)} | {reason_txt}\n"
+                                        f"🎯 Entry {entry:.4f} → Exit {exit_px:.4f} | {pnl_emoji} PnL {pnl:+.2f}\n"
+                                        f"💼 Баланс {balance:.2f} | 💰 R {total_r:.2f} | 📈 U {total_u:.2f}"
+                                    )
+                                    if closed_png:
+                                        await tg_send_photo(uid, closed_png, closed_caption)
+                                    else:
+                                        await tg_send(uid, closed_caption)
                 except Exception as e:
                     logger.error("Market loop error: pair=%s tf=%s err=%s", pair, tf, e)
             await asyncio.sleep(cfg.poll_seconds)

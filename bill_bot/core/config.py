@@ -16,6 +16,7 @@ class Config:
     sleep_window: int
     sleep_k: float
     fractals_max: int
+    trades_max: int
     tick_size_default: float
     tick_sizes: dict[str, float]
     virtual_equity: float
@@ -24,6 +25,7 @@ class Config:
     pairs_available: list[str]
     default_virtual_equity: float
     default_risk_pct: float
+    default_rr: float
 
     @staticmethod
     def from_env() -> "Config":
@@ -43,6 +45,7 @@ class Config:
         sleep_window = int(os.getenv("SLEEP_WINDOW", "20"))
         sleep_k = float(os.getenv("SLEEP_K", "0.001"))
         fractals_max = int(os.getenv("FRACTALS_MAX", "200"))
+        trades_max = int(os.getenv("TRADES_MAX", "5000"))
         tick_size_default = float(os.getenv("TICK_SIZE", "0.01"))
         tick_sizes_raw = os.getenv("TICK_SIZES", "")
         tick_sizes: dict[str, float] = {}
@@ -60,6 +63,7 @@ class Config:
                 continue
         default_virtual_equity = float(os.getenv("VIRTUAL_EQUITY", "10000"))
         default_risk_pct = float(os.getenv("RISK_PCT", "1.0"))
+        default_rr = float(os.getenv("RR_DEFAULT", "1.0"))
         virtual_equity = default_virtual_equity
         risk_pct = default_risk_pct
         telegram_token = os.getenv("TELEGRAM_TOKEN", "")
@@ -78,6 +82,7 @@ class Config:
             sleep_window=sleep_window,
             sleep_k=sleep_k,
             fractals_max=fractals_max,
+            trades_max=trades_max,
             tick_size_default=tick_size_default,
             tick_sizes=tick_sizes,
             virtual_equity=virtual_equity,
@@ -86,4 +91,5 @@ class Config:
             pairs_available=pairs_available,
             default_virtual_equity=default_virtual_equity,
             default_risk_pct=default_risk_pct,
+            default_rr=default_rr,
         )

@@ -53,7 +53,7 @@ def detect_confirmed_fractal(window: list[Candle], teeth_series: list[float], ce
     out: list[Fractal] = []
 
     high = c.h
-    if high > left2.h and high > left1.h and high > right1.h and high > right2.h:
+    if high > left2.h and high >= left1.h and high > right1.h and high > right2.h:
         out.append(
             Fractal(
                 kind="HIGH",
@@ -65,7 +65,7 @@ def detect_confirmed_fractal(window: list[Candle], teeth_series: list[float], ce
         )
 
     low = c.l
-    if low < left2.l and low < left1.l and low < right1.l and low < right2.l:
+    if low < left2.l and low <= left1.l and low < right1.l and low < right2.l:
         out.append(
             Fractal(
                 kind="LOW",

@@ -46,6 +46,10 @@ class Position:
     entry: float
     stop_loss: float
     take_profit: float
+    tp0: float
+    tr1_done: bool
+    tr2_done: bool
+    tr_steps: int
     qty: float
     opened_t: int
     cluster_t: int
@@ -56,6 +60,10 @@ class Position:
             "entry": self.entry,
             "stop_loss": self.stop_loss,
             "take_profit": self.take_profit,
+            "tp0": self.tp0,
+            "tr1_done": self.tr1_done,
+            "tr2_done": self.tr2_done,
+            "tr_steps": self.tr_steps,
             "qty": self.qty,
             "opened_t": self.opened_t,
             "cluster_t": self.cluster_t,
@@ -63,11 +71,16 @@ class Position:
 
     @staticmethod
     def from_dict(d: dict) -> "Position":
+        tp = float(d["take_profit"])
         return Position(
             side=str(d["side"]),
             entry=float(d["entry"]),
             stop_loss=float(d["stop_loss"]),
-            take_profit=float(d["take_profit"]),
+            take_profit=tp,
+            tp0=float(d.get("tp0", tp)),
+            tr1_done=bool(d.get("tr1_done", False)),
+            tr2_done=bool(d.get("tr2_done", False)),
+            tr_steps=int(d.get("tr_steps", 0) or 0),
             qty=float(d["qty"]),
             opened_t=int(d["opened_t"]),
             cluster_t=int(d["cluster_t"]),
@@ -110,7 +123,7 @@ class RedisTradeState:
     async def set_pnl(self, user_id: int, pair: str, tf: str, payload: dict) -> None:
         await self.r.set(self.pnl_key(user_id, pair, tf), json.dumps(payload, separators=(",", ":")))
 
-    async def append_trade(self, user_id: int, pair: str, tf: str, trade: dict, max_len: int = 50) -> None:
+    async def append_trade(self, user_id: int, pair: str, tf: str, trade: dict, max_len: int = 5000) -> None:
         key = self.trades_key(user_id, pair, tf)
         await self.r.lpush(key, json.dumps(trade, separators=(",", ":")))
         await self.r.ltrim(key, 0, int(max_len) - 1)
@@ -129,10 +142,11 @@ class RedisTradeState:
 
 
 class ExecutionDryRun:
-    def __init__(self, store: RedisTradeState, tf: str, virtual_equity: float):
+    def __init__(self, store: RedisTradeState, tf: str, virtual_equity: float, trades_max: int = 5000):
         self.store = store
         self.tf = tf
         self.virtual_equity = float(virtual_equity)
+        self.trades_max = int(trades_max)
 
     def _qty_from_risk(self, entry: float, sl: float, risk_pct: float) -> float:
         risk_amount = self.virtual_equity * (float(risk_pct) / 100.0)
@@ -153,6 +167,125 @@ class ExecutionDryRun:
             return (exit_price - pos.entry) * pos.qty
         return (pos.entry - exit_price) * pos.qty
 
+    @staticmethod
+    def _apply_trailing(pos: Position, candle: Candle) -> Position:
+        side = str(pos.side).upper()
+        dist = abs(float(pos.take_profit) - float(pos.entry))
+        if dist <= 0:
+            return pos
+        max_steps_per_candle = 10
+
+        if side == "LONG":
+            h = float(candle.h)
+            cur = pos
+            if (not cur.tr1_done) and (h >= float(cur.entry) + 0.60 * dist):
+                cur = Position(
+                    side=cur.side,
+                    entry=cur.entry,
+                    stop_loss=max(float(cur.stop_loss), float(cur.entry)),
+                    take_profit=cur.take_profit,
+                    tp0=cur.tp0,
+                    tr1_done=True,
+                    tr2_done=cur.tr2_done,
+                    tr_steps=cur.tr_steps,
+                    qty=cur.qty,
+                    opened_t=cur.opened_t,
+                    cluster_t=cur.cluster_t,
+                )
+
+            steps = 0
+            while steps < max_steps_per_candle:
+                dist2 = abs(float(cur.take_profit) - float(cur.entry))
+                if dist2 <= 0:
+                    break
+                if h < float(cur.entry) + 0.95 * dist2:
+                    break
+                new_sl = float(cur.entry) + 0.85 * dist2
+                new_tp = float(cur.entry) + 1.50 * dist2
+                cur = Position(
+                    side=cur.side,
+                    entry=cur.entry,
+                    stop_loss=max(float(cur.stop_loss), new_sl),
+                    take_profit=max(float(cur.take_profit), new_tp),
+                    tp0=cur.tp0,
+                    tr1_done=True,
+                    tr2_done=True,
+                    tr_steps=int(cur.tr_steps) + 1,
+                    qty=cur.qty,
+                    opened_t=cur.opened_t,
+                    cluster_t=cur.cluster_t,
+                )
+                steps += 1
+            return cur
+
+        l = float(candle.l)
+        cur = pos
+        if (not cur.tr1_done) and (l <= float(cur.entry) - 0.60 * dist):
+            cur = Position(
+                side=cur.side,
+                entry=cur.entry,
+                stop_loss=min(float(cur.stop_loss), float(cur.entry)),
+                take_profit=cur.take_profit,
+                tp0=cur.tp0,
+                tr1_done=True,
+                tr2_done=cur.tr2_done,
+                tr_steps=cur.tr_steps,
+                qty=cur.qty,
+                opened_t=cur.opened_t,
+                cluster_t=cur.cluster_t,
+            )
+
+        steps = 0
+        while steps < max_steps_per_candle:
+            dist2 = abs(float(cur.take_profit) - float(cur.entry))
+            if dist2 <= 0:
+                break
+            if l > float(cur.entry) - 0.95 * dist2:
+                break
+            new_sl = float(cur.entry) - 0.85 * dist2
+            new_tp = float(cur.entry) - 1.50 * dist2
+            cur = Position(
+                side=cur.side,
+                entry=cur.entry,
+                stop_loss=min(float(cur.stop_loss), new_sl),
+                take_profit=min(float(cur.take_profit), new_tp),
+                tp0=cur.tp0,
+                tr1_done=True,
+                tr2_done=True,
+                tr_steps=int(cur.tr_steps) + 1,
+                qty=cur.qty,
+                opened_t=cur.opened_t,
+                cluster_t=cur.cluster_t,
+            )
+            steps += 1
+        return cur
+
+    @staticmethod
+    def _get_orders(state: dict) -> list[PendingOrder]:
+        if "ords" in state and isinstance(state["ords"], list):
+            out: list[PendingOrder] = []
+            for x in state["ords"]:
+                if isinstance(x, dict):
+                    try:
+                        out.append(PendingOrder.from_dict(x))
+                    except Exception:
+                        pass
+            return out
+        if "ord" in state and isinstance(state["ord"], dict):
+            try:
+                return [PendingOrder.from_dict(state["ord"])]
+            except Exception:
+                return []
+        return []
+
+    @staticmethod
+    def _set_orders(state: dict, orders: list[PendingOrder]) -> None:
+        state.pop("ord", None)
+        if not orders:
+            state.pop("ords", None)
+            return
+        state["ords"] = [o.to_dict() for o in orders]
+
     async def maybe_place_order(
         self,
         user_id: int,
@@ -160,15 +293,32 @@ class ExecutionDryRun:
         candle: Candle,
         cand: SignalCandidate | None,
         risk_pct: float,
-    ) -> PendingOrder | None:
+    ) -> tuple[str, PendingOrder | None, PendingOrder | None]:
         if cand is None:
-            return None
+            return "skipped", None, None
         state = await self.store.get(user_id, pair, self.tf)
-        if state.get("pos") or state.get("ord"):
-            return None
+        if state.get("pos"):
+            return "skipped", None, None
+
+        orders = self._get_orders(state)
+        existing_same: PendingOrder | None = None
+        for o in orders:
+            if str(o.side).upper() == str(cand.side).upper():
+                existing_same = o
+                break
+        if existing_same and int(existing_same.cluster_t) == int(cand.cluster_t):
+            eps = 1e-9
+            same = (
+                abs(float(existing_same.trigger) - float(cand.entry_trigger)) < eps
+                and abs(float(existing_same.stop_loss) - float(cand.stop_loss)) < eps
+                and abs(float(existing_same.take_profit) - float(cand.take_profit)) < eps
+            )
+            if same:
+                return "unchanged", existing_same, None
+
         qty = self._qty_from_risk(cand.entry_trigger, cand.stop_loss, risk_pct=risk_pct)
         if qty <= 0:
-            return None
+            return "skipped", None, None
         o = PendingOrder(
             side=cand.side,
             trigger=cand.entry_trigger,
@@ -177,11 +327,21 @@ class ExecutionDryRun:
             take_profit=cand.take_profit,
             qty=qty,
         )
-        state["ord"] = o.to_dict()
+        canceled: PendingOrder | None = None
+        if existing_same:
+            canceled = existing_same
+            orders = [x for x in orders if str(x.side).upper() != str(cand.side).upper()]
+            orders.append(o)
+            self._set_orders(state, orders)
+            action = "replaced"
+        else:
+            orders.append(o)
+            self._set_orders(state, orders)
+            action = "placed"
         state["risk_pct"] = float(risk_pct)
         state["last_t"] = int(candle.t)
         await self.store.set(user_id, pair, self.tf, state)
-        return o
+        return action, o, canceled
 
     async def on_candle(self, user_id: int, pair: str, candle: Candle) -> dict:
         state = await self.store.get(user_id, pair, self.tf)
@@ -189,7 +349,7 @@ class ExecutionDryRun:
         if candle.t <= last_t:
             return {"changed": False}
 
-        ord_raw = state.get("ord")
+        orders = self._get_orders(state)
         pos_raw = state.get("pos")
 
         changed = False
@@ -197,6 +357,10 @@ class ExecutionDryRun:
 
         if pos_raw:
             pos = Position.from_dict(pos_raw)
+            pos2 = self._apply_trailing(pos, candle)
+            if pos2 != pos:
+                pos = pos2
+                state["pos"] = pos.to_dict()
             hit_sl = candle.l <= pos.stop_loss if pos.side == "LONG" else candle.h >= pos.stop_loss
             hit_tp = candle.h >= pos.take_profit if pos.side == "LONG" else candle.l <= pos.take_profit
 
@@ -231,31 +395,69 @@ class ExecutionDryRun:
                 state["last_trade"] = trade
                 state.pop("pos", None)
                 changed = True
-                event = {"changed": True, "event": "position_closed", "reason": exit_reason, "pnl": pnl}
-                await self.store.append_trade(user_id, pair, self.tf, trade)
+                event = {
+                    "changed": True,
+                    "event": "position_closed",
+                    "pair": pair,
+                    "tf": self.tf,
+                    "side": pos.side,
+                    "entry": pos.entry,
+                    "exit": exit_price,
+                    "qty": pos.qty,
+                    "stop_loss": pos.stop_loss,
+                    "take_profit": pos.take_profit,
+                    "opened_t": pos.opened_t,
+                    "closed_t": candle.t,
+                    "reason": exit_reason,
+                    "pnl": pnl,
+                    "realized_total": realized,
+                    "cluster_t": pos.cluster_t,
+                }
+                await self.store.append_trade(user_id, pair, self.tf, trade, max_len=self.trades_max)
                 await self.store.set_pnl(user_id, pair, self.tf, {"unrealized": 0.0, "realized": realized})
             else:
                 mark = candle.c
                 upnl = self._unrealized_pnl(pos, mark)
                 await self.store.set_pnl(user_id, pair, self.tf, {"unrealized": upnl, "realized": float(state.get("realized", 0.0))})
 
-        elif ord_raw:
-            o = PendingOrder.from_dict(ord_raw)
-            triggered = candle.h >= o.trigger if o.side == "LONG" else candle.l <= o.trigger
-            if triggered:
+        elif orders:
+            triggered_order: PendingOrder | None = None
+            for o in orders:
+                side_u = str(o.side).upper()
+                triggered = candle.h >= o.trigger if side_u == "LONG" else candle.l <= o.trigger
+                if triggered:
+                    triggered_order = o
+                    break
+            if triggered_order:
                 pos = Position(
-                    side=o.side,
-                    entry=o.trigger,
-                    stop_loss=o.stop_loss,
-                    take_profit=o.take_profit,
-                    qty=o.qty,
+                    side=str(triggered_order.side).upper(),
+                    entry=triggered_order.trigger,
+                    stop_loss=triggered_order.stop_loss,
+                    take_profit=triggered_order.take_profit,
+                    tp0=triggered_order.take_profit,
+                    tr1_done=False,
+                    tr2_done=False,
+                    tr_steps=0,
+                    qty=triggered_order.qty,
                     opened_t=candle.t,
-                    cluster_t=o.cluster_t,
+                    cluster_t=triggered_order.cluster_t,
                 )
                 state["pos"] = pos.to_dict()
-                state.pop("ord", None)
+                self._set_orders(state, [])
                 changed = True
-                event = {"changed": True, "event": "position_opened"}
+                event = {
+                    "changed": True,
+                    "event": "position_opened",
+                    "pair": pair,
+                    "tf": self.tf,
+                    "side": pos.side,
+                    "entry": pos.entry,
+                    "qty": pos.qty,
+                    "stop_loss": pos.stop_loss,
+                    "take_profit": pos.take_profit,
+                    "opened_t": pos.opened_t,
+                    "cluster_t": pos.cluster_t,
+                }
 
         state["last_t"] = int(candle.t)
         if changed:

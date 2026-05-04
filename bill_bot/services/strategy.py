@@ -79,9 +79,9 @@ class StrategyEngine:
         pair: str,
         candles: list[Candle],
         fractals: list[Fractal],
-    ) -> tuple[SignalCandidate | None, dict]:
+    ) -> tuple[list[SignalCandidate], dict]:
         if len(candles) < max(self.sleep_window, 20):
-            return None, {"reason": "not_enough_candles", "candles": len(candles)}
+            return [], {"reason": "not_enough_candles", "candles": len(candles)}
 
         closes = [c.c for c in candles]
         alli = alligator_ema(closes)
@@ -97,74 +97,103 @@ class StrategyEngine:
         }
         if not sleep:
             ctx["reason"] = "not_sleep"
-            return None, ctx
+            return [], ctx
 
         highs = [f for f in fractals if f.kind == "HIGH"]
         lows = [f for f in fractals if f.kind == "LOW"]
         if not highs or not lows:
             ctx["reason"] = "no_fractals"
-            return None, ctx
+            return [], ctx
 
-        last_high = highs[-1]
-        last_low = lows[-1]
-        ctx["last_high_t"] = last_high.t
-        ctx["last_low_t"] = last_low.t
+        ctx["last_high_t"] = highs[-1].t
+        ctx["last_low_t"] = lows[-1].t
 
-        long_ok = last_high.close > last_high.teeth
-        short_ok = last_low.close < last_low.teeth
+        long_entry = self._pick_long_entry(highs)
+        short_entry = self._pick_short_entry(lows)
+        if long_entry:
+            ctx["long_cluster_t"] = long_entry.t
+        if short_entry:
+            ctx["short_cluster_t"] = short_entry.t
 
-        if long_ok:
-            sl = self._find_long_sl(lows, before_t=last_high.t)
+        out: list[SignalCandidate] = []
+
+        if long_entry is not None:
+            sl = self._find_long_sl(lows, before_t=long_entry.t)
             if sl is None:
                 ctx["reason"] = "no_long_sl_cluster"
-                return None, ctx
-            tick = self.tick_size_for_price(last_high.price)
-            entry = last_high.price + tick
+                return out, ctx
+            tick = self.tick_size_for_price(long_entry.price)
+            entry = long_entry.price + tick
             stop = sl.price
             if stop >= entry:
                 ctx["reason"] = "invalid_long_sl"
-                return None, ctx
+                return out, ctx
             tp = entry + self.rr * (entry - stop)
-            cand = SignalCandidate(
+            out.append(
+                SignalCandidate(
                 pair=pair,
                 tf=self.tf,
                 side="LONG",
-                cluster_t=last_high.t,
-                cluster_price=last_high.price,
+                cluster_t=long_entry.t,
+                cluster_price=long_entry.price,
                 entry_trigger=entry,
                 stop_loss=stop,
                 take_profit=tp,
                 rr=self.rr,
+                )
             )
-            return cand, ctx
 
-        if short_ok:
-            sl = self._find_short_sl(highs, before_t=last_low.t)
+        if short_entry is not None:
+            sl = self._find_short_sl(highs, before_t=short_entry.t)
             if sl is None:
                 ctx["reason"] = "no_short_sl_cluster"
-                return None, ctx
-            tick = self.tick_size_for_price(last_low.price)
-            entry = last_low.price - tick
+                return out, ctx
+            tick = self.tick_size_for_price(short_entry.price)
+            entry = short_entry.price - tick
             stop = sl.price
             if stop <= entry:
                 ctx["reason"] = "invalid_short_sl"
-                return None, ctx
+                return out, ctx
             tp = entry - self.rr * (stop - entry)
-            cand = SignalCandidate(
+            out.append(
+                SignalCandidate(
                 pair=pair,
                 tf=self.tf,
                 side="SHORT",
-                cluster_t=last_low.t,
-                cluster_price=last_low.price,
+                cluster_t=short_entry.t,
+                cluster_price=short_entry.price,
                 entry_trigger=entry,
                 stop_loss=stop,
                 take_profit=tp,
                 rr=self.rr,
+                )
             )
-            return cand, ctx
 
-        ctx["reason"] = "no_entry_cluster"
-        return None, ctx
+        if not out:
+            ctx["reason"] = "no_entry_cluster"
+        return out, ctx
+
+    @staticmethod
+    def _pick_long_entry(highs: list[Fractal]) -> Fractal | None:
+        if len(highs) < 2:
+            return None
+        for i in range(len(highs) - 1, 0, -1):
+            cur = highs[i]
+            prev = highs[i - 1]
+            if cur.close > cur.teeth and cur.price < prev.price:
+                return cur
+        return None
+
+    @staticmethod
+    def _pick_short_entry(lows: list[Fractal]) -> Fractal | None:
+        if len(lows) < 2:
+            return None
+        for i in range(len(lows) - 1, 0, -1):
+            cur = lows[i]
+            prev = lows[i - 1]
+            if cur.close < cur.teeth and cur.price > prev.price:
+                return cur
+        return None
 
     @staticmethod
     def _find_long_sl(lows: list[Fractal], before_t: int) -> Fractal | None:
@@ -190,14 +219,14 @@ class RedisSignalStore:
         self.r = r
 
     @staticmethod
-    def key(pair: str, tf: str) -> str:
-        return f"signal_candidate:last:{pair}:{tf}"
+    def key(pair: str, tf: str, side: str) -> str:
+        return f"signal_candidate:last:{pair}:{tf}:{str(side).upper()}"
 
-    async def get_last(self, pair: str, tf: str) -> dict | None:
-        raw = await self.r.get(self.key(pair, tf))
+    async def get_last(self, pair: str, tf: str, side: str) -> dict | None:
+        raw = await self.r.get(self.key(pair, tf, side))
         if not raw:
             return None
         return json.loads(raw)
 
     async def set_last(self, cand: SignalCandidate) -> None:
-        await self.r.set(self.key(cand.pair, cand.tf), json.dumps(cand.to_dict(), separators=(",", ":")))
+        await self.r.set(self.key(cand.pair, cand.tf, cand.side), json.dumps(cand.to_dict(), separators=(",", ":")))
