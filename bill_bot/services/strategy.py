@@ -123,7 +123,7 @@ class StrategyEngine:
         out: list[SignalCandidate] = []
 
         if long_entry is not None:
-            sl = self._find_long_sl(lows, before_t=long_entry.t)
+            sl = self._find_long_sl(lows)
             if sl is None:
                 ctx["reason"] = "no_long_sl_cluster"
                 return out, ctx
@@ -149,7 +149,7 @@ class StrategyEngine:
             )
 
         if short_entry is not None:
-            sl = self._find_short_sl(highs, before_t=short_entry.t)
+            sl = self._find_short_sl(highs)
             if sl is None:
                 ctx["reason"] = "no_short_sl_cluster"
                 return out, ctx
@@ -193,19 +193,15 @@ class StrategyEngine:
         return None
 
     @staticmethod
-    def _find_long_sl(lows: list[Fractal], before_t: int) -> Fractal | None:
+    def _find_long_sl(lows: list[Fractal]) -> Fractal | None:
         for f in reversed(lows):
-            if f.t >= before_t:
-                continue
             if f.close < f.teeth:
                 return f
         return None
 
     @staticmethod
-    def _find_short_sl(highs: list[Fractal], before_t: int) -> Fractal | None:
+    def _find_short_sl(highs: list[Fractal]) -> Fractal | None:
         for f in reversed(highs):
-            if f.t >= before_t:
-                continue
             if f.close > f.teeth:
                 return f
         return None

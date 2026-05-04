@@ -351,16 +351,36 @@ class ExecutionDryRun:
 
         orders = self._get_orders(state)
         pos_raw = state.get("pos")
+        events: list[dict] = []
 
-        changed = False
-        event: dict = {"changed": False}
+        def _is_triggered(o: PendingOrder) -> bool:
+            side_u = str(o.side).upper()
+            return (candle.h >= o.trigger) if side_u == "LONG" else (candle.l <= o.trigger)
+
+        def _open_from_order(o: PendingOrder) -> Position:
+            return Position(
+                side=str(o.side).upper(),
+                entry=o.trigger,
+                stop_loss=o.stop_loss,
+                take_profit=o.take_profit,
+                tp0=o.take_profit,
+                tr1_done=False,
+                tr2_done=False,
+                tr_steps=0,
+                qty=o.qty,
+                opened_t=candle.t,
+                cluster_t=o.cluster_t,
+            )
 
         if pos_raw:
-            pos = Position.from_dict(pos_raw)
-            pos2 = self._apply_trailing(pos, candle)
-            if pos2 != pos:
-                pos = pos2
+            pos_before = Position.from_dict(pos_raw)
+            was_tr1 = bool(pos_before.tr1_done)
+            pos = self._apply_trailing(pos_before, candle)
+            if pos != pos_before:
                 state["pos"] = pos.to_dict()
+            if (not was_tr1) and bool(pos.tr1_done):
+                self._set_orders(state, [])
+
             hit_sl = candle.l <= pos.stop_loss if pos.side == "LONG" else candle.h >= pos.stop_loss
             hit_tp = candle.h >= pos.take_profit if pos.side == "LONG" else candle.l <= pos.take_profit
 
@@ -394,27 +414,56 @@ class ExecutionDryRun:
                 }
                 state["last_trade"] = trade
                 state.pop("pos", None)
-                changed = True
-                event = {
-                    "changed": True,
-                    "event": "position_closed",
-                    "pair": pair,
-                    "tf": self.tf,
-                    "side": pos.side,
-                    "entry": pos.entry,
-                    "exit": exit_price,
-                    "qty": pos.qty,
-                    "stop_loss": pos.stop_loss,
-                    "take_profit": pos.take_profit,
-                    "opened_t": pos.opened_t,
-                    "closed_t": candle.t,
-                    "reason": exit_reason,
-                    "pnl": pnl,
-                    "realized_total": realized,
-                    "cluster_t": pos.cluster_t,
-                }
+                events.append(
+                    {
+                        "event": "position_closed",
+                        "pair": pair,
+                        "tf": self.tf,
+                        "side": pos.side,
+                        "entry": pos.entry,
+                        "exit": exit_price,
+                        "qty": pos.qty,
+                        "stop_loss": pos.stop_loss,
+                        "take_profit": pos.take_profit,
+                        "opened_t": pos.opened_t,
+                        "closed_t": candle.t,
+                        "reason": exit_reason,
+                        "pnl": pnl,
+                        "realized_total": realized,
+                        "cluster_t": pos.cluster_t,
+                    }
+                )
                 await self.store.append_trade(user_id, pair, self.tf, trade, max_len=self.trades_max)
                 await self.store.set_pnl(user_id, pair, self.tf, {"unrealized": 0.0, "realized": realized})
+
+                orders_after = self._get_orders(state)
+                if orders_after:
+                    triggered_order: PendingOrder | None = None
+                    for o in orders_after:
+                        if _is_triggered(o):
+                            triggered_order = o
+                            break
+                    if triggered_order:
+                        pos2 = _open_from_order(triggered_order)
+                        state["pos"] = pos2.to_dict()
+                        remain = [x for x in orders_after if x is not triggered_order]
+                        self._set_orders(state, remain)
+                        events.append(
+                            {
+                                "event": "position_opened",
+                                "pair": pair,
+                                "tf": self.tf,
+                                "side": pos2.side,
+                                "entry": pos2.entry,
+                                "qty": pos2.qty,
+                                "stop_loss": pos2.stop_loss,
+                                "take_profit": pos2.take_profit,
+                                "opened_t": pos2.opened_t,
+                                "cluster_t": pos2.cluster_t,
+                            }
+                        )
+                        upnl = self._unrealized_pnl(pos2, candle.c)
+                        await self.store.set_pnl(user_id, pair, self.tf, {"unrealized": upnl, "realized": realized})
             else:
                 mark = candle.c
                 upnl = self._unrealized_pnl(pos, mark)
@@ -423,43 +472,31 @@ class ExecutionDryRun:
         elif orders:
             triggered_order: PendingOrder | None = None
             for o in orders:
-                side_u = str(o.side).upper()
-                triggered = candle.h >= o.trigger if side_u == "LONG" else candle.l <= o.trigger
-                if triggered:
+                if _is_triggered(o):
                     triggered_order = o
                     break
             if triggered_order:
-                pos = Position(
-                    side=str(triggered_order.side).upper(),
-                    entry=triggered_order.trigger,
-                    stop_loss=triggered_order.stop_loss,
-                    take_profit=triggered_order.take_profit,
-                    tp0=triggered_order.take_profit,
-                    tr1_done=False,
-                    tr2_done=False,
-                    tr_steps=0,
-                    qty=triggered_order.qty,
-                    opened_t=candle.t,
-                    cluster_t=triggered_order.cluster_t,
-                )
+                pos = _open_from_order(triggered_order)
                 state["pos"] = pos.to_dict()
-                self._set_orders(state, [])
-                changed = True
-                event = {
-                    "changed": True,
-                    "event": "position_opened",
-                    "pair": pair,
-                    "tf": self.tf,
-                    "side": pos.side,
-                    "entry": pos.entry,
-                    "qty": pos.qty,
-                    "stop_loss": pos.stop_loss,
-                    "take_profit": pos.take_profit,
-                    "opened_t": pos.opened_t,
-                    "cluster_t": pos.cluster_t,
-                }
+                remain = [x for x in orders if x is not triggered_order]
+                self._set_orders(state, remain)
+                events.append(
+                    {
+                        "event": "position_opened",
+                        "pair": pair,
+                        "tf": self.tf,
+                        "side": pos.side,
+                        "entry": pos.entry,
+                        "qty": pos.qty,
+                        "stop_loss": pos.stop_loss,
+                        "take_profit": pos.take_profit,
+                        "opened_t": pos.opened_t,
+                        "cluster_t": pos.cluster_t,
+                    }
+                )
 
         state["last_t"] = int(candle.t)
-        if changed:
-            await self.store.set(user_id, pair, self.tf, state)
-        return event
+        await self.store.set(user_id, pair, self.tf, state)
+        if events:
+            return {"changed": True, "events": events}
+        return {"changed": False}

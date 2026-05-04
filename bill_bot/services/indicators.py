@@ -68,4 +68,4 @@ def is_alligator_tangled(jaw: list[float], teeth: list[float], lips: list[float]
             prev = cur
         return False
 
-    return crossed(jaw, teeth) and crossed(teeth, lips)
+    return crossed(jaw, teeth) and crossed(teeth, lips) and crossed(jaw, lips)
