@@ -75,6 +75,12 @@ class ExecutionLiveRun:
         old_orders = self._get_orders(state)
         canceled_order = old_orders[0] if old_orders else None
         
+        try:
+            open_orders = await self.hl_info.open_orders(self.hl_client.wallet)
+            await self.hl_client.cancel_all_orders(pair, open_orders)
+        except Exception as e:
+            logger.error(f"LiveRun: Failed to cancel open orders for {pair}: {e}")
+        
         balance = await self._get_real_balance()
         if balance <= 0:
             logger.warning("LiveRun: Real balance is 0 or failed to load")
