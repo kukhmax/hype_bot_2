@@ -507,3 +507,6 @@ MVP считается готовым, когда бот:
   - Написана обертка `HyperliquidExchangeClient` поверх официальной библиотеки `hyperliquid-python`.
   - Добавлены асинхронные методы: `place_order` (лимитные, рыночные, TP/SL), `cancel_order`, `update_leverage`, `market_close`.
   - В `HyperliquidInfoClient` добавлен метод `user_state` для получения реального баланса и позиций аккаунта (clearinghouseState).
+- Шаг 46: WebSocket клиент для отслеживания состояния.
+  - Создан `HyperliquidWebsocketClient` (через `aiohttp` ws), подписывающийся на `userEvents` (ордера, исполнения) и `webData2` (состояние аккаунта).
+  - Клиент интегрирован в `main.py` в виде фоновой задачи `asyncio.create_task`.

@@ -506,6 +506,19 @@ async def main():
 
     timeframes = list(dict.fromkeys([*cfg.timeframes_available, cfg.timeframe]))
     tasks = [asyncio.create_task(market_loop(tf)) for tf in timeframes]
+    
+    if cfg.hyperliquid_wallet_address:
+        from bill_bot.services.hyperliquid_ws import HyperliquidWebsocketClient
+        ws_client = HyperliquidWebsocketClient(wallet_address=cfg.hyperliquid_wallet_address)
+        
+        async def on_ws_message(msg):
+            # В будущем здесь будем обновлять live-состояние позиций и балансов
+            # logger.info(f"WS Event: {msg.get('channel')} {msg.get('data')}")
+            pass
+            
+        ws_client.add_callback(on_ws_message)
+        tasks.append(asyncio.create_task(ws_client.start()))
+
     if cfg.telegram_token:
         tasks.append(asyncio.create_task(run_telegram(cfg, subs, trade_state, store, fractals_store)))
     await asyncio.gather(*tasks)
