@@ -109,10 +109,20 @@ class SubscriptionStore:
     async def set_user_rr(self, user_id: int, rr: float) -> None:
         await self.r.hset(self.user_cfg_key(user_id), mapping={"rr": float(rr)})
 
+    async def set_user_mode(self, user_id: int, mode: str) -> None:
+        await self.r.hset(self.user_cfg_key(user_id), mapping={"trade_mode": str(mode).upper()})
+
+    async def set_user_margin(self, user_id: int, margin_pct: float) -> None:
+        await self.r.hset(self.user_cfg_key(user_id), mapping={"margin_pct": float(margin_pct)})
+
     async def get_user_cfg(self, user_id: int) -> dict:
         raw = await self.r.hgetall(self.user_cfg_key(user_id))
         cfg: dict = {}
         for k, v in raw.items():
+            if isinstance(k, bytes):
+                k = k.decode('utf-8')
+            if isinstance(v, bytes):
+                v = v.decode('utf-8')
             try:
                 cfg[k] = float(v)
             except Exception:

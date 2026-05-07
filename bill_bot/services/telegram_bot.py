@@ -63,7 +63,7 @@ def _reply_main_menu(active: bool) -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="📌 Пары"), KeyboardButton(text="⏱ TF")],
             [KeyboardButton(text="⚙️ Риск"), KeyboardButton(text="📐 RR")],
-            [KeyboardButton(text="📊 Статус")],
+            [KeyboardButton(text="📊 Статус"), KeyboardButton(text="🕹 Режим")],
             [KeyboardButton(text=start_stop)],
             [KeyboardButton(text="📈 Позиции"), KeyboardButton(text="💰 P&L")],
             [KeyboardButton(text="📉 График"), KeyboardButton(text="📜 Сделки")],
@@ -149,13 +149,25 @@ def _pairs_menu(cfg: Config, selected: set[str]) -> InlineKeyboardBuilder:
     return kb
 
 
-def _risk_menu(current: float | None) -> InlineKeyboardBuilder:
+def _risk_menu(current_risk: float | None, current_margin: float | None) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     for v in (0.5, 1.0, 2.0, 3.0, 5.0):
-        mark = "✅" if current is not None and abs(current - v) < 1e-9 else "⬜"
-        kb.button(text=f"{mark} {v}%", callback_data=f"risk:{v}")
+        mark = "✅" if current_risk is not None and abs(current_risk - v) < 1e-9 else "⬜"
+        kb.button(text=f"{mark} {v}% риск", callback_data=f"risk:{v}")
+    for v in (10, 25, 50, 100):
+        mark = "✅" if current_margin is not None and abs(current_margin - v) < 1e-9 else "⬜"
+        kb.button(text=f"{mark} {v}% маржа", callback_data=f"margin:{v}")
     kb.button(text="⬅️ Назад", callback_data="menu:back")
-    kb.adjust(3)
+    kb.adjust(3, 2, 4, 1)
+    return kb
+
+def _mode_menu(current: str | None) -> InlineKeyboardBuilder:
+    kb = InlineKeyboardBuilder()
+    for v in ("DRY", "LIVE"):
+        mark = "✅" if current == v else "⬜"
+        kb.button(text=f"{mark} {v}", callback_data=f"mode:{v}")
+    kb.button(text="⬅️ Назад", callback_data="menu:back")
+    kb.adjust(2, 1)
     return kb
 
 
@@ -356,6 +368,8 @@ async def run_telegram(
         pairs_text = ", ".join(_display_pair(p) for p in pairs) if pairs else "—"
         risk = float(st.get("cfg", {}).get("risk_pct", cfg.default_risk_pct))
         rr = float(st.get("cfg", {}).get("rr", cfg.default_rr))
+        mode = str(st.get("cfg", {}).get("trade_mode", "DRY"))
+        margin = float(st.get("cfg", {}).get("margin_pct", 100.0))
 
         total_u = 0.0
         total_r = 0.0
@@ -377,7 +391,8 @@ async def run_telegram(
             f"⏱ TF: {tf}\n"
             f"▶️ Отслеживание: {active_txt}\n"
             f"📌 Пары: {pairs_text}\n"
-            f"⚙️ Риск: {risk:.2f}%\n\n"
+            f"🕹 Режим: {mode}\n"
+            f"⚙️ Риск: {risk:.2f}% | 💰 Маржа: {margin:.0f}%\n"
             f"📐 RR: {rr:.2f}\n\n"
             f"💼 Баланс: {balance:.2f} USDC\n"
             f"💰 Realized: {total_r:.2f} USDC\n"
@@ -458,8 +473,24 @@ async def run_telegram(
         logger.info("tg:btn user=%s text=%s", uid, message.text)
         _, user_subs = await user_ctx(uid)
         st = await user_subs.get_user_cfg(uid)
-        cur = st.get("risk_pct")
-        await message.answer("Выберите риск на сделку (% от виртуального депозита):", reply_markup=_risk_menu(cur).as_markup())
+        cur_risk = st.get("risk_pct")
+        cur_margin = st.get("margin_pct")
+        await message.answer("Выберите риск на сделку и часть депозита для сделки:", reply_markup=_risk_menu(cur_risk, cur_margin).as_markup())
+        return
+
+    @dp.message(F.text == "🕹 Режим")
+    async def menu_mode_msg(message: Message, state: FSMContext):
+        await state.clear()
+        uid = message.from_user.id
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        logger.info("tg:btn user=%s text=%s", uid, message.text)
+        _, user_subs = await user_ctx(uid)
+        st = await user_subs.get_user_cfg(uid)
+        cur = st.get("trade_mode", "DRY")
+        await message.answer("Выберите режим торговли:", reply_markup=_mode_menu(cur).as_markup())
         return
 
     @dp.message(F.text == "📐 RR")
@@ -948,8 +979,18 @@ async def run_telegram(
         logger.info("tg:cb user=%s data=%s", uid, cb.data)
         _, user_subs = await user_ctx(uid)
         st = await user_subs.get_user_cfg(uid)
-        cur = st.get("risk_pct")
-        await cb.message.edit_text("Выберите риск на сделку (% от виртуального депозита):", reply_markup=_risk_menu(cur).as_markup())
+        cur_risk = st.get("risk_pct")
+        cur_margin = st.get("margin_pct")
+        await cb.message.edit_text("Выберите риск на сделку и часть депозита для сделки:", reply_markup=_risk_menu(cur_risk, cur_margin).as_markup())
+        await cb.answer()
+
+    @dp.callback_query(F.data == "menu:mode")
+    async def menu_mode(cb: CallbackQuery):
+        uid = cb.from_user.id
+        _, user_subs = await user_ctx(uid)
+        st = await user_subs.get_user_cfg(uid)
+        cur = st.get("trade_mode", "DRY")
+        await cb.message.edit_text("Выберите режим торговли:", reply_markup=_mode_menu(cur).as_markup())
         await cb.answer()
 
     @dp.callback_query(F.data == "menu:rr")
@@ -976,7 +1017,37 @@ async def run_telegram(
         await user_subs.set_user_risk(uid, v)
         await cb.answer(f"Risk установлен: {v}%")
         st = await user_subs.get_user_cfg(uid)
-        await cb.message.edit_reply_markup(reply_markup=_risk_menu(st.get("risk_pct")).as_markup())
+        await cb.message.edit_reply_markup(reply_markup=_risk_menu(st.get("risk_pct"), st.get("margin_pct")).as_markup())
+
+    @dp.callback_query(F.data.startswith("margin:"))
+    async def set_margin(cb: CallbackQuery):
+        uid = cb.from_user.id
+        raw = cb.data.split(":", 1)[1]
+        try:
+            v = float(raw)
+        except Exception:
+            await cb.answer("Некорректное значение")
+            return
+        logger.info("tg:margin user=%s margin_pct=%s", uid, v)
+        _, user_subs = await user_ctx(uid)
+        await user_subs.set_user_margin(uid, v)
+        await cb.answer(f"Маржа установлена: {v}%")
+        st = await user_subs.get_user_cfg(uid)
+        await cb.message.edit_reply_markup(reply_markup=_risk_menu(st.get("risk_pct"), st.get("margin_pct")).as_markup())
+
+    @dp.callback_query(F.data.startswith("mode:"))
+    async def set_mode(cb: CallbackQuery):
+        uid = cb.from_user.id
+        mode = cb.data.split(":", 1)[1].upper()
+        if mode not in ("DRY", "LIVE"):
+            await cb.answer("Неверный режим")
+            return
+        logger.info("tg:mode user=%s mode=%s", uid, mode)
+        _, user_subs = await user_ctx(uid)
+        await user_subs.set_user_mode(uid, mode)
+        await cb.answer(f"Режим установлен: {mode}")
+        st = await user_subs.get_user_cfg(uid)
+        await cb.message.edit_reply_markup(reply_markup=_mode_menu(st.get("trade_mode", "DRY")).as_markup())
 
     @dp.callback_query(F.data.startswith("rr:"))
     async def set_rr(cb: CallbackQuery):

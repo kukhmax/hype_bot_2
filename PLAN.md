@@ -499,3 +499,7 @@ MVP считается готовым, когда бот:
   - Добавлена библиотека `hyperliquid-python` и `eth-account` в `requirements.txt`.
   - В `config.py` и `.env.example` добавлены `HYPERLIQUID_WALLET_ADDRESS` и `HYPERLIQUID_PRIVATE_KEY`.
   - Работа ведется в ветке `live_bill_bot`.
+- Шаг 44: Telegram UI для выбора режима и маржи.
+  - Добавлена кнопка "🕹 Режим" в главное меню для переключения между DRY и LIVE режимами.
+  - Обновлено меню "⚙️ Риск": теперь в нем можно выбирать не только риск на сделку (Risk %), но и используемую часть депозита (Margin %).
+  - Состояние `trade_mode` и `margin_pct` сохраняется в Redis (профиль пользователя).
