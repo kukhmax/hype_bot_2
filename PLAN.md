@@ -503,3 +503,7 @@ MVP считается готовым, когда бот:
   - Добавлена кнопка "🕹 Режим" в главное меню для переключения между DRY и LIVE режимами.
   - Обновлено меню "⚙️ Риск": теперь в нем можно выбирать не только риск на сделку (Risk %), но и используемую часть депозита (Margin %).
   - Состояние `trade_mode` и `margin_pct` сохраняется в Redis (профиль пользователя).
+- Шаг 45: REST API клиент для реальной торговли (HyperliquidExchangeClient).
+  - Написана обертка `HyperliquidExchangeClient` поверх официальной библиотеки `hyperliquid-python`.
+  - Добавлены асинхронные методы: `place_order` (лимитные, рыночные, TP/SL), `cancel_order`, `update_leverage`, `market_close`.
+  - В `HyperliquidInfoClient` добавлен метод `user_state` для получения реального баланса и позиций аккаунта (clearinghouseState).
