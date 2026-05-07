@@ -26,6 +26,8 @@ class Config:
     default_virtual_equity: float
     default_risk_pct: float
     default_rr: float
+    hyperliquid_wallet_address: str
+    hyperliquid_private_key: str
 
     @staticmethod
     def from_env() -> "Config":
@@ -69,6 +71,10 @@ class Config:
         telegram_token = os.getenv("TELEGRAM_TOKEN", "")
         pairs_available_raw = os.getenv("PAIRS_AVAILABLE", pairs_raw)
         pairs_available = [p.strip().upper() for p in pairs_available_raw.split(",") if p.strip()]
+        
+        hl_wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "")
+        hl_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
+
         return Config(
             redis_host=host,
             redis_port=port,
@@ -92,4 +98,6 @@ class Config:
             default_virtual_equity=default_virtual_equity,
             default_risk_pct=default_risk_pct,
             default_rr=default_rr,
+            hyperliquid_wallet_address=hl_wallet,
+            hyperliquid_private_key=hl_key,
         )
