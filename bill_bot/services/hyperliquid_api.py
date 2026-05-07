@@ -79,6 +79,20 @@ class HyperliquidInfoClient:
                     raise ValueError("Unexpected user_state response")
                 return data
 
+    async def open_orders(self, user_address: str) -> list[dict]:
+        url = f"{self.base_url}/info"
+        payload = {
+            "type": "openOrders",
+            "user": user_address
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+                if not isinstance(data, list):
+                    return []
+                return data
+
 try:
     import eth_account
     from hyperliquid.exchange import Exchange
@@ -112,6 +126,14 @@ class HyperliquidExchangeClient:
 
     async def cancel_by_cloid(self, coin: str, cloid: str) -> dict:
         return await self._run(self.exchange.cancel, coin, None, cloid)
+
+    async def cancel_all_orders(self, coin: str, open_orders: list[dict]) -> None:
+        if not open_orders: return
+        coin = coin.upper()
+        # В Hyperliquid можно отменить несколько ордеров за раз, передав список (coin, oid)
+        cancels = [(coin, int(o["oid"])) for o in open_orders if o.get("coin") == coin]
+        if cancels:
+            await self._run(self.exchange.cancel, cancels)
 
     async def update_leverage(self, coin: str, leverage: int, cross_margin: bool = True) -> dict:
         return await self._run(self.exchange.update_leverage, leverage, coin, cross_margin)

@@ -230,7 +230,7 @@ async def main():
             med_spread,
         )
 
-    async def update_signal_candidate(pair: str, tf: str, subs_tf: SubscriptionStore, exec_engine: ExecutionDryRun):
+    async def update_signal_candidate(pair: str, tf: str, subs_tf: SubscriptionStore, exec_engine_dry: ExecutionDryRun, exec_engine_live):
         window = await store.get_window(pair, tf)
         fr = await fractals_store.get_all(pair, tf)
         sz_dec = await hl.get_sz_decimals(pair)
@@ -301,33 +301,31 @@ async def main():
                 risk_pct = float(ucfg.get("risk_pct", cfg.default_risk_pct))
                 rr = float(ucfg.get("rr", cfg.default_rr))
 
+                margin_pct = float(ucfg.get("margin_pct", 100.0))
+                trade_mode = str(ucfg.get("trade_mode", "DRY")).upper()
+
                 if str(cand.side).upper() == "LONG":
                     tp_u = float(cand.entry_trigger) + float(rr) * (float(cand.entry_trigger) - float(cand.stop_loss))
                 else:
                     tp_u = float(cand.entry_trigger) - float(rr) * (float(cand.stop_loss) - float(cand.entry_trigger))
                 cand_u = type(cand)(
-                    pair=cand.pair,
-                    tf=cand.tf,
-                    side=cand.side,
-                    cluster_t=cand.cluster_t,
-                    cluster_price=cand.cluster_price,
-                    entry_trigger=cand.entry_trigger,
-                    stop_loss=cand.stop_loss,
-                    take_profit=tp_u,
-                    rr=rr,
+                    pair=cand.pair, tf=cand.tf, side=cand.side, cluster_t=cand.cluster_t,
+                    cluster_price=cand.cluster_price, entry_trigger=cand.entry_trigger,
+                    stop_loss=cand.stop_loss, take_profit=tp_u, rr=rr,
                 )
 
                 state = await trade_state.get(uid, pair, tf)
                 if state.get("pos"):
                     continue
 
-                action, order, canceled = await exec_engine.maybe_place_order(
-                    user_id=uid,
-                    pair=pair,
-                    candle=window[-1],
-                    cand=cand_u,
-                    risk_pct=risk_pct,
-                )
+                if trade_mode == "LIVE" and exec_engine_live:
+                    action, order, canceled = await exec_engine_live.maybe_place_order(
+                        user_id=uid, pair=pair, candle=window[-1], cand=cand_u, risk_pct=risk_pct, margin_pct=margin_pct
+                    )
+                else:
+                    action, order, canceled = await exec_engine_dry.maybe_place_order(
+                        user_id=uid, pair=pair, candle=window[-1], cand=cand_u, risk_pct=risk_pct
+                    )
                 if action not in ("placed", "replaced") or order is None:
                     continue
 
@@ -374,9 +372,16 @@ async def main():
                 )
 
     async def market_loop(tf: str):
-        tf_ms = timeframe_ms(tf)
+        exec_engine_dry = ExecutionDryRun(trade_state, tf, virtual_equity=cfg.virtual_equity)
+        exec_engine_live = None
+        if cfg.hyperliquid_wallet_address and cfg.hyperliquid_private_key:
+            from bill_bot.services.hyperliquid_api import HyperliquidExchangeClient
+            from bill_bot.services.execution_live import ExecutionLiveRun
+            hl_exchange = HyperliquidExchangeClient(cfg.hyperliquid_wallet_address, cfg.hyperliquid_private_key)
+            exec_engine_live = ExecutionLiveRun(store=trade_state, tf=tf, hl_client=hl_exchange, hl_info=hl)
+
         subs_tf = SubscriptionStore(r, tf=tf)
-        exec_engine = ExecutionDryRun(trade_state, tf=tf, virtual_equity=cfg.virtual_equity, trades_max=cfg.trades_max)
+        tf_ms = timeframe_ms(tf)
 
         max_len = max(cfg.history_bars, 200)
         while True:
@@ -414,7 +419,7 @@ async def main():
                         if window:
                             await update_indicators(pair, tf)
                             await update_fractals(pair, tf)
-                            await update_signal_candidate(pair, tf, subs_tf, exec_engine)
+                            await update_signal_candidate(pair, tf, subs_tf, exec_engine_dry, exec_engine_live)
                         continue
 
                     start_small = now - tf_ms * 10
@@ -430,12 +435,18 @@ async def main():
                         logger.info("New closed candle: pair=%s tf=%s t=%s o=%.4f c=%.4f", pair, tf, new_candle.t, new_candle.o, new_candle.c)
                         await update_indicators(pair, tf)
                         await update_fractals(pair, tf)
-                        await update_signal_candidate(pair, tf, subs_tf, exec_engine)
+                        await update_signal_candidate(pair, tf, subs_tf, exec_engine_dry, exec_engine_live)
                         users = await subs_tf.get_pair_users(pair)
                         for uid in users:
                             if not await subs_tf.is_active(uid):
                                 continue
-                            evt = await exec_engine.on_candle(user_id=uid, pair=pair, candle=new_candle)
+                            ucfg = await subs_tf.get_user_cfg(uid)
+                            trade_mode = str(ucfg.get("trade_mode", "DRY")).upper()
+                            
+                            if trade_mode == "LIVE" and exec_engine_live:
+                                evt = await exec_engine_live.on_candle(user_id=uid, pair=pair, candle=new_candle)
+                            else:
+                                evt = await exec_engine_dry.on_candle(user_id=uid, pair=pair, candle=new_candle)
                             if evt.get("changed"):
                                 evts = evt.get("events")
                                 if not isinstance(evts, list):
