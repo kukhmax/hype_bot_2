@@ -84,14 +84,19 @@ PAIRS_AVAILABLE=BTC,ETH,SOL
 
 # --- Для реальной торговли ---
 HYPERLIQUID_WALLET_ADDRESS=0x...
-HYPERLIQUID_PRIVATE_KEY=...
+# ВНИМАНИЕ: Не сохраняйте HYPERLIQUID_PRIVATE_KEY в этот файл!
+# Он будет безопасно запрошен при запуске через start_bot.py.
 ```
 
-### 2) Запуск
+### 2) Запуск (Docker)
+
+Для безопасного запуска и передачи приватного ключа без сохранения его на диске используйте скрипт `start_bot.py`:
 
 ```bash
-docker compose up -d --build
+python3 start_bot.py
 ```
+
+Скрипт запросит ваш `HYPERLIQUID_PRIVATE_KEY` (ввод скрыт), передаст его в контейнер и запустит `docker-compose up -d --build`.
 
 ### 3) Логи
 
