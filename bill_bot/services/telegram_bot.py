@@ -14,6 +14,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.exceptions import TelegramBadRequest
 
 from bill_bot.core.config import Config
 from bill_bot.services.candle_store import Candle, RedisCandleStore
@@ -748,7 +749,11 @@ async def run_telegram(
         uid = cb.from_user.id
         text, kb = await _build_positions_view(uid)
         await cb.answer()
-        await cb.message.edit_text(text, reply_markup=kb.as_markup())
+        try:
+            await cb.message.edit_text(text, reply_markup=kb.as_markup())
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                raise
 
     @dp.callback_query(F.data.startswith("ord_cancel:"))
     async def cancel_order(cb: CallbackQuery):
@@ -1056,7 +1061,11 @@ async def run_telegram(
         await user_subs.set_user_risk(uid, v)
         await cb.answer(f"Risk установлен: {v}%")
         st = await user_subs.get_user_cfg(uid)
-        await cb.message.edit_reply_markup(reply_markup=_risk_menu(st.get("risk_pct"), st.get("margin_pct")).as_markup())
+        try:
+            await cb.message.edit_reply_markup(reply_markup=_risk_menu(st.get("risk_pct"), st.get("margin_pct")).as_markup())
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                raise
 
     @dp.callback_query(F.data.startswith("margin:"))
     async def set_margin(cb: CallbackQuery):
@@ -1072,7 +1081,11 @@ async def run_telegram(
         await user_subs.set_user_margin(uid, v)
         await cb.answer(f"Маржа установлена: {v}%")
         st = await user_subs.get_user_cfg(uid)
-        await cb.message.edit_reply_markup(reply_markup=_risk_menu(st.get("risk_pct"), st.get("margin_pct")).as_markup())
+        try:
+            await cb.message.edit_reply_markup(reply_markup=_risk_menu(st.get("risk_pct"), st.get("margin_pct")).as_markup())
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                raise
 
     @dp.callback_query(F.data.startswith("mode:"))
     async def set_mode(cb: CallbackQuery):
@@ -1086,7 +1099,11 @@ async def run_telegram(
         await user_subs.set_user_mode(uid, mode)
         await cb.answer(f"Режим установлен: {mode}")
         st = await user_subs.get_user_cfg(uid)
-        await cb.message.edit_reply_markup(reply_markup=_mode_menu(st.get("trade_mode", "DRY")).as_markup())
+        try:
+            await cb.message.edit_reply_markup(reply_markup=_mode_menu(st.get("trade_mode", "DRY")).as_markup())
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                raise
 
     @dp.callback_query(F.data.startswith("rr:"))
     async def set_rr(cb: CallbackQuery):
