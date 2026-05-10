@@ -233,6 +233,22 @@ async def run_telegram(
     hl = HyperliquidInfoClient()
     last_msg_key = lambda uid: f"tg:last_bot_msg:{int(uid)}"
 
+    async def _get_base_equity(uid: int) -> float:
+        """Return real Hyperliquid balance in LIVE mode, or virtual_equity in DRY."""
+        _, user_subs = await user_ctx(uid)
+        ucfg = await user_subs.get_user_cfg(uid)
+        mode = str(ucfg.get("trade_mode", "DRY")).upper()
+        if mode == "LIVE" and cfg.hyperliquid_wallet_address:
+            try:
+                st = await hl.user_state(cfg.hyperliquid_wallet_address)
+                margin_summary = st.get("marginSummary", {})
+                real = float(margin_summary.get("accountValue", 0.0))
+                if real > 0:
+                    return real
+            except Exception as e:
+                logger.warning("Failed to get real balance for user %s: %s", uid, e)
+        return float(cfg.virtual_equity)
+
     def _extract_orders(st: dict) -> list[PendingOrder]:
         if isinstance(st.get("ords"), list):
             out: list[PendingOrder] = []
@@ -304,7 +320,8 @@ async def run_telegram(
                 total_r += float(pnl.get("realized", 0.0))
             except Exception:
                 pass
-        balance = float(cfg.virtual_equity) + float(total_r) + float(total_u)
+        base_eq = await _get_base_equity(uid)
+        balance = base_eq + float(total_r) + float(total_u)
 
         lines: list[str] = [
             f"📈 Позиции / ордера (TF {tf})",
@@ -383,7 +400,8 @@ async def run_telegram(
                 total_r += float(pnl.get("realized", 0.0))
             except Exception:
                 pass
-        balance = float(cfg.virtual_equity) + float(total_r) + float(total_u)
+        base_eq = await _get_base_equity(uid)
+        balance = base_eq + float(total_r) + float(total_u)
 
         active_txt = "✅ ВКЛ" if active else "⏸ ВЫКЛ"
         text = (
@@ -396,7 +414,8 @@ async def run_telegram(
             f"📐 RR: {rr:.2f}\n\n"
             f"💼 Баланс: {balance:.2f} USDC\n"
             f"💰 Realized: {total_r:.2f} USDC\n"
-            f"📈 Unrealized: {total_u:.2f} USDC"
+            f"📈 Unrealized: {total_u:.2f} USDC\n"
+            f"🏦 База: {base_eq:.2f} USDC"
         )
         sent = await message.answer(text, reply_markup=_reply_main_menu(active=active))
         await _remember_last(uid, sent.message_id)
@@ -578,16 +597,17 @@ async def run_telegram(
                 total_r += float(pnl.get("realized", 0.0))
             except Exception:
                 pass
-        balance = float(cfg.virtual_equity) + float(total_r) + float(total_u)
+        base_eq = await _get_base_equity(uid)
+        balance = base_eq + float(total_r) + float(total_u)
         u_emoji = "🟩" if total_u >= 0 else "🟥"
         r_emoji = "🟩" if total_r >= 0 else "🟥"
-        b_emoji = "💰" if balance >= float(cfg.virtual_equity) else "💸"
+        b_emoji = "💰" if balance >= base_eq else "💸"
         text = (
             f"💰 P&L (TF {tf})\n\n"
             f"{b_emoji} Баланс: {balance:.2f} USDC\n"
             f"{r_emoji} Realized: {total_r:+.2f} USDC\n"
             f"{u_emoji} Unrealized: {total_u:+.2f} USDC\n"
-            f"🏦 База: {float(cfg.virtual_equity):.2f} USDC"
+            f"🏦 База: {base_eq:.2f} USDC"
         )
         sent = await message.answer(text, reply_markup=_msg_controls_menu().as_markup())
         await _remember_last(uid, sent.message_id)
@@ -621,7 +641,8 @@ async def run_telegram(
                 total_r += float(pnl.get("realized", 0.0))
             except Exception:
                 pass
-        balance = float(cfg.virtual_equity) + float(total_r) + float(total_u)
+        base_eq = await _get_base_equity(uid)
+        balance = base_eq + float(total_r) + float(total_u)
 
         lines: list[str] = [
             f"📜 Сделки (TF {tf})",
@@ -1127,13 +1148,14 @@ async def run_telegram(
                 total_r += float(pnl.get("realized", 0.0))
             except Exception:
                 pass
-        balance = float(cfg.virtual_equity) + float(total_r) + float(total_u)
+        base_eq = await _get_base_equity(uid)
+        balance = base_eq + float(total_r) + float(total_u)
         u_emoji = "🟩" if total_u >= 0 else "🟥"
         r_emoji = "🟩" if total_r >= 0 else "🟥"
-        b_emoji = "💰" if balance >= float(cfg.virtual_equity) else "💸"
+        b_emoji = "💰" if balance >= base_eq else "💸"
         await cb.answer()
         await cb.message.edit_text(
-            f"💰 P&L (TF {tf})\n\n{b_emoji} Баланс: {balance:.2f} USDC\n{r_emoji} Realized: {total_r:+.2f} USDC\n{u_emoji} Unrealized: {total_u:+.2f} USDC\n🏦 База: {float(cfg.virtual_equity):.2f} USDC",
+            f"💰 P&L (TF {tf})\n\n{b_emoji} Баланс: {balance:.2f} USDC\n{r_emoji} Realized: {total_r:+.2f} USDC\n{u_emoji} Unrealized: {total_u:+.2f} USDC\n🏦 База: {base_eq:.2f} USDC",
             reply_markup=_msg_controls_menu().as_markup(),
         )
         await _remember_last(uid, cb.message.message_id)

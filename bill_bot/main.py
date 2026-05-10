@@ -139,8 +139,21 @@ async def main():
                 total_r += float(pnl.get("realized", 0.0))
             except Exception:
                 pass
-        balance = float(cfg.virtual_equity) + total_r + total_u
-        return balance, total_r, total_u, float(cfg.virtual_equity)
+        # Determine base equity: real balance in LIVE mode, virtual in DRY
+        base_eq = float(cfg.virtual_equity)
+        ucfg = await subs_tf.get_user_cfg(user_id)
+        mode = str(ucfg.get("trade_mode", "DRY")).upper()
+        if mode == "LIVE" and cfg.hyperliquid_wallet_address:
+            try:
+                st = await hl.user_state(cfg.hyperliquid_wallet_address)
+                margin_summary = st.get("marginSummary", {})
+                real = float(margin_summary.get("accountValue", 0.0))
+                if real > 0:
+                    base_eq = real
+            except Exception:
+                pass
+        balance = base_eq + total_r + total_u
+        return balance, total_r, total_u, base_eq
 
     def timeframe_ms(tf: str) -> int:
         tf = str(tf).strip()
