@@ -139,7 +139,8 @@ class HyperliquidExchangeClient:
         return await asyncio.to_thread(func, *args, **kwargs)
 
     async def place_order(self, coin: str, is_buy: bool, sz: float, limit_px: float, order_type: dict, reduce_only: bool = False) -> dict:
-        return await self._run("order", coin, is_buy, sz, limit_px, order_type, reduce_only=reduce_only)
+        # Принудительно приводим к нужным типам, чтобы избежать ошибок форматирования в SDK
+        return await self._run("order", str(coin), bool(is_buy), float(sz), float(limit_px), order_type, reduce_only=bool(reduce_only))
 
     async def cancel_order(self, coin: str, oid: int) -> dict:
         return await self._run("cancel", coin, oid)

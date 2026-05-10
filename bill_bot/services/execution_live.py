@@ -109,7 +109,7 @@ class ExecutionLiveRun:
             return "skipped", None, None
 
         is_buy = cand.side == "LONG"
-        order_type = {"trigger": {"isMarket": True, "triggerPx": str(cand.entry_trigger)}}
+        order_type = {"trigger": {"isMarket": True, "triggerPx": float(cand.entry_trigger)}}
         
         try:
             logger.info(f"LiveRun: Placing Stop Entry on {pair}: buy={is_buy} sz={sz} px={cand.entry_trigger}")
