@@ -238,15 +238,23 @@ async def run_telegram(
         _, user_subs = await user_ctx(uid)
         ucfg = await user_subs.get_user_cfg(uid)
         mode = str(ucfg.get("trade_mode", "DRY")).upper()
+        logger.info("_get_base_equity: uid=%s mode=%s wallet=%s", uid, mode, cfg.hyperliquid_wallet_address[:10] if cfg.hyperliquid_wallet_address else "EMPTY")
         if mode == "LIVE" and cfg.hyperliquid_wallet_address:
             try:
                 st = await hl.user_state(cfg.hyperliquid_wallet_address)
+                logger.info("_get_base_equity: user_state response keys=%s", list(st.keys()) if isinstance(st, dict) else type(st))
                 margin_summary = st.get("marginSummary", {})
+                logger.info("_get_base_equity: marginSummary=%s", margin_summary)
                 real = float(margin_summary.get("accountValue", 0.0))
+                logger.info("_get_base_equity: accountValue=%s", real)
                 if real > 0:
                     return real
+                else:
+                    logger.warning("_get_base_equity: real balance is 0 or negative, falling back to virtual")
             except Exception as e:
-                logger.warning("Failed to get real balance for user %s: %s", uid, e)
+                logger.error("_get_base_equity: Failed to get real balance for user %s: %s", uid, e, exc_info=True)
+        elif mode == "LIVE" and not cfg.hyperliquid_wallet_address:
+            logger.warning("_get_base_equity: LIVE mode but HYPERLIQUID_WALLET_ADDRESS is empty!")
         return float(cfg.virtual_equity)
 
     def _extract_orders(st: dict) -> list[PendingOrder]:
