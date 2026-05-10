@@ -14,7 +14,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 
 from bill_bot.core.config import Config
 from bill_bot.services.candle_store import Candle, RedisCandleStore
@@ -748,11 +748,15 @@ async def run_telegram(
     async def positions_refresh(cb: CallbackQuery):
         uid = cb.from_user.id
         text, kb = await _build_positions_view(uid)
-        await cb.answer()
+        try:
+            await cb.answer()
+        except TelegramNetworkError:
+            pass
+            
         try:
             await cb.message.edit_text(text, reply_markup=kb.as_markup())
-        except TelegramBadRequest as e:
-            if "message is not modified" not in str(e):
+        except (TelegramBadRequest, TelegramNetworkError) as e:
+            if isinstance(e, TelegramBadRequest) and "message is not modified" not in str(e):
                 raise
 
     @dp.callback_query(F.data.startswith("ord_cancel:"))
