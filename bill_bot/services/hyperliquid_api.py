@@ -124,22 +124,28 @@ class HyperliquidExchangeClient:
             self.base_url = base_url or constants.MAINNET_API_URL
             self.account = eth_account.Account.from_key(private_key)
             self.exchange = Exchange(self.account, self.base_url, account_address=self.wallet)
-        except Exception:
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"HyperliquidExchangeClient init failed: {e}")
             self.exchange = None
 
-    async def _run(self, func, *args, **kwargs):
+    async def _run(self, func_name: str, *args, **kwargs):
         if self.exchange is None:
-            raise RuntimeError("Hyperliquid SDK is not initialized")
+            raise RuntimeError("Hyperliquid SDK is not initialized (exchange is None)")
+        func = getattr(self.exchange, func_name, None)
+        if func is None:
+            raise AttributeError(f"Exchange object has no attribute '{func_name}'")
         return await asyncio.to_thread(func, *args, **kwargs)
 
     async def place_order(self, coin: str, is_buy: bool, sz: float, limit_px: float, order_type: dict, reduce_only: bool = False) -> dict:
-        return await self._run(self.exchange.order, coin, is_buy, sz, limit_px, order_type, reduce_only=reduce_only)
+        return await self._run("order", coin, is_buy, sz, limit_px, order_type, reduce_only=reduce_only)
 
     async def cancel_order(self, coin: str, oid: int) -> dict:
-        return await self._run(self.exchange.cancel, coin, oid)
+        return await self._run("cancel", coin, oid)
 
     async def cancel_by_cloid(self, coin: str, cloid: str) -> dict:
-        return await self._run(self.exchange.cancel, coin, None, cloid)
+        return await self._run("cancel", coin, None, cloid)
 
     async def cancel_all_orders(self, coin: str, open_orders: list[dict]) -> None:
         if not open_orders: return
@@ -147,10 +153,10 @@ class HyperliquidExchangeClient:
         # В Hyperliquid можно отменить несколько ордеров за раз, передав список (coin, oid)
         cancels = [(coin, int(o["oid"])) for o in open_orders if o.get("coin") == coin]
         if cancels:
-            await self._run(self.exchange.cancel, cancels)
+            await self._run("cancel", cancels)
 
     async def update_leverage(self, coin: str, leverage: int, cross_margin: bool = True) -> dict:
-        return await self._run(self.exchange.update_leverage, leverage, coin, cross_margin)
+        return await self._run("update_leverage", leverage, coin, cross_margin)
 
     async def market_close(self, coin: str, sz: float = None) -> dict:
-        return await self._run(self.exchange.market_close, coin, sz=sz)
+        return await self._run("market_close", coin, sz=sz)
