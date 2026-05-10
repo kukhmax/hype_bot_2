@@ -36,13 +36,21 @@ class ExecutionLiveRun:
         state["ords"] = [o.to_dict() for o in orders]
 
     async def _get_real_balance(self) -> float:
+        total = 0.0
         try:
             st = await self.hl_info.user_state(self.hl_client.wallet)
-            margin_summary = st.get("marginSummary", {})
-            return float(margin_summary.get("accountValue", 0.0))
+            total += float(st.get("marginSummary", {}).get("accountValue", 0.0))
         except Exception as e:
-            logger.error(f"LiveRun: Failed to get real balance: {e}")
-            return 0.0
+            logger.error(f"LiveRun: Failed to get perps balance: {e}")
+        try:
+            spot_st = await self.hl_info.spot_user_state(self.hl_client.wallet)
+            for b in spot_st.get("balances", []):
+                if str(b.get("coin", "")).upper() in ("USDC", "USDT"):
+                    total += float(b.get("total", 0.0))
+        except Exception as e:
+            logger.error(f"LiveRun: Failed to get spot balance: {e}")
+        logger.info(f"LiveRun: Real balance (perps+spot) = {total:.2f}")
+        return total
 
     async def maybe_place_order(
         self,

@@ -63,9 +63,9 @@ class Config:
                 tick_sizes[sym] = float(val.strip())
             except ValueError:
                 continue
-        default_virtual_equity = float(os.getenv("VIRTUAL_EQUITY", "10000"))
+        default_virtual_equity = float(os.getenv("VIRTUAL_EQUITY", "100"))
         default_risk_pct = float(os.getenv("RISK_PCT", "1.0"))
-        default_rr = float(os.getenv("RR_DEFAULT", "1.0"))
+        default_rr = float(os.getenv("RR_DEFAULT", "1.5"))
         virtual_equity = default_virtual_equity
         risk_pct = default_risk_pct
         telegram_token = os.getenv("TELEGRAM_TOKEN", "")
