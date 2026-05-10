@@ -33,7 +33,7 @@ def main():
         print("Error: Neither 'docker-compose' nor 'docker compose' found on this system.")
         sys.exit(1)
         
-    cmd = cmd_base + ["up", "-d"]
+    cmd = cmd_base + ["up", "-d", "--build"]
     
     print(f"\nStarting {' '.join(cmd)} ...")
     
