@@ -25,6 +25,16 @@ def main():
         print("Error: Private key cannot be empty. Exiting.")
         sys.exit(1)
         
+    # Validation: Private key should be 64 hex chars (32 bytes)
+    # Sometimes it starts with 0x (66 chars)
+    clean_key = private_key[2:] if private_key.startswith("0x") else private_key
+    if len(clean_key) != 64:
+        print(f"Error: Invalid Private Key length ({len(clean_key)} chars).")
+        print("A private key should be 64 hex characters (32 bytes).")
+        if len(clean_key) == 40:
+            print("HINT: You entered a 40-char string, which looks like a Wallet Address. Please enter the Private Key instead.")
+        sys.exit(1)
+        
     env = os.environ.copy()
     env["HYPERLIQUID_PRIVATE_KEY"] = private_key
     
