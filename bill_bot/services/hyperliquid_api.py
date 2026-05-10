@@ -79,6 +79,20 @@ class HyperliquidInfoClient:
                     raise ValueError("Unexpected user_state response")
                 return data
 
+    async def spot_user_state(self, user_address: str) -> dict:
+        url = f"{self.base_url}/info"
+        payload = {
+            "type": "spotClearinghouseState",
+            "user": user_address
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+                if not isinstance(data, dict):
+                    raise ValueError("Unexpected spot_user_state response")
+                return data
+
     async def open_orders(self, user_address: str) -> list[dict]:
         url = f"{self.base_url}/info"
         payload = {

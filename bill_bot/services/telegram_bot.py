@@ -234,25 +234,35 @@ async def run_telegram(
     last_msg_key = lambda uid: f"tg:last_bot_msg:{int(uid)}"
 
     async def _get_base_equity(uid: int) -> float:
-        """Return real Hyperliquid balance in LIVE mode, or virtual_equity in DRY."""
+        """Return real Hyperliquid balance (perps + spot USDC) in LIVE mode, or virtual_equity in DRY."""
         _, user_subs = await user_ctx(uid)
         ucfg = await user_subs.get_user_cfg(uid)
         mode = str(ucfg.get("trade_mode", "DRY")).upper()
-        logger.info("_get_base_equity: uid=%s mode=%s wallet=%s", uid, mode, cfg.hyperliquid_wallet_address[:10] if cfg.hyperliquid_wallet_address else "EMPTY")
         if mode == "LIVE" and cfg.hyperliquid_wallet_address:
+            total_real = 0.0
             try:
-                st = await hl.user_state(cfg.hyperliquid_wallet_address)
-                logger.info("_get_base_equity: user_state response keys=%s", list(st.keys()) if isinstance(st, dict) else type(st))
-                margin_summary = st.get("marginSummary", {})
-                logger.info("_get_base_equity: marginSummary=%s", margin_summary)
-                real = float(margin_summary.get("accountValue", 0.0))
-                logger.info("_get_base_equity: accountValue=%s", real)
-                if real > 0:
-                    return real
-                else:
-                    logger.warning("_get_base_equity: real balance is 0 or negative, falling back to virtual")
+                # Perps account balance
+                perps_st = await hl.user_state(cfg.hyperliquid_wallet_address)
+                perps_val = float(perps_st.get("marginSummary", {}).get("accountValue", 0.0))
+                total_real += perps_val
+                logger.info("_get_base_equity: perps accountValue=%.2f", perps_val)
             except Exception as e:
-                logger.error("_get_base_equity: Failed to get real balance for user %s: %s", uid, e, exc_info=True)
+                logger.warning("_get_base_equity: perps balance error: %s", e)
+            try:
+                # Spot account balance (USDC)
+                spot_st = await hl.spot_user_state(cfg.hyperliquid_wallet_address)
+                balances = spot_st.get("balances", [])
+                for b in balances:
+                    coin = str(b.get("coin", "")).upper()
+                    if coin in ("USDC", "USDT"):
+                        spot_val = float(b.get("total", 0.0))
+                        total_real += spot_val
+                        logger.info("_get_base_equity: spot %s=%.2f", coin, spot_val)
+            except Exception as e:
+                logger.warning("_get_base_equity: spot balance error: %s", e)
+            logger.info("_get_base_equity: uid=%s total_real=%.2f", uid, total_real)
+            if total_real > 0:
+                return total_real
         elif mode == "LIVE" and not cfg.hyperliquid_wallet_address:
             logger.warning("_get_base_equity: LIVE mode but HYPERLIQUID_WALLET_ADDRESS is empty!")
         return float(cfg.virtual_equity)

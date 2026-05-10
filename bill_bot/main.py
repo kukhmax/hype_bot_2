@@ -144,14 +144,21 @@ async def main():
         ucfg = await subs_tf.get_user_cfg(user_id)
         mode = str(ucfg.get("trade_mode", "DRY")).upper()
         if mode == "LIVE" and cfg.hyperliquid_wallet_address:
+            real_total = 0.0
             try:
-                st = await hl.user_state(cfg.hyperliquid_wallet_address)
-                margin_summary = st.get("marginSummary", {})
-                real = float(margin_summary.get("accountValue", 0.0))
-                if real > 0:
-                    base_eq = real
+                perps_st = await hl.user_state(cfg.hyperliquid_wallet_address)
+                real_total += float(perps_st.get("marginSummary", {}).get("accountValue", 0.0))
             except Exception:
                 pass
+            try:
+                spot_st = await hl.spot_user_state(cfg.hyperliquid_wallet_address)
+                for b in spot_st.get("balances", []):
+                    if str(b.get("coin", "")).upper() in ("USDC", "USDT"):
+                        real_total += float(b.get("total", 0.0))
+            except Exception:
+                pass
+            if real_total > 0:
+                base_eq = real_total
         balance = base_eq + total_r + total_u
         return balance, total_r, total_u, base_eq
 
