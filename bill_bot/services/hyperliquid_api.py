@@ -96,7 +96,7 @@ class HyperliquidInfoClient:
     async def open_orders(self, user_address: str) -> list[dict]:
         url = f"{self.base_url}/info"
         payload = {
-            "type": "openOrders",
+            "type": "frontendOpenOrders",
             "user": user_address
         }
         async with aiohttp.ClientSession() as session:
@@ -150,9 +150,13 @@ class HyperliquidExchangeClient:
 
     async def cancel_all_orders(self, coin: str, open_orders: list[dict]) -> None:
         if not open_orders: return
-        coin = coin.upper()
-        # В Hyperliquid можно отменить несколько ордеров за раз, передав список (coin, oid)
-        cancels = [(coin, int(o["oid"])) for o in open_orders if o.get("coin") == coin]
+        # В Hyperliquid в ответе может быть "LTC" или "LTC-USDC". Мы сравниваем начало строки.
+        cancels = []
+        for o in open_orders:
+            o_coin = str(o.get("coin", "")).upper()
+            if o_coin == coin or o_coin.startswith(f"{coin}-"):
+                cancels.append((o_coin, int(o["oid"])))
+        
         if cancels:
             await self._run("cancel", cancels)
 

@@ -86,6 +86,8 @@ class ExecutionLiveRun:
         try:
             open_orders = await self.hl_info.open_orders(self.hl_client.wallet)
             await self.hl_client.cancel_all_orders(pair, open_orders)
+            if old_orders:
+                logger.info(f"LiveRun: Canceled existing orders for {pair} on exchange")
         except Exception as e:
             logger.error(f"LiveRun: Failed to cancel open orders for {pair}: {e}")
         
@@ -146,13 +148,16 @@ class ExecutionLiveRun:
             logger.error(f"LiveRun on_candle API error: {e}")
             return {"changed": False}
 
+        # В ответе assetPositions монета может быть "LTC"
         positions = ustate.get("assetPositions", [])
         real_sz = 0.0
         real_entry = 0.0
         for p in positions:
-            if str(p.get("position", {}).get("coin", "")).upper() == pair.upper():
-                real_sz = float(p.get("position", {}).get("szi", "0.0"))
-                real_entry = float(p.get("position", {}).get("entryPx", "0.0"))
+            pos_data = p.get("position", {})
+            p_coin = str(pos_data.get("coin", "")).upper()
+            if p_coin == pair.upper():
+                real_sz = float(pos_data.get("szi", "0.0"))
+                real_entry = float(pos_data.get("entryPx", "0.0"))
                 break
 
         changed = False
@@ -165,12 +170,12 @@ class ExecutionLiveRun:
             if po:
                 logger.info(f"LiveRun: Detected new position on {pair}, placing TP/SL.")
                 try:
-                    tp_type = {"trigger": {"isMarket": True, "triggerPx": str(po.take_profit)}}
-                    sl_type = {"trigger": {"isMarket": True, "triggerPx": str(po.stop_loss)}}
+                    tp_type = {"trigger": {"isMarket": True, "triggerPx": float(po.take_profit), "tpsl": "tp"}}
+                    sl_type = {"trigger": {"isMarket": True, "triggerPx": float(po.stop_loss), "tpsl": "sl"}}
                     is_buy_close = not (po.side == "LONG")
                     
-                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), po.take_profit, tp_type, reduce_only=True)
-                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), po.stop_loss, sl_type, reduce_only=True)
+                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), float(po.take_profit), tp_type, reduce_only=True)
+                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), float(po.stop_loss), sl_type, reduce_only=True)
                     
                     state["pos"] = Position(
                         side=po.side, entry=real_entry, stop_loss=po.stop_loss, take_profit=po.take_profit,
@@ -180,7 +185,7 @@ class ExecutionLiveRun:
                     self._set_orders(state, [])
                     changed = True
                     events.append({
-                        "event": "position_opened", "side": po.side, "entry": real_entry,
+                        "event": "position_opened", "pair": pair, "side": po.side, "entry": real_entry,
                         "stop_loss": po.stop_loss, "take_profit": po.take_profit, "qty": abs(real_sz),
                         "opened_t": candle.t
                     })
@@ -209,10 +214,10 @@ class ExecutionLiveRun:
                     open_orders = await self.hl_info.open_orders(self.hl_client.wallet)
                     await self.hl_client.cancel_all_orders(pair, open_orders)
                     
-                    sl_type = {"trigger": {"isMarket": True, "triggerPx": str(new_pos.stop_loss)}}
-                    tp_type = {"trigger": {"isMarket": True, "triggerPx": str(new_pos.take_profit)}}
-                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), new_pos.stop_loss, sl_type, reduce_only=True)
-                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), new_pos.take_profit, tp_type, reduce_only=True)
+                    sl_type = {"trigger": {"isMarket": True, "triggerPx": float(new_pos.stop_loss), "tpsl": "sl"}}
+                    tp_type = {"trigger": {"isMarket": True, "triggerPx": float(new_pos.take_profit), "tpsl": "tp"}}
+                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), float(new_pos.stop_loss), sl_type, reduce_only=True)
+                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), float(new_pos.take_profit), tp_type, reduce_only=True)
                 except Exception as e:
                     logger.error(f"LiveRun: Trailing SL update failed: {e}")
 
