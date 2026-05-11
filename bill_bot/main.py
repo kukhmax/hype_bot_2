@@ -32,9 +32,9 @@ async def main():
     r = get_redis(cfg)
     try:
         pong = await r.ping()
-        logger.info("Redis ping=%s host=%s port=%s", pong, cfg.redis_host, cfg.redis_port)
+        logger.info("❕ Redis ping=%s host=%s port=%s", pong, cfg.redis_host, cfg.redis_port)
     except Exception as e:
-        logger.error("Redis connection failed: %s", e)
+        logger.error("❌ Redis connection failed: %s", e)
         raise
 
     store = RedisCandleStore(r)
@@ -67,7 +67,7 @@ async def main():
             kb.adjust(1)
             await tg_bot.send_message(chat_id=int(user_id), text=text, reply_markup=kb.as_markup())
         except Exception as e:
-            logger.info("Telegram send failed: user=%s err=%s", user_id, e)
+            logger.info(" ⛔️ Telegram send failed: user=%s err=%s", user_id, e)
 
     async def tg_send_photo(user_id: int, png: bytes, caption: str) -> None:
         if tg_bot is None:
@@ -83,7 +83,7 @@ async def main():
                 reply_markup=kb.as_markup(),
             )
         except Exception as e:
-            logger.info("Telegram send_photo failed: user=%s err=%s", user_id, e)
+            logger.info(" ✅  Telegram send_photo failed: user=%s err=%s", user_id, e)
 
     def calc_fractal_points(candles: list[Candle], teeth_series: list[float]) -> list[FractalPoint]:
         out: list[FractalPoint] = []
@@ -111,7 +111,7 @@ async def main():
         try:
             return build_chart_png(pair, tf, candles, alli["jaw"], alli["teeth"], alli["lips"], fpts, levels=levels)
         except Exception as e:
-            logger.info("Chart build failed: pair=%s tf=%s err=%s", pair, tf, e)
+            logger.info(" 📉 📈 Chart build failed: pair=%s tf=%s err=%s", pair, tf, e)
             return None
 
     async def fmt_close_ts_from_open(pair: str, tf: str, open_t_ms: int) -> str:
@@ -199,7 +199,7 @@ async def main():
         if added:
             for f in found:
                 logger.info(
-                    "Fractal confirmed: pair=%s tf=%s kind=%s t=%s price=%.4f close=%.4f teeth=%.4f",
+                    "❇️❇️❇️ Fractal confirmed: pair=%s tf=%s kind=%s t=%s price=%.4f close=%.4f teeth=%.4f",
                     pair,
                     tf,
                     f.kind,
@@ -238,7 +238,7 @@ async def main():
         }
         await r.set(f"ind:last:{pair}:{tf}", json.dumps(payload, separators=(",", ":")))
         logger.info(
-            "Alligator: pair=%s tf=%s close=%.4f jaw=%.4f teeth=%.4f lips=%.4f sleep=%s tangled=%s med_spread=%.6f",
+            "  ♻️   Alligator: pair=%s tf=%s close=%.4f jaw=%.4f teeth=%.4f lips=%.4f sleep=%s tangled=%s med_spread=%.6f",
             pair,
             tf,
             closes[-1],
@@ -301,7 +301,7 @@ async def main():
             await signal_store.set_last(cand)
             tick = engine.tick_size_for_price(cand.cluster_price)
             logger.info(
-                "Signal candidate: pair=%s tf=%s side=%s cluster_t=%s entry=%.4f sl=%.4f tp=%.4f tick=%.8f sleep_med=%.6f",
+                " 🟢🟢🟢🟢 Signal candidate: pair=%s tf=%s side=%s cluster_t=%s entry=%.4f sl=%.4f tp=%.4f tick=%.8f sleep_med=%.6f",
                 pair,
                 tf,
                 cand.side,
@@ -391,7 +391,7 @@ async def main():
                         window = closed[-cfg.history_bars:]
                         await store.set_window(pair, tf, window)
                         logger.info(
-                            "History loaded: pair=%s tf=%s bars=%s range_t=%s..%s",
+                            " History loaded: pair=%s tf=%s bars=%s range_t=%s..%s",
                             pair,
                             tf,
                             len(window),
@@ -432,7 +432,7 @@ async def main():
                             
                             await handle_engine_events(uid, pair, tf, subs_tf, evt)
                 except Exception as e:
-                    logger.error("Market loop error: pair=%s tf=%s err=%s", pair, tf, e)
+                    logger.error(" ⏰ Market loop error: pair=%s tf=%s err=%s", pair, tf, e)
             await asyncio.sleep(cfg.poll_seconds)
 
     hl_exchange = None
@@ -564,7 +564,7 @@ async def main():
                         c = str(f.get("coin", "")).upper()
                         if c: fill_map[c] = float(f.get("px", 0))
                     
-                    logger.info(f"WS: Detected fills for {list(fill_map.keys())}! Triggering sync.")
+                    logger.info(f"❎❎❎ WS: Detected fills for {list(fill_map.keys())}! Triggering sync.")
                     for tf, engine in all_live_engines.items():
                         curr_subs = SubscriptionStore(subs.r, tf=tf)
                         active_users = [int(cfg.telegram_user_id)] if cfg.telegram_user_id else []
@@ -579,7 +579,7 @@ async def main():
                                             evt = await eng.sync_state(u, p, cur_px, int(time.time()*1000))
                                             await handle_engine_events(u, p, t, s_tf, evt)
                                         except Exception as e:
-                                            logger.error(f"WS sync_task error for {p}: {e}")
+                                            logger.error(f"❌⭕️ WS sync_task error for {p}: {e}")
                                     
                                     asyncio.create_task(sync_task())
             

@@ -153,7 +153,7 @@ class ExecutionLiveRun:
             }
 
         except Exception as e:
-            logger.error(f"LiveRun: Place Order Failed for {pair}: {e}")
+            logger.error(f" ✅ LiveRun: Place Order Failed for {pair}: {e}")
             return {"changed": False}
 
     async def on_candle(self, user_id: int, pair: str, candle: Candle) -> dict:
@@ -169,7 +169,7 @@ class ExecutionLiveRun:
             
             # Если уровни изменились — обновляем на бирже
             if abs(new_pos.stop_loss - pos.stop_loss) > 1e-9 or abs(new_pos.take_profit - pos.take_profit) > 1e-9:
-                logger.info(f"LiveRun: Trailing update for {pair}: SL {pos.stop_loss}->{new_pos.stop_loss} TP {pos.take_profit}->{new_pos.take_profit}")
+                logger.info(f" ✅  LiveRun: Trailing update for {pair}: SL {pos.stop_loss}->{new_pos.stop_loss} TP {pos.take_profit}->{new_pos.take_profit}")
                 try:
                     open_ords = await self.hl_info.open_orders(self.hl_client.wallet)
                     await self.hl_client.cancel_all_orders(pair, open_ords)
@@ -198,7 +198,7 @@ class ExecutionLiveRun:
                     sync_res["events"].append(upd_evt)
                     sync_res["changed"] = True
                 except Exception as e:
-                    logger.error(f"LiveRun: Failed to update trailing for {pair}: {e}")
+                    logger.error(f" ❌ LiveRun: Failed to update trailing for {pair}: {e}")
                     
         return sync_res
 
@@ -207,7 +207,7 @@ class ExecutionLiveRun:
         try:
             ustate = await self.hl_info.user_state(self.hl_client.wallet)
         except Exception as e:
-            logger.error(f"LiveRun sync_state API error for {pair}: {e}")
+            logger.error(f" ❌ LiveRun sync_state API error for {pair}: {e}")
             return {"changed": False}
 
         positions = ustate.get("assetPositions", [])
@@ -240,7 +240,7 @@ class ExecutionLiveRun:
                 needs_update = True
 
             if needs_update:
-                logger.info(f"LiveRun: Syncing POS for {pair}. Exchange side={current_side} sz={abs(real_sz)}")
+                logger.info(f"✅ LiveRun: Syncing POS for {pair}. Exchange side={current_side} sz={abs(real_sz)}")
                 
                 # Ищем параметры SL/TP (сначала из локального ордера, потом с биржи)
                 po = local_ords[0] if local_ords else None
@@ -285,7 +285,7 @@ class ExecutionLiveRun:
                             await self.hl_client.place_order(pair, is_buy_close, final_sz, tp_px, tp_type, reduce_only=True)
                             await self.hl_client.place_order(pair, is_buy_close, final_sz, sl_px, sl_type, reduce_only=True)
                         except Exception as e:
-                            logger.error(f"LiveRun: Failed to place missing TP/SL on sync: {e}")
+                            logger.error(f" ❌ LiveRun: Failed to place missing TP/SL on sync: {e}")
 
                 events.append({
                     "event": "position_opened", "pair": pair, "side": current_side, "entry": real_entry,
