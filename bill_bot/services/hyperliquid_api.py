@@ -150,15 +150,16 @@ class HyperliquidExchangeClient:
 
     async def cancel_all_orders(self, coin: str, open_orders: list[dict]) -> None:
         if not open_orders: return
-        # В Hyperliquid в ответе может быть "LTC" или "LTC-USDC". Мы сравниваем начало строки.
-        cancels = []
+        # Отменяем ордера по одному для надежности и во избежание ошибок с аргументами
         for o in open_orders:
             o_coin = str(o.get("coin", "")).upper()
             if o_coin == coin or o_coin.startswith(f"{coin}-"):
-                cancels.append((o_coin, int(o["oid"])))
-        
-        if cancels:
-            await self._run("cancel", cancels)
+                oid = int(o["oid"])
+                try:
+                    logger.info(f"HL: canceling order {oid} for {o_coin}")
+                    await self._run("cancel", o_coin, oid)
+                except Exception as e:
+                    logger.error(f"HL: failed to cancel order {oid}: {e}")
 
     async def market_close(self, coin: str) -> dict:
         """Закрыть позицию по рынку (через SDK market_close)"""
