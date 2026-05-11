@@ -143,11 +143,15 @@ class ExecutionLiveRun:
             return "skipped", None, None
 
     async def on_candle(self, user_id: int, pair: str, candle: Candle) -> dict:
+        # Регулярная проверка по завершению свечи
+        return await self.sync_state(user_id, pair, float(candle.c), int(candle.t))
+
+    async def sync_state(self, user_id: int, pair: str, cur_px: float | None, cur_t: int) -> dict:
         state = await self.store.get(user_id, pair, self.tf)
         try:
             ustate = await self.hl_info.user_state(self.hl_client.wallet)
         except Exception as e:
-            logger.error(f"LiveRun on_candle API error: {e}")
+            logger.error(f"LiveRun sync_state API error for {pair}: {e}")
             return {"changed": False}
 
         # В ответе assetPositions монета может быть "LTC"
@@ -178,7 +182,7 @@ class ExecutionLiveRun:
                     
                     tp_type = {"trigger": {"isMarket": True, "triggerPx": tp_px, "tpsl": "tp"}}
                     sl_type = {"trigger": {"isMarket": True, "triggerPx": sl_px, "tpsl": "sl"}}
-                    is_buy_close = not (real_sz > 0) # Если real_sz > 0 (LONG), то закрываем продажей (is_buy=False)
+                    is_buy_close = not (real_sz > 0)
                     
                     # Отменяем старые ордера (напр. Stop Entry) перед постановкой SL/TP
                     cur_orders = await self.hl_info.open_orders(self.hl_client.wallet)
@@ -192,7 +196,7 @@ class ExecutionLiveRun:
                     state["pos"] = Position(
                         side="LONG" if real_sz > 0 else "SHORT", entry=real_entry, stop_loss=sl_px, take_profit=tp_px,
                         tp0=tp_px, tr1_done=False, tr2_done=False, tr_steps=0,
-                        qty=abs(real_sz), opened_t=candle.t, cluster_t=po.cluster_t
+                        qty=abs(real_sz), opened_t=cur_t, cluster_t=po.cluster_t
                     ).to_dict()
                     self._set_orders(state, [])
                     changed = True
@@ -207,7 +211,7 @@ class ExecutionLiveRun:
                     events.append({
                         "event": "position_opened", "pair": pair, "side": state["pos"]["side"], "entry": real_entry,
                         "stop_loss": sl_px, "take_profit": tp_px, "qty": abs(real_sz),
-                        "opened_t": candle.t
+                        "opened_t": cur_t
                     })
                 except Exception as e:
                     logger.error(f"LiveRun: Failed to place TP/SL on entry: {e}")
@@ -218,34 +222,19 @@ class ExecutionLiveRun:
             changed = True
             events.append({
                 "event": "position_closed", "side": local_pos.get("side"), "entry": local_pos.get("entry"),
-                "exit": candle.c, "stop_loss": local_pos.get("stop_loss"), "take_profit": local_pos.get("take_profit"),
-                "qty": local_pos.get("qty"), "pnl": 0.0, "reason": "Closed on exchange", "closed_t": candle.t
+                "exit": cur_px if cur_px else local_pos.get("entry"), 
+                "stop_loss": local_pos.get("stop_loss"), "take_profit": local_pos.get("take_profit"),
+                "qty": local_pos.get("qty"), "pnl": 0.0, "reason": "Closed on exchange", "closed_t": cur_t
             })
 
         elif local_pos and abs(real_sz) > 1e-9:
-            pos_obj = Position.from_dict(local_pos)
-            new_pos = self._apply_trailing(pos_obj, candle)
-            
-            if new_pos.stop_loss != pos_obj.stop_loss or new_pos.take_profit != pos_obj.take_profit:
-                logger.info(f"LiveRun: Trailing update on {pair}. New SL: {new_pos.stop_loss}")
-                try:
-                    is_buy_close = not (new_pos.side == "LONG")
-                    
-                    open_orders = await self.hl_info.open_orders(self.hl_client.wallet)
-                    await self.hl_client.cancel_all_orders(pair, open_orders)
-                    
-                    sl_type = {"trigger": {"isMarket": True, "triggerPx": float(new_pos.stop_loss), "tpsl": "sl"}}
-                    tp_type = {"trigger": {"isMarket": True, "triggerPx": float(new_pos.take_profit), "tpsl": "tp"}}
-                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), float(new_pos.stop_loss), sl_type, reduce_only=True)
-                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), float(new_pos.take_profit), tp_type, reduce_only=True)
-                except Exception as e:
-                    logger.error(f"LiveRun: Trailing SL update failed: {e}")
-
-                state["pos"] = new_pos.to_dict()
-                changed = True
+            # Трейлинг работает только по свечам (candle), поэтому пропускаем его при force sync
+            pass
 
         if changed:
             await self.store.set(user_id, pair, self.tf, state)
+
+        return {"changed": changed, "events": events}
 
         return {"changed": changed, "events": events}
 

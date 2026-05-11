@@ -395,10 +395,14 @@ async def main():
         exec_engine_dry = ExecutionDryRun(trade_state, tf, virtual_equity=cfg.virtual_equity)
         exec_engine_live = None
         if hl_exchange:
-            from bill_bot.services.execution_live import ExecutionLiveRun
-            exec_engine_live = ExecutionLiveRun(store=trade_state, tf=tf, hl_client=hl_exchange, hl_info=hl)
-
-        subs_tf = SubscriptionStore(r, tf=tf)
+          from bill_bot.services.hyperliquid_api import HyperliquidInfoClient
+          hl = HyperliquidInfoClient()
+          from bill_bot.services.execution_live import ExecutionLiveRun
+          exec_engine_dry = ExecutionDryRun(store=trade_state, tf=tf)
+          exec_engine_live = ExecutionLiveRun(store=trade_state, tf=tf, hl_client=hl_exchange, hl_info=hl)
+          all_live_engines[tf] = exec_engine_live
+        
+        subs_tf = SubscriptionStore(subs.r, tf=tf)
         tf_ms = timeframe_ms(tf)
 
         max_len = max(cfg.history_bars, 200)
@@ -465,70 +469,8 @@ async def main():
                                 evt = await exec_engine_live.on_candle(user_id=uid, pair=pair, candle=new_candle)
                             else:
                                 evt = await exec_engine_dry.on_candle(user_id=uid, pair=pair, candle=new_candle)
-                            if evt.get("changed"):
-                                evts = evt.get("events")
-                                if not isinstance(evts, list):
-                                    evts = [evt] if evt.get("event") else []
-                                for e in evts:
-                                    logger.info("Dry-run event: user=%s pair=%s tf=%s %s", uid, pair, tf, e)
-                                    if e.get("event") == "position_opened":
-                                        entry = float(e.get("entry", 0.0))
-                                        sl = float(e.get("stop_loss", 0.0))
-                                        tp = float(e.get("take_profit", 0.0))
-                                        qty = float(e.get("qty", 0.0))
-                                        opened_t = int(e.get("opened_t", new_candle.t))
-                                        levels_open = [
-                                            PriceLevel(price=entry, label="Entry", color="#0ea5e9", linestyle="-", linewidth=1.2),
-                                            PriceLevel(price=sl, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
-                                            PriceLevel(price=tp, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
-                                        ]
-                                        opened_png = await build_signal_chart(pair, tf, levels=levels_open)
-                                        opened_caption = (
-                                            f"🚀 Открыта {str(e.get('side', '')).upper()} {display_pair(pair)} ({tf})\n"
-                                            f"🕒 {await fmt_close_ts_from_open(pair, tf, opened_t)}\n"
-                                            f"🎯 Entry {entry:.4f} | 🛑 SL {sl:.4f} | ✅ TP {tp:.4f}\n"
-                                            f"📦 Qty {qty:.6f}"
-                                        )
-                                        if opened_png:
-                                            await tg_send_photo(uid, opened_png, opened_caption)
-                                        else:
-                                            await tg_send(uid, opened_caption)
-                                    elif e.get("event") == "position_closed":
-                                        balance, total_r, total_u, base = await user_balance(subs_tf, uid, tf)
-                                        pnl = float(e.get("pnl", 0.0))
-                                        pnl_emoji = "🟩" if pnl >= 0 else "🟥"
-                                        reason_u = str(e.get("reason", "")).upper()
-                                        if reason_u == "TP":
-                                            reason_txt = "✅ TP"
-                                        elif reason_u == "SL":
-                                            reason_txt = "🛑 SL"
-                                        elif "SL_AND_TP" in reason_u:
-                                            reason_txt = "⚠️ SL/TP (в одной свече)"
-                                        else:
-                                            reason_txt = str(e.get("reason", ""))
-                                        entry = float(e.get("entry", 0.0))
-                                        exit_px = float(e.get("exit", 0.0))
-                                        sl = float(e.get("stop_loss", 0.0))
-                                        tp = float(e.get("take_profit", 0.0))
-                                        qty = float(e.get("qty", 0.0))
-                                        closed_t = int(e.get("closed_t", new_candle.t))
-                                        levels_close = [
-                                            PriceLevel(price=entry, label="Entry", color="#0ea5e9", linestyle="-", linewidth=1.2),
-                                            PriceLevel(price=exit_px, label="Exit", color="#f59e0b", linestyle="--", linewidth=1.2),
-                                            PriceLevel(price=sl, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
-                                            PriceLevel(price=tp, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
-                                        ]
-                                        closed_png = await build_signal_chart(pair, tf, levels=levels_close)
-                                        closed_caption = (
-                                            f"🏁 Закрыта {str(e.get('side', '')).upper()} {display_pair(pair)} ({tf})\n"
-                                            f"🕒 {await fmt_close_ts_from_open(pair, tf, closed_t)} | {reason_txt}\n"
-                                            f"🎯 Entry {entry:.4f} → Exit {exit_px:.4f} | {pnl_emoji} PnL {pnl:+.2f}\n"
-                                            f"💼 Баланс {balance:.2f} | 💰 R {total_r:.2f} | 📈 U {total_u:.2f}"
-                                        )
-                                        if closed_png:
-                                            await tg_send_photo(uid, closed_png, closed_caption)
-                                        else:
-                                            await tg_send(uid, closed_caption)
+                            
+                            await handle_engine_events(uid, pair, tf, subs_tf, evt)
                 except Exception as e:
                     logger.error("Market loop error: pair=%s tf=%s err=%s", pair, tf, e)
             await asyncio.sleep(cfg.poll_seconds)
@@ -538,6 +480,63 @@ async def main():
         from bill_bot.services.hyperliquid_api import HyperliquidExchangeClient
         hl_exchange = HyperliquidExchangeClient(cfg.hyperliquid_wallet_address, cfg.hyperliquid_private_key)
 
+    all_live_engines = {} # tf -> engine
+
+    async def handle_engine_events(uid: int, pair: str, tf: str, subs_tf: SubscriptionStore, evt: dict):
+        if not evt or not evt.get("changed"): return
+        evts = evt.get("events")
+        if not isinstance(evts, list):
+            evts = [evt] if evt.get("event") else []
+        for e in evts:
+            logger.info("Engine event: user=%s pair=%s tf=%s %s", uid, pair, tf, e)
+            if e.get("event") == "position_opened":
+                entry = float(e.get("entry", 0.0))
+                sl = float(e.get("stop_loss", 0.0))
+                tp = float(e.get("take_profit", 0.0))
+                qty = float(e.get("qty", 0.0))
+                opened_t = int(e.get("opened_t", int(time.time()*1000)))
+                levels_open = [
+                    PriceLevel(price=entry, label="Entry", color="#0ea5e9", linestyle="-", linewidth=1.2),
+                    PriceLevel(price=sl, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
+                    PriceLevel(price=tp, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+                ]
+                opened_png = await build_signal_chart(pair, tf, levels=levels_open)
+                opened_caption = (
+                    f"🚀 Открыта {str(e.get('side', '')).upper()} {display_pair(pair)} ({tf})\n"
+                    f"🕒 {await fmt_close_ts_from_open(pair, tf, opened_t)}\n"
+                    f"🎯 Entry {entry:.4f} | 🛑 SL {sl:.4f} | ✅ TP {tp:.4f}\n"
+                    f"📦 Qty {qty:.6f}"
+                )
+                if opened_png: await tg_send_photo(uid, opened_png, opened_caption)
+                else: await tg_send(uid, opened_caption)
+            elif e.get("event") == "position_closed":
+                balance, total_r, total_u, base = await user_balance(subs_tf, uid, tf)
+                pnl = float(e.get("pnl", 0.0))
+                pnl_emoji = "🟩" if pnl >= 0 else "🟥"
+                reason_u = str(e.get("reason", "")).upper()
+                reason_txt = "✅ TP" if reason_u == "TP" else "🛑 SL" if reason_u == "SL" else "⚠️ SL/TP" if "SL_AND_TP" in reason_u else str(e.get("reason", ""))
+                entry = float(e.get("entry", 0.0))
+                exit_px = float(e.get("exit", 0.0))
+                sl = float(e.get("stop_loss", 0.0))
+                tp = float(e.get("take_profit", 0.0))
+                qty = float(e.get("qty", 0.0))
+                closed_t = int(e.get("closed_t", int(time.time()*1000)))
+                levels_close = [
+                    PriceLevel(price=entry, label="Entry", color="#0ea5e9", linestyle="-", linewidth=1.2),
+                    PriceLevel(price=exit_px, label="Exit", color="#f59e0b", linestyle="--", linewidth=1.2),
+                    PriceLevel(price=sl, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
+                    PriceLevel(price=tp, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+                ]
+                closed_png = await build_signal_chart(pair, tf, levels=levels_close)
+                closed_caption = (
+                    f"🏁 Закрыта {str(e.get('side', '')).upper()} {display_pair(pair)} ({tf})\n"
+                    f"🕒 {await fmt_close_ts_from_open(pair, tf, closed_t)} | {reason_txt}\n"
+                    f"🎯 Entry {entry:.4f} → Exit {exit_px:.4f} | {pnl_emoji} PnL {pnl:+.2f}\n"
+                    f"💼 Баланс {balance:.2f} | 💰 R {total_r:.2f} | 📈 U {total_u:.2f}"
+                )
+                if closed_png: await tg_send_photo(uid, closed_png, closed_caption)
+                else: await tg_send(uid, closed_caption)
+
     timeframes = list(dict.fromkeys([*cfg.timeframes_available, cfg.timeframe]))
     tasks = [asyncio.create_task(market_loop(tf, hl_exchange)) for tf in timeframes]
     
@@ -546,9 +545,36 @@ async def main():
         ws_client = HyperliquidWebsocketClient(wallet_address=cfg.hyperliquid_wallet_address)
         
         async def on_ws_message(msg):
-            # В будущем здесь будем обновлять live-состояние позиций и балансов
-            # logger.info(f"WS Event: {msg.get('channel')} {msg.get('data')}")
-            pass
+            channel = msg.get("channel")
+            data = msg.get("data")
+            if not data: return
+            
+            # Обработка событий исполнения ордеров (fills)
+            if channel == "user":
+                fills = data.get("fills", [])
+                if fills:
+                    logger.info("WS: Detected fills! Triggering instant sync for protection.")
+                    # Чтобы не гадать, какой таймфрейм сработал, запускаем синхронизацию для всех
+                    for tf, engine in all_live_engines.items():
+                        # Нам нужен SubscriptionStore для этого TF
+                        curr_subs = SubscriptionStore(subs.r, tf=tf)
+                        # Мы предполагаем, что юзер один (по конфигу), либо берем всех активных
+                        active_users = await curr_subs.get_all_users()
+                        for uid in active_users:
+                            # Получаем пары этого пользователя
+                            user_pairs = await curr_subs.get_user_pairs(uid)
+                            for pair in user_pairs:
+                                # Запускаем фоновую задачу синхронизации
+                                async def sync_task(u=uid, p=pair, t=tf, eng=engine, s_tf=curr_subs):
+                                    evt = await eng.sync_state(u, p, None, int(time.time()*1000))
+                                    await handle_engine_events(u, p, t, s_tf, evt)
+                                
+                                asyncio.create_task(sync_task())
+            
+            # Обработка обновлений аккаунта (позиции, баланс) - для чистоты данных
+            elif channel == "webData2":
+                # Здесь можно было бы точечно обновлять балансы, но sync_state и так это делает
+                pass
             
         ws_client.add_callback(on_ws_message)
         tasks.append(asyncio.create_task(ws_client.start()))
