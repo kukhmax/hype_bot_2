@@ -89,17 +89,32 @@ class ExecutionLiveRun:
             # Отменяем только ордера той же стороны (LONG -> B, SHORT -> S), 
             # чтобы позволить одновременное нахождение противоположных стоп-ордеров.
             side_to_cancel = "B" if cand.side == "LONG" else "S"
-            orders_to_cancel = [
-                o for o in open_orders 
-                if str(o.get("coin")).upper() == pair.upper() 
-                and o.get("side") == side_to_cancel
-                and o.get("isTrigger", False)
-                # Мы НЕ отменяем TP/SL (isPositionTpsl обычно True для них в frontendOpenOrders)
-                and not o.get("isPositionTpsl", False)
-            ]
+            
+            logger.info(f"LiveRun: Found {len(open_orders)} open orders. Checking for {pair} {cand.side} (side {side_to_cancel})")
+            
+            orders_to_cancel = []
+            for o in open_orders:
+                o_coin = str(o.get("coin", "")).upper()
+                o_side = str(o.get("side", ""))
+                o_is_trigger = bool(o.get("isTrigger", False))
+                o_reduce = bool(o.get("reduceOnly", False))
+                o_oid = o.get("oid")
+                
+                # Логируем каждый ордер по этой паре для диагностики
+                if o_coin == pair.upper():
+                    logger.info(f"LiveRun: Debug Order: oid={o_oid} side={o_side} isTrigger={o_is_trigger} reduceOnly={o_reduce}")
+
+                # Stop Entry - это триггерный ордер, который НЕ является reduceOnly
+                if o_coin == pair.upper() and o_side == side_to_cancel and o_is_trigger and not o_reduce:
+                    orders_to_cancel.append(o)
+                elif o_coin == pair.upper() and o_side == side_to_cancel:
+                    logger.info(f"LiveRun: Skipping same-side order {o_oid} (isTrigger={o_is_trigger}, reduceOnly={o_reduce})")
+
             if orders_to_cancel:
+                logger.info(f" ✅ LiveRun: Canceling {len(orders_to_cancel)} existing {cand.side} stop orders for {pair}: {[o.get('oid') for o in orders_to_cancel]}")
                 await self.hl_client.cancel_all_orders(pair, orders_to_cancel)
-                logger.info(f"LiveRun: Canceled {len(orders_to_cancel)} exchange orders for {pair} side {cand.side}")
+            else:
+                logger.info(f"LiveRun: No matching orders to cancel for {pair} {cand.side}")
         except Exception as e:
             logger.error(f"LiveRun: Failed to cancel open orders for {pair}: {e}")
         
