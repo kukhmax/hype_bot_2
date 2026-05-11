@@ -339,57 +339,17 @@ async def main():
                     continue
 
                 if trade_mode == "LIVE" and exec_engine_live:
-                    action, order, canceled = await exec_engine_live.maybe_place_order(
+                    res = await exec_engine_live.maybe_place_order(
                         user_id=uid, pair=pair, candle=window[-1], cand=cand_u, risk_pct=risk_pct, margin_pct=margin_pct
                     )
                 else:
-                    action, order, canceled = await exec_engine_dry.maybe_place_order(
+                    res = await exec_engine_dry.maybe_place_order(
                         user_id=uid, pair=pair, candle=window[-1], cand=cand_u, risk_pct=risk_pct
                     )
-                if action not in ("placed", "replaced") or order is None:
-                    continue
+                await handle_engine_events(uid, pair, tf, subs_tf, res)
 
-                note = ""
-                if action == "replaced" and canceled is not None:
-                    note = f"♻️ Предыдущий ордер {str(canceled.side).upper()} отменён"
+                # Обработка событий уже выполнена в handle_engine_events
 
-                rr_key = float(rr)
-                if rr_key not in setup_png_cache:
-                    levels_setup_u = [
-                        PriceLevel(price=cand.cluster_price, label="Cluster", color="#7c3aed", linestyle=":", linewidth=1.0),
-                        PriceLevel(price=order.trigger, label="Trigger", color="#0ea5e9", linestyle="--", linewidth=1.2),
-                        PriceLevel(price=order.stop_loss, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
-                        PriceLevel(price=order.take_profit, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
-                    ]
-                    setup_png_cache[rr_key] = await build_signal_chart(pair, tf, levels=levels_setup_u)
-
-                setup_caption = (
-                    f"🔔 Сетап {cand.side} {display_pair(pair)} ({tf})\n"
-                    f"🕒 {await fmt_close_ts_from_open(pair, tf, cand.cluster_t)}\n"
-                    f"🎯 Trigger {order.trigger:.4f} | 🛑 SL {order.stop_loss:.4f} | ✅ TP {order.take_profit:.4f}\n"
-                    f"📦 Qty {order.qty:.6f} | ⚙️ Risk {risk_pct:.2f}% | 📐 RR {rr:.2f}"
-                )
-                if note:
-                    setup_caption = f"{setup_caption}\n{note}"
-
-                if setup_png_cache.get(rr_key):
-                    await tg_send_photo(uid, setup_png_cache[rr_key] or b"", setup_caption)
-                else:
-                    await tg_send(uid, setup_caption)
-
-                logger.info(
-                    "Dry-run order %s: user=%s pair=%s tf=%s side=%s trigger=%.4f sl=%.4f tp=%.4f qty=%.6f risk=%.2f%%",
-                    action,
-                    uid,
-                    pair,
-                    tf,
-                    order.side,
-                    order.trigger,
-                    order.stop_loss,
-                    order.take_profit,
-                    order.qty,
-                    risk_pct,
-                )
 
     async def market_loop(tf: str, hl_exchange=None):
         exec_engine_dry = ExecutionDryRun(trade_state, tf, virtual_equity=cfg.virtual_equity)
@@ -489,7 +449,32 @@ async def main():
             evts = [evt] if evt.get("event") else []
         for e in evts:
             logger.info("Engine event: user=%s pair=%s tf=%s %s", uid, pair, tf, e)
-            if e.get("event") == "position_opened":
+            etype = e.get("event")
+            
+            if etype in ("order_placed", "order_replaced"):
+                trigger = float(e.get("trigger", 0.0))
+                sl = float(e.get("stop_loss", 0.0))
+                tp = float(e.get("take_profit", 0.0))
+                qty = float(e.get("qty", 0.0))
+                side = str(e.get("side", "")).upper()
+                
+                levels = [
+                    PriceLevel(price=trigger, label="Trigger", color="#0ea5e9", linestyle="-", linewidth=1.2),
+                    PriceLevel(price=sl, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
+                    PriceLevel(price=tp, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+                ]
+                png = await build_signal_chart(pair, tf, levels=levels)
+                icon = "📝" if etype == "order_placed" else "🔄"
+                txt = "выставлен" if etype == "order_placed" else "обновлен"
+                caption = (
+                    f"{icon} Stop-ордер {side} {display_pair(pair)} {txt} ({tf})\n"
+                    f"🎯 Trigger {trigger:.4f} | 🛑 SL {sl:.4f} | ✅ TP {tp:.4f}\n"
+                    f"📦 Qty {qty:.6f}"
+                )
+                if png: await tg_send_photo(uid, png, caption)
+                else: await tg_send(uid, caption)
+
+            elif etype == "position_opened":
                 entry = float(e.get("entry", 0.0))
                 sl = float(e.get("stop_loss", 0.0))
                 tp = float(e.get("take_profit", 0.0))
@@ -509,7 +494,27 @@ async def main():
                 )
                 if opened_png: await tg_send_photo(uid, opened_png, opened_caption)
                 else: await tg_send(uid, opened_caption)
-            elif e.get("event") == "position_closed":
+
+            elif etype == "position_updated":
+                entry = float(e.get("entry", 0.0))
+                sl = float(e.get("stop_loss", 0.0))
+                tp = float(e.get("take_profit", 0.0))
+                qty = float(e.get("qty", 0.0))
+                levels_upd = [
+                    PriceLevel(price=entry, label="Entry", color="#0ea5e9", linestyle="-", linewidth=1.2),
+                    PriceLevel(price=sl, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
+                    PriceLevel(price=tp, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+                ]
+                upd_png = await build_signal_chart(pair, tf, levels=levels_upd)
+                upd_caption = (
+                    f"⚙️ Трейлинг {str(e.get('side', '')).upper()} {display_pair(pair)} ({tf})\n"
+                    f"🎯 Entry {entry:.4f} | 🛑 SL {sl:.4f} | ✅ TP {tp:.4f}\n"
+                    f"📦 Qty {qty:.6f}"
+                )
+                if upd_png: await tg_send_photo(uid, upd_png, upd_caption)
+                else: await tg_send(uid, upd_caption)
+
+            elif etype == "position_closed":
                 balance, total_r, total_u, base = await user_balance(subs_tf, uid, tf)
                 pnl = float(e.get("pnl", 0.0))
                 pnl_emoji = "🟩" if pnl >= 0 else "🟥"
@@ -553,23 +558,30 @@ async def main():
             if channel == "user":
                 fills = data.get("fills", [])
                 if fills:
-                    logger.info("WS: Detected fills! Triggering instant sync for protection.")
-                    # Чтобы не гадать, какой таймфрейм сработал, запускаем синхронизацию для всех
+                    # Собираем монеты и цены последних исполнений
+                    fill_map = {}
+                    for f in fills:
+                        c = str(f.get("coin", "")).upper()
+                        if c: fill_map[c] = float(f.get("px", 0))
+                    
+                    logger.info(f"WS: Detected fills for {list(fill_map.keys())}! Triggering sync.")
                     for tf, engine in all_live_engines.items():
-                        # Нам нужен SubscriptionStore для этого TF
                         curr_subs = SubscriptionStore(subs.r, tf=tf)
-                        # Мы предполагаем, что юзер один (по конфигу), либо берем всех активных
-                        active_users = await curr_subs.get_all_users()
+                        active_users = [int(cfg.telegram_user_id)] if cfg.telegram_user_id else []
                         for uid in active_users:
-                            # Получаем пары этого пользователя
                             user_pairs = await curr_subs.get_user_pairs(uid)
                             for pair in user_pairs:
-                                # Запускаем фоновую задачу синхронизации
-                                async def sync_task(u=uid, p=pair, t=tf, eng=engine, s_tf=curr_subs):
-                                    evt = await eng.sync_state(u, p, None, int(time.time()*1000))
-                                    await handle_engine_events(u, p, t, s_tf, evt)
-                                
-                                asyncio.create_task(sync_task())
+                                if pair.upper() in fill_map:
+                                    px = fill_map[pair.upper()]
+                                    
+                                    async def sync_task(u=uid, p=pair, t=tf, eng=engine, s_tf=curr_subs, cur_px=px):
+                                        try:
+                                            evt = await eng.sync_state(u, p, cur_px, int(time.time()*1000))
+                                            await handle_engine_events(u, p, t, s_tf, evt)
+                                        except Exception as e:
+                                            logger.error(f"WS sync_task error for {p}: {e}")
+                                    
+                                    asyncio.create_task(sync_task())
             
             # Обработка обновлений аккаунта (позиции, баланс) - для чистоты данных
             elif channel == "webData2":

@@ -864,6 +864,7 @@ async def run_telegram(
         pnl = _pnl_realized(pos.side, pos.entry, exit_px, pos.qty)
         realized = float(st.get("realized", 0.0)) + float(pnl)
         st["realized"] = realized
+        cur_t = int(time.time() * 1000)
         trade = {
             "user_id": uid,
             "pair": pair,
@@ -874,13 +875,13 @@ async def run_telegram(
             "qty": pos.qty,
             "pnl": pnl,
             "opened_t": pos.opened_t,
-            "closed_t": int(last.t),
+            "closed_t": cur_t,
             "reason": "MANUAL_CLOSE",
             "cluster_t": pos.cluster_t,
         }
         st["last_trade"] = trade
         st.pop("pos", None)
-        st["last_t"] = int(last.t)
+        st["last_t"] = cur_t
         await trade_state.append_trade(uid, pair, tf, trade, max_len=cfg.trades_max)
         await trade_state.set(uid, pair, tf, st)
         await trade_state.set_pnl(uid, pair, tf, {"unrealized": 0.0, "realized": realized})

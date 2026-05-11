@@ -293,12 +293,12 @@ class ExecutionDryRun:
         candle: Candle,
         cand: SignalCandidate | None,
         risk_pct: float,
-    ) -> tuple[str, PendingOrder | None, PendingOrder | None]:
+    ) -> dict:
         if cand is None:
-            return "skipped", None, None
+            return {"changed": False}
         state = await self.store.get(user_id, pair, self.tf)
         if state.get("pos"):
-            return "skipped", None, None
+            return {"changed": False}
 
         orders = self._get_orders(state)
         existing_same: PendingOrder | None = None
@@ -314,11 +314,11 @@ class ExecutionDryRun:
                 and abs(float(existing_same.take_profit) - float(cand.take_profit)) < eps
             )
             if same:
-                return "unchanged", existing_same, None
+                return {"changed": False}
 
         qty = self._qty_from_risk(cand.entry_trigger, cand.stop_loss, risk_pct=risk_pct)
         if qty <= 0:
-            return "skipped", None, None
+            return {"changed": False}
         o = PendingOrder(
             side=cand.side,
             trigger=cand.entry_trigger,
@@ -327,21 +327,30 @@ class ExecutionDryRun:
             take_profit=cand.take_profit,
             qty=qty,
         )
-        canceled: PendingOrder | None = None
         if existing_same:
-            canceled = existing_same
             orders = [x for x in orders if str(x.side).upper() != str(cand.side).upper()]
             orders.append(o)
             self._set_orders(state, orders)
-            action = "replaced"
+            evt = "order_replaced"
         else:
             orders.append(o)
             self._set_orders(state, orders)
-            action = "placed"
-        state["risk_pct"] = float(risk_pct)
-        state["last_t"] = int(candle.t)
+            evt = "order_placed"
+
         await self.store.set(user_id, pair, self.tf, state)
-        return action, o, canceled
+        return {
+            "changed": True,
+            "events": [{
+                "event": evt,
+                "pair": pair,
+                "tf": self.tf,
+                "side": o.side,
+                "trigger": o.trigger,
+                "stop_loss": o.stop_loss,
+                "take_profit": o.take_profit,
+                "qty": o.qty
+            }]
+        }
 
     async def on_candle(self, user_id: int, pair: str, candle: Candle) -> dict:
         state = await self.store.get(user_id, pair, self.tf)

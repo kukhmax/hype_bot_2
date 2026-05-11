@@ -1,7 +1,8 @@
-from __future__ import annotations
-
 import time
 import aiohttp
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class HyperliquidInfoClient:

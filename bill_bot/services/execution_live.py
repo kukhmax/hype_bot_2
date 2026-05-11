@@ -60,13 +60,13 @@ class ExecutionLiveRun:
         cand: SignalCandidate | None,
         risk_pct: float,
         margin_pct: float = 100.0,
-    ) -> Tuple[str, Optional[PendingOrder], Optional[PendingOrder]]:
+    ) -> dict:
         if cand is None:
-            return "skipped", None, None
+            return {"changed": False}
             
         state = await self.store.get(user_id, pair, self.tf)
         if state.get("pos"):
-            return "skipped", None, None
+            return {"changed": False}
 
         try:
             ustate = await self.hl_info.user_state(self.hl_client.wallet)
@@ -75,10 +75,10 @@ class ExecutionLiveRun:
                 if str(p.get("position", {}).get("coin", "")).upper() == pair.upper():
                     sz = float(p.get("position", {}).get("szi", "0.0"))
                     if abs(sz) > 1e-9:
-                        return "skipped", None, None
+                        return {"changed": False}
         except Exception as e:
             logger.error(f"LiveRun: failed to check exchange position for {pair}: {e}")
-            return "skipped", None, None
+            return {"changed": False}
 
         old_orders = self._get_orders(state)
         canceled_order = old_orders[0] if old_orders else None
@@ -94,13 +94,13 @@ class ExecutionLiveRun:
         balance = await self._get_real_balance()
         if balance <= 0:
             logger.warning("LiveRun: Real balance is 0 or failed to load")
-            return "skipped", None, None
+            return {"changed": False}
 
         margin_amount = balance * (margin_pct / 100.0)
         risk_amount = margin_amount * (risk_pct / 100.0)
         dist = abs(cand.entry_trigger - cand.stop_loss)
         if dist <= 0:
-            return "skipped", None, None
+            return {"changed": False}
 
         sz = risk_amount / dist
         sz_decimals = await self.hl_info.get_sz_decimals(pair) or 0
@@ -108,7 +108,7 @@ class ExecutionLiveRun:
 
         if sz <= 0:
             logger.warning(f"LiveRun: sz=0 after rounding for {pair}")
-            return "skipped", None, None
+            return {"changed": False}
 
         is_buy = cand.side == "LONG"
         # Округляем цену триггера
@@ -136,15 +136,71 @@ class ExecutionLiveRun:
             )
             self._set_orders(state, [po])
             await self.store.set(user_id, pair, self.tf, state)
-            return "replaced" if canceled_order else "placed", po, canceled_order
+            
+            evt_type = "order_replaced" if canceled_order else "order_placed"
+            return {
+                "changed": True,
+                "events": [{
+                    "event": evt_type,
+                    "pair": pair,
+                    "tf": self.tf,
+                    "side": po.side,
+                    "trigger": po.trigger,
+                    "stop_loss": po.stop_loss,
+                    "take_profit": po.take_profit,
+                    "qty": po.qty
+                }]
+            }
 
         except Exception as e:
             logger.error(f"LiveRun: Place Order Failed for {pair}: {e}")
-            return "skipped", None, None
+            return {"changed": False}
 
     async def on_candle(self, user_id: int, pair: str, candle: Candle) -> dict:
-        # Регулярная проверка по завершению свечи
-        return await self.sync_state(user_id, pair, float(candle.c), int(candle.t))
+        # 1. Сначала синхронизируем состояние с биржей (Master Sync)
+        sync_res = await self.sync_state(user_id, pair, float(candle.c), int(candle.t))
+        
+        # 2. Если позиция уже есть и она стабильна, проверяем трейлинг
+        state = await self.store.get(user_id, pair, self.tf)
+        pos_data = state.get("pos")
+        if pos_data:
+            pos = Position.from_dict(pos_data)
+            new_pos = self._apply_trailing(pos, candle)
+            
+            # Если уровни изменились — обновляем на бирже
+            if abs(new_pos.stop_loss - pos.stop_loss) > 1e-9 or abs(new_pos.take_profit - pos.take_profit) > 1e-9:
+                logger.info(f"LiveRun: Trailing update for {pair}: SL {pos.stop_loss}->{new_pos.stop_loss} TP {pos.take_profit}->{new_pos.take_profit}")
+                try:
+                    open_ords = await self.hl_info.open_orders(self.hl_client.wallet)
+                    await self.hl_client.cancel_all_orders(pair, open_ords)
+                    
+                    is_buy_close = (new_pos.side == "SHORT")
+                    tp_type = {"trigger": {"isMarket": True, "triggerPx": round(new_pos.take_profit, 6), "tpsl": "tp"}}
+                    sl_type = {"trigger": {"isMarket": True, "triggerPx": round(new_pos.stop_loss, 6), "tpsl": "sl"}}
+                    
+                    sz_decimals = await self.hl_info.get_sz_decimals(pair) or 0
+                    final_sz = round(new_pos.qty, sz_decimals)
+                    
+                    await self.hl_client.place_order(pair, is_buy_close, final_sz, new_pos.take_profit, tp_type, reduce_only=True)
+                    await self.hl_client.place_order(pair, is_buy_close, final_sz, new_pos.stop_loss, sl_type, reduce_only=True)
+                    
+                    state["pos"] = new_pos.to_dict()
+                    await self.store.set(user_id, pair, self.tf, state)
+                    
+                    # Генерируем событие обновления (для графика в ТГ)
+                    upd_evt = {
+                        "event": "position_updated",
+                        "pair": pair, "side": new_pos.side, "entry": new_pos.entry,
+                        "stop_loss": new_pos.stop_loss, "take_profit": new_pos.take_profit,
+                        "qty": new_pos.qty
+                    }
+                    if "events" not in sync_res: sync_res["events"] = []
+                    sync_res["events"].append(upd_evt)
+                    sync_res["changed"] = True
+                except Exception as e:
+                    logger.error(f"LiveRun: Failed to update trailing for {pair}: {e}")
+                    
+        return sync_res
 
     async def sync_state(self, user_id: int, pair: str, cur_px: float | None, cur_t: int) -> dict:
         state = await self.store.get(user_id, pair, self.tf)
@@ -239,12 +295,32 @@ class ExecutionLiveRun:
         elif local_pos and abs(real_sz) <= 1e-9:
             # На бирже позиции нет, а в боте есть — закрываем в боте
             logger.info(f"LiveRun: Exchange POS closed for {pair}. Syncing local state.")
+            
+            entry = float(local_pos.get("entry", 0.0))
+            exit_px = float(cur_px) if cur_px is not None else entry
+            qty = float(local_pos.get("qty", 0.0))
+            side = str(local_pos.get("side", "")).upper()
+            
+            pnl = 0.0
+            if side == "LONG":
+                pnl = (exit_px - entry) * qty
+            else:
+                pnl = (entry - exit_px) * qty
+            
             state.pop("pos", None)
             changed = True
             events.append({
-                "event": "position_closed", "side": local_pos.get("side"), "entry": local_pos.get("entry"),
-                "exit": cur_px if cur_px else local_pos.get("entry"), "reason": "Sync: Closed on exchange", "closed_t": cur_t,
-                "qty": local_pos.get("qty"), "pnl": 0.0
+                "event": "position_closed", 
+                "pair": pair,
+                "side": side, 
+                "entry": entry,
+                "exit": exit_px, 
+                "stop_loss": local_pos.get("stop_loss"),
+                "take_profit": local_pos.get("take_profit"),
+                "reason": "Sync: Closed on exchange", 
+                "closed_t": cur_t,
+                "qty": qty, 
+                "pnl": pnl
             })
 
         if changed:
