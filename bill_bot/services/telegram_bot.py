@@ -224,6 +224,7 @@ async def run_telegram(
     trade_state: RedisTradeState,
     candle_store: RedisCandleStore,
     fractals_store: RedisFractalStore,
+    hl_client=None,
 ):
     if not cfg.telegram_token:
         logger.warning("TELEGRAM_TOKEN is not set, telegram bot disabled")
@@ -233,6 +234,26 @@ async def run_telegram(
     dp = Dispatcher(storage=MemoryStorage())
     hl = HyperliquidInfoClient()
     last_msg_key = lambda uid: f"tg:last_bot_msg:{int(uid)}"
+
+    async def _build_signal_chart(pair: str, tf: str, levels: list[PriceLevel]) -> bytes | None:
+        candles = await candle_store.get_window(pair, tf)
+        if len(candles) < 5: return None
+        closes = [c.c for c in candles]
+        alli = alligator_ema(closes)
+        fpts = _calc_fractal_points(candles, teeth_series=alli["teeth"])
+        try:
+            return build_chart_png(pair, tf, candles, alli["jaw"], alli["teeth"], alli["lips"], fpts, levels=levels)
+        except Exception as e:
+            logger.info("tg:chart build failed pair=%s tf=%s err=%s", pair, tf, e)
+            return None
+
+    async def _fmt_close_ts_from_open(pair: str, tf: str, open_t_ms: int) -> str:
+        try: open_t_ms = int(open_t_ms)
+        except: return _fmt_ts_ms(open_t_ms)
+        candles = await candle_store.get_window(pair, tf)
+        for c in candles:
+            if int(c.t) == open_t_ms: return _fmt_ts_ms(int(c.T))
+        return _fmt_ts_ms(open_t_ms)
 
     async def _get_base_equity(uid: int) -> float:
         """Return real Hyperliquid balance (perps + spot USDC) in LIVE mode, or virtual_equity in DRY."""
@@ -748,13 +769,9 @@ async def run_telegram(
     async def positions_refresh(cb: CallbackQuery):
         uid = cb.from_user.id
         text, kb = await _build_positions_view(uid)
-        try:
-            await cb.answer()
-        except TelegramNetworkError:
-            pass
-            
-        try:
-            await cb.message.edit_text(text, reply_markup=kb.as_markup())
+        try: await cb.answer()
+        except TelegramNetworkError: pass
+        try: await cb.message.edit_text(text, reply_markup=kb.as_markup())
         except (TelegramBadRequest, TelegramNetworkError) as e:
             if isinstance(e, TelegramBadRequest) and "message is not modified" not in str(e):
                 raise
@@ -762,42 +779,88 @@ async def run_telegram(
     @dp.callback_query(F.data.startswith("ord_cancel:"))
     async def cancel_order(cb: CallbackQuery):
         uid = cb.from_user.id
-        tf, _ = await user_ctx(uid)
+        tf, user_subs = await user_ctx(uid)
+        ucfg = await user_subs.get_user_cfg(uid)
+        mode = str(ucfg.get("trade_mode", "DRY")).upper()
+        
         _, pair, side = cb.data.split(":", 2)
         pair = pair.upper()
         side = side.upper()
         st = await trade_state.get(uid, pair, tf)
         orders = _extract_orders(st)
-        kept = [o for o in orders if o.side.upper() != side]
-        if len(kept) == len(orders):
+        po = next((o for o in orders if o.side.upper() == side), None)
+        
+        if not po:
             await cb.answer("Нет ордера")
             return
+
+        logger.info("tg:cancel_manual user=%s pair=%s mode=%s", uid, pair, mode)
+        
+        if mode == "LIVE" and hl_client:
+            try:
+                open_orders = await hl.open_orders(hl_client.wallet)
+                await hl_client.cancel_all_orders(pair, open_orders)
+                logger.info("tg:cancel_manual_hl_success pair=%s", pair)
+            except Exception as e:
+                logger.error("tg:cancel_manual_hl_fail pair=%s err=%s", pair, e)
+                await cb.answer(f"Ошибка API: {e}")
+                return
+
+        # Обновляем локальный стейт
+        kept = [o for o in orders if o.side.upper() != side]
         st.pop("ord", None)
-        if kept:
-            st["ords"] = [o.to_dict() for o in kept]
-        else:
-            st.pop("ords", None)
+        if kept: st["ords"] = [o.to_dict() for o in kept]
+        else: st.pop("ords", None)
         await trade_state.set(uid, pair, tf, st)
+        
         await cb.answer("Ордер отменён")
+        
+        # Уведомление с графиком
+        levels = [
+            PriceLevel(price=po.trigger, label="Trigger", color="#94a3b8", linestyle="--"),
+            PriceLevel(price=po.stop_loss, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
+            PriceLevel(price=po.take_profit, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
+        ]
+        png = await _build_signal_chart(pair, tf, levels=levels)
+        caption = f"🛑 Ордер {side} {pair} ({tf}) отменён вручную.\n🕒 {_fmt_ts_ms(int(time.time()*1000))}"
+        if png: await cb.message.answer_photo(BufferedInputFile(png, filename="cancel.png"), caption=caption, reply_markup=_msg_controls_menu().as_markup())
+        else: await cb.message.answer(caption, reply_markup=_msg_controls_menu().as_markup())
+
         text, kb = await _build_positions_view(uid)
-        await cb.message.edit_text(text, reply_markup=kb.as_markup())
+        try: await cb.message.edit_text(text, reply_markup=kb.as_markup())
+        except: pass
 
     @dp.callback_query(F.data.startswith("pos_close:"))
     async def close_position(cb: CallbackQuery):
         uid = cb.from_user.id
-        tf, _ = await user_ctx(uid)
+        tf, user_subs = await user_ctx(uid)
+        ucfg = await user_subs.get_user_cfg(uid)
+        mode = str(ucfg.get("trade_mode", "DRY")).upper()
+        
         pair = cb.data.split(":", 1)[1].upper()
         st = await trade_state.get(uid, pair, tf)
         if not st.get("pos"):
             await cb.answer("Нет позиции")
             return
-        candles = await candle_store.get_window(pair, tf)
-        if not candles:
-            await cb.answer("Нет свечей")
-            return
-        last = candles[-1]
         pos = Position.from_dict(st["pos"])
-        exit_px = float(last.c)
+        
+        logger.info("tg:close_manual user=%s pair=%s mode=%s", uid, pair, mode)
+        
+        if mode == "LIVE" and hl_client:
+            try:
+                # Сначала отменяем все SL/TP по этой паре
+                open_orders = await hl.open_orders(hl_client.wallet)
+                await hl_client.cancel_all_orders(pair, open_orders)
+                # Затем закрываем по рынку
+                await hl_client.market_close(pair)
+                logger.info("tg:close_manual_hl_success pair=%s", pair)
+            except Exception as e:
+                logger.error("tg:close_manual_hl_fail pair=%s err=%s", pair, e)
+                await cb.answer(f"Ошибка API: {e}")
+                return
+
+        candles = await candle_store.get_window(pair, tf)
+        exit_px = float(candles[-1].c) if candles else pos.entry
         pnl = _pnl_realized(pos.side, pos.entry, exit_px, pos.qty)
         realized = float(st.get("realized", 0.0)) + float(pnl)
         st["realized"] = realized
@@ -822,8 +885,24 @@ async def run_telegram(
         await trade_state.set(uid, pair, tf, st)
         await trade_state.set_pnl(uid, pair, tf, {"unrealized": 0.0, "realized": realized})
         await cb.answer("Позиция закрыта")
+        
+        # Уведомление с графиком
+        levels = [
+            PriceLevel(price=pos.entry, label="Entry", color="#0ea5e9", linestyle="-"),
+            PriceLevel(price=exit_px, label="Exit", color="#f59e0b", linestyle="--"),
+        ]
+        png = await _build_signal_chart(pair, tf, levels=levels)
+        caption = (
+            f"🏁 Позиция {pos.side} {pair} ({tf}) закрыта вручную.\n"
+            f"🎯 Entry {pos.entry:.4f} → Exit {exit_px:.4f} | PnL {pnl:+.2f}\n"
+            f"🕒 {_fmt_ts_ms(int(time.time()*1000))}"
+        )
+        if png: await cb.message.answer_photo(BufferedInputFile(png, filename="close.png"), caption=caption, reply_markup=_msg_controls_menu().as_markup())
+        else: await cb.message.answer(caption, reply_markup=_msg_controls_menu().as_markup())
+
         text, kb = await _build_positions_view(uid)
-        await cb.message.edit_text(text, reply_markup=kb.as_markup())
+        try: await cb.message.edit_text(text, reply_markup=kb.as_markup())
+        except: pass
 
     @dp.message(F.text == "📉 График")
     async def chart_menu_msg(message: Message, state: FSMContext):

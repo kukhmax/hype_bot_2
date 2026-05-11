@@ -84,10 +84,10 @@ class ExecutionLiveRun:
         canceled_order = old_orders[0] if old_orders else None
         
         try:
-            open_orders = await self.hl_info.open_orders(self.hl_client.wallet)
+            # ВАЖНО: используем hl_client.open_orders(), который видит триггерные ордера (Stop Entry)
+            open_orders = await self.hl_client.open_orders()
             await self.hl_client.cancel_all_orders(pair, open_orders)
-            if old_orders:
-                logger.info(f"LiveRun: Canceled existing orders for {pair} on exchange")
+            logger.info(f"LiveRun: Canceled all exchange orders for {pair}")
         except Exception as e:
             logger.error(f"LiveRun: Failed to cancel open orders for {pair}: {e}")
         
@@ -111,15 +111,17 @@ class ExecutionLiveRun:
             return "skipped", None, None
 
         is_buy = cand.side == "LONG"
-        order_type = {"trigger": {"isMarket": True, "triggerPx": float(cand.entry_trigger), "tpsl": "sl"}}
+        # Округляем цену триггера
+        trigger_px = round(float(cand.entry_trigger), 6)
+        order_type = {"trigger": {"isMarket": True, "triggerPx": trigger_px, "tpsl": "sl"}}
         
         try:
-            logger.info(f"LiveRun: Placing Stop Entry on {pair}: buy={is_buy} sz={sz} px={cand.entry_trigger}")
+            logger.info(f"LiveRun: Placing Stop Entry on {pair}: buy={is_buy} sz={sz} px={trigger_px}")
             res = await self.hl_client.place_order(
                 coin=pair,
                 is_buy=is_buy,
                 sz=sz,
-                limit_px=cand.entry_trigger,
+                limit_px=trigger_px,
                 order_type=order_type
             )
             logger.info(f"LiveRun: Place Order response: {res}")
@@ -170,23 +172,31 @@ class ExecutionLiveRun:
             if po:
                 logger.info(f"LiveRun: Detected new position on {pair}, placing TP/SL.")
                 try:
-                    tp_type = {"trigger": {"isMarket": True, "triggerPx": float(po.take_profit), "tpsl": "tp"}}
-                    sl_type = {"trigger": {"isMarket": True, "triggerPx": float(po.stop_loss), "tpsl": "sl"}}
-                    is_buy_close = not (po.side == "LONG")
+                    # Округляем цены SL/TP
+                    tp_px = round(float(po.take_profit), 6)
+                    sl_px = round(float(po.stop_loss), 6)
                     
-                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), float(po.take_profit), tp_type, reduce_only=True)
-                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), float(po.stop_loss), sl_type, reduce_only=True)
+                    tp_type = {"trigger": {"isMarket": True, "triggerPx": tp_px, "tpsl": "tp"}}
+                    sl_type = {"trigger": {"isMarket": True, "triggerPx": sl_px, "tpsl": "sl"}}
+                    is_buy_close = not (real_sz > 0) # Если real_sz > 0 (LONG), то закрываем продажей (is_buy=False)
+                    
+                    # Отменяем старые ордера (напр. Stop Entry) перед постановкой SL/TP
+                    cur_orders = await self.hl_client.open_orders()
+                    await self.hl_client.cancel_all_orders(pair, cur_orders)
+                    
+                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), tp_px, tp_type, reduce_only=True)
+                    await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), sl_px, sl_type, reduce_only=True)
                     
                     state["pos"] = Position(
-                        side=po.side, entry=real_entry, stop_loss=po.stop_loss, take_profit=po.take_profit,
-                        tp0=po.take_profit, tr1_done=False, tr2_done=False, tr_steps=0,
+                        side="LONG" if real_sz > 0 else "SHORT", entry=real_entry, stop_loss=sl_px, take_profit=tp_px,
+                        tp0=tp_px, tr1_done=False, tr2_done=False, tr_steps=0,
                         qty=abs(real_sz), opened_t=candle.t, cluster_t=po.cluster_t
                     ).to_dict()
                     self._set_orders(state, [])
                     changed = True
                     events.append({
-                        "event": "position_opened", "pair": pair, "side": po.side, "entry": real_entry,
-                        "stop_loss": po.stop_loss, "take_profit": po.take_profit, "qty": abs(real_sz),
+                        "event": "position_opened", "pair": pair, "side": state["pos"]["side"], "entry": real_entry,
+                        "stop_loss": sl_px, "take_profit": tp_px, "qty": abs(real_sz),
                         "opened_t": candle.t
                     })
                 except Exception as e:

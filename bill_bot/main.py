@@ -391,13 +391,11 @@ async def main():
                     risk_pct,
                 )
 
-    async def market_loop(tf: str):
+    async def market_loop(tf: str, hl_exchange=None):
         exec_engine_dry = ExecutionDryRun(trade_state, tf, virtual_equity=cfg.virtual_equity)
         exec_engine_live = None
-        if cfg.hyperliquid_wallet_address and cfg.hyperliquid_private_key:
-            from bill_bot.services.hyperliquid_api import HyperliquidExchangeClient
+        if hl_exchange:
             from bill_bot.services.execution_live import ExecutionLiveRun
-            hl_exchange = HyperliquidExchangeClient(cfg.hyperliquid_wallet_address, cfg.hyperliquid_private_key)
             exec_engine_live = ExecutionLiveRun(store=trade_state, tf=tf, hl_client=hl_exchange, hl_info=hl)
 
         subs_tf = SubscriptionStore(r, tf=tf)
@@ -535,8 +533,13 @@ async def main():
                     logger.error("Market loop error: pair=%s tf=%s err=%s", pair, tf, e)
             await asyncio.sleep(cfg.poll_seconds)
 
+    hl_exchange = None
+    if cfg.hyperliquid_wallet_address and cfg.hyperliquid_private_key:
+        from bill_bot.services.hyperliquid_api import HyperliquidExchangeClient
+        hl_exchange = HyperliquidExchangeClient(cfg.hyperliquid_wallet_address, cfg.hyperliquid_private_key)
+
     timeframes = list(dict.fromkeys([*cfg.timeframes_available, cfg.timeframe]))
-    tasks = [asyncio.create_task(market_loop(tf)) for tf in timeframes]
+    tasks = [asyncio.create_task(market_loop(tf, hl_exchange)) for tf in timeframes]
     
     if cfg.hyperliquid_wallet_address:
         from bill_bot.services.hyperliquid_ws import HyperliquidWebsocketClient
@@ -551,7 +554,7 @@ async def main():
         tasks.append(asyncio.create_task(ws_client.start()))
 
     if cfg.telegram_token:
-        tasks.append(asyncio.create_task(run_telegram(cfg, subs, trade_state, store, fractals_store)))
+        tasks.append(asyncio.create_task(run_telegram(cfg, subs, trade_state, store, fractals_store, hl_exchange)))
     await asyncio.gather(*tasks)
 
 
