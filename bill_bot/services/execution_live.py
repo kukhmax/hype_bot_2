@@ -188,14 +188,7 @@ class ExecutionLiveRun:
                     sz_decimals = await self.hl_info.get_sz_decimals(pair) or 0
                     final_sz = round(abs(real_sz), sz_decimals)
                     
-                    logger.info(f"LiveRun: Placing TP on {pair}: {tp_px} sz={final_sz}")
-                    tp_res = await self.hl_client.place_order(pair, is_buy_close, final_sz, tp_px, tp_type, reduce_only=True)
-                    logger.info(f"LiveRun: TP Response: {tp_res}")
-
-                    logger.info(f"LiveRun: Placing SL on {pair}: {sl_px} sz={final_sz}")
-                    sl_res = await self.hl_client.place_order(pair, is_buy_close, final_sz, sl_px, sl_type, reduce_only=True)
-                    logger.info(f"LiveRun: SL Response: {sl_res}")
-                    
+                    # Сначала обновляем состояние, чтобы бот знал о позиции, даже если SL/TP не поставятся сразу
                     state["pos"] = Position(
                         side="LONG" if real_sz > 0 else "SHORT", entry=real_entry, stop_loss=sl_px, take_profit=tp_px,
                         tp0=tp_px, tr1_done=False, tr2_done=False, tr_steps=0,
@@ -203,6 +196,14 @@ class ExecutionLiveRun:
                     ).to_dict()
                     self._set_orders(state, [])
                     changed = True
+
+                    logger.info(f"LiveRun: Placing TP on {pair}: {tp_px} sz={final_sz}")
+                    tp_res = await self.hl_client.place_order(pair, is_buy_close, final_sz, tp_px, tp_type, reduce_only=True)
+                    logger.info(f"LiveRun: TP Response: {tp_res}")
+
+                    logger.info(f"LiveRun: Placing SL on {pair}: {sl_px} sz={final_sz}")
+                    sl_res = await self.hl_client.place_order(pair, is_buy_close, final_sz, sl_px, sl_type, reduce_only=True)
+                    logger.info(f"LiveRun: SL Response: {sl_res}")
                     events.append({
                         "event": "position_opened", "pair": pair, "side": state["pos"]["side"], "entry": real_entry,
                         "stop_loss": sl_px, "take_profit": tp_px, "qty": abs(real_sz),
