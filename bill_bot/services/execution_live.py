@@ -81,13 +81,25 @@ class ExecutionLiveRun:
             return {"changed": False}
 
         old_orders = self._get_orders(state)
-        canceled_order = old_orders[0] if old_orders else None
+        canceled_order = next((o for o in old_orders if o.side == cand.side), None)
         
         try:
             # ВАЖНО: используем hl_info.open_orders(), который видит триггерные ордера (frontendOpenOrders)
             open_orders = await self.hl_info.open_orders(self.hl_client.wallet)
-            await self.hl_client.cancel_all_orders(pair, open_orders)
-            logger.info(f"LiveRun: Canceled all exchange orders for {pair}")
+            # Отменяем только ордера той же стороны (LONG -> B, SHORT -> S), 
+            # чтобы позволить одновременное нахождение противоположных стоп-ордеров.
+            side_to_cancel = "B" if cand.side == "LONG" else "S"
+            orders_to_cancel = [
+                o for o in open_orders 
+                if str(o.get("coin")).upper() == pair.upper() 
+                and o.get("side") == side_to_cancel
+                and o.get("isTrigger", False)
+                # Мы НЕ отменяем TP/SL (isPositionTpsl обычно True для них в frontendOpenOrders)
+                and not o.get("isPositionTpsl", False)
+            ]
+            if orders_to_cancel:
+                await self.hl_client.cancel_all_orders(pair, orders_to_cancel)
+                logger.info(f"LiveRun: Canceled {len(orders_to_cancel)} exchange orders for {pair} side {cand.side}")
         except Exception as e:
             logger.error(f"LiveRun: Failed to cancel open orders for {pair}: {e}")
         
@@ -132,9 +144,13 @@ class ExecutionLiveRun:
                 cluster_t=cand.cluster_t,
                 stop_loss=cand.stop_loss,
                 take_profit=cand.take_profit,
-                qty=sz
+                qty=sz,
+                rr=cand.rr
             )
-            self._set_orders(state, [po])
+            # Сохраняем, оставляя ордера другой стороны
+            new_ords = [o for o in old_orders if o.side != po.side]
+            new_ords.append(po)
+            self._set_orders(state, new_ords)
             await self.store.set(user_id, pair, self.tf, state)
             
             evt_type = "order_replaced" if canceled_order else "order_placed"
@@ -242,11 +258,23 @@ class ExecutionLiveRun:
             if needs_update:
                 logger.info(f"✅ LiveRun: Syncing POS for {pair}. Exchange side={current_side} sz={abs(real_sz)}")
                 
-                # Ищем параметры SL/TP (сначала из локального ордера, потом с биржи)
-                po = local_ords[0] if local_ords else None
+                # Ищем параметры SL/TP (сначала из локального ордера той же стороны, потом с биржи)
+                po = next((o for o in local_ords if o.side == current_side), None)
+                
                 sl_px = round(float(po.stop_loss), 6) if po else 0.0
                 tp_px = round(float(po.take_profit), 6) if po else 0.0
                 
+                # Если мы только что обнаружили открытие позиции (нет local_pos), 
+                # пересчитываем Тейк-Профит от РЕАЛЬНОЙ точки входа, чтобы сохранить RR.
+                if not local_pos and po and real_entry > 0:
+                    rr = float(po.rr)
+                    dist_sl = abs(real_entry - sl_px)
+                    if current_side == "LONG":
+                        tp_px = round(real_entry + rr * dist_sl, 6)
+                    else:
+                        tp_px = round(real_entry - rr * dist_sl, 6)
+                    logger.info(f" ✅ LiveRun: Recalculated TP for new position {pair} based on REAL entry {real_entry}: TP={tp_px} (RR={rr})")
+
                 # Если локально нет цен, пробуем найти открытые триггерные ордера на бирже
                 open_ords = await self.hl_info.open_orders(self.hl_client.wallet)
                 if sl_px == 0 or tp_px == 0:
@@ -260,7 +288,8 @@ class ExecutionLiveRun:
                 state["pos"] = Position(
                     side=current_side, entry=real_entry, stop_loss=sl_px, take_profit=tp_px,
                     tp0=tp_px, tr1_done=False, tr2_done=False, tr_steps=0,
-                    qty=abs(real_sz), opened_t=cur_t, cluster_t=po.cluster_t if po else cur_t
+                    qty=abs(real_sz), opened_t=cur_t, cluster_t=po.cluster_t if po else cur_t,
+                    rr=po.rr if po else 1.5
                 ).to_dict()
                 self._set_orders(state, []) # Очищаем ордера
                 changed = True

@@ -17,6 +17,7 @@ class PendingOrder:
     stop_loss: float
     take_profit: float
     qty: float
+    rr: float = 1.5
 
     def to_dict(self) -> dict:
         return {
@@ -26,6 +27,7 @@ class PendingOrder:
             "stop_loss": self.stop_loss,
             "take_profit": self.take_profit,
             "qty": self.qty,
+            "rr": self.rr,
         }
 
     @staticmethod
@@ -37,6 +39,7 @@ class PendingOrder:
             stop_loss=float(d["stop_loss"]),
             take_profit=float(d["take_profit"]),
             qty=float(d["qty"]),
+            rr=float(d.get("rr", 1.5)),
         )
 
 
@@ -53,6 +56,7 @@ class Position:
     qty: float
     opened_t: int
     cluster_t: int
+    rr: float = 1.5
 
     def to_dict(self) -> dict:
         return {
@@ -67,6 +71,7 @@ class Position:
             "qty": self.qty,
             "opened_t": self.opened_t,
             "cluster_t": self.cluster_t,
+            "rr": self.rr,
         }
 
     @staticmethod
@@ -84,6 +89,7 @@ class Position:
             qty=float(d["qty"]),
             opened_t=int(d["opened_t"]),
             cluster_t=int(d["cluster_t"]),
+            rr=float(d.get("rr", 1.5)),
         )
 
 
@@ -201,7 +207,7 @@ class ExecutionDryRun:
                 if h < float(cur.entry) + 0.95 * dist2:
                     break
                 new_sl = float(cur.entry) + 0.85 * dist2
-                new_tp = float(cur.entry) + 1.50 * dist2
+                new_tp = float(cur.entry) + cur.rr * dist2
                 cur = Position(
                     side=cur.side,
                     entry=cur.entry,
@@ -214,6 +220,7 @@ class ExecutionDryRun:
                     qty=cur.qty,
                     opened_t=cur.opened_t,
                     cluster_t=cur.cluster_t,
+                    rr=cur.rr
                 )
                 steps += 1
             return cur
@@ -243,7 +250,7 @@ class ExecutionDryRun:
             if l > float(cur.entry) - 0.95 * dist2:
                 break
             new_sl = float(cur.entry) - 0.85 * dist2
-            new_tp = float(cur.entry) - 1.50 * dist2
+            new_tp = float(cur.entry) - cur.rr * dist2
             cur = Position(
                 side=cur.side,
                 entry=cur.entry,
@@ -256,6 +263,7 @@ class ExecutionDryRun:
                 qty=cur.qty,
                 opened_t=cur.opened_t,
                 cluster_t=cur.cluster_t,
+                rr=cur.rr
             )
             steps += 1
         return cur
@@ -379,6 +387,7 @@ class ExecutionDryRun:
                 qty=o.qty,
                 opened_t=candle.t,
                 cluster_t=o.cluster_t,
+                rr=o.rr
             )
 
         if pos_raw:
