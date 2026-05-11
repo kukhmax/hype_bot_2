@@ -154,7 +154,6 @@ class ExecutionLiveRun:
             logger.error(f"LiveRun sync_state API error for {pair}: {e}")
             return {"changed": False}
 
-        # В ответе assetPositions монета может быть "LTC"
         positions = ustate.get("assetPositions", [])
         real_sz = 0.0
         real_entry = 0.0
@@ -171,69 +170,87 @@ class ExecutionLiveRun:
         local_pos = state.get("pos")
         local_ords = self._get_orders(state)
 
-        if not local_pos and abs(real_sz) > 1e-9:
-            po = local_ords[0] if local_ords else None
-            if po:
-                logger.info(f"LiveRun: Detected new position on {pair}, placing TP/SL.")
-                try:
-                    # Округляем цены SL/TP
-                    tp_px = round(float(po.take_profit), 6)
-                    sl_px = round(float(po.stop_loss), 6)
-                    
-                    tp_type = {"trigger": {"isMarket": True, "triggerPx": tp_px, "tpsl": "tp"}}
-                    sl_type = {"trigger": {"isMarket": True, "triggerPx": sl_px, "tpsl": "sl"}}
-                    is_buy_close = not (real_sz > 0)
-                    
-                    # Отменяем старые ордера (напр. Stop Entry) перед постановкой SL/TP
-                    cur_orders = await self.hl_info.open_orders(self.hl_client.wallet)
-                    await self.hl_client.cancel_all_orders(pair, cur_orders)
-                    
-                    # Округляем объем до разрешенного количества знаков
-                    sz_decimals = await self.hl_info.get_sz_decimals(pair) or 0
-                    final_sz = round(abs(real_sz), sz_decimals)
-                    
-                    # Сначала обновляем состояние, чтобы бот знал о позиции, даже если SL/TP не поставятся сразу
-                    state["pos"] = Position(
-                        side="LONG" if real_sz > 0 else "SHORT", entry=real_entry, stop_loss=sl_px, take_profit=tp_px,
-                        tp0=tp_px, tr1_done=False, tr2_done=False, tr_steps=0,
-                        qty=abs(real_sz), opened_t=cur_t, cluster_t=po.cluster_t
-                    ).to_dict()
-                    self._set_orders(state, [])
-                    changed = True
+        # ПРИНЦИП: Биржа — единственный источник правды для позиций
+        if abs(real_sz) > 1e-9:
+            current_side = "LONG" if real_sz > 0 else "SHORT"
+            
+            # Если позиции в боте нет ИЛИ она другого направления/объема — синхронизируем
+            needs_update = False
+            if not local_pos:
+                needs_update = True
+            elif local_pos.get("side") != current_side:
+                needs_update = True
+            elif abs(float(local_pos.get("qty", 0)) - abs(real_sz)) > 1e-6:
+                needs_update = True
 
-                    logger.info(f"LiveRun: Placing TP on {pair}: {tp_px} sz={final_sz}")
-                    tp_res = await self.hl_client.place_order(pair, is_buy_close, final_sz, tp_px, tp_type, reduce_only=True)
-                    logger.info(f"LiveRun: TP Response: {tp_res}")
+            if needs_update:
+                logger.info(f"LiveRun: Syncing POS for {pair}. Exchange side={current_side} sz={abs(real_sz)}")
+                
+                # Ищем параметры SL/TP (сначала из локального ордера, потом с биржи)
+                po = local_ords[0] if local_ords else None
+                sl_px = round(float(po.stop_loss), 6) if po else 0.0
+                tp_px = round(float(po.take_profit), 6) if po else 0.0
+                
+                # Если локально нет цен, пробуем найти открытые триггерные ордера на бирже
+                open_ords = await self.hl_info.open_orders(self.hl_client.wallet)
+                if sl_px == 0 or tp_px == 0:
+                    for eo in open_ords:
+                        if str(eo.get("coin")).upper() == pair.upper() and eo.get("isTrigger"):
+                            px = round(float(eo.get("triggerPx", 0)), 6)
+                            if eo.get("tpsl") == "tp": tp_px = px
+                            if eo.get("tpsl") == "sl": sl_px = px
 
-                    logger.info(f"LiveRun: Placing SL on {pair}: {sl_px} sz={final_sz}")
-                    sl_res = await self.hl_client.place_order(pair, is_buy_close, final_sz, sl_px, sl_type, reduce_only=True)
-                    logger.info(f"LiveRun: SL Response: {sl_res}")
-                    events.append({
-                        "event": "position_opened", "pair": pair, "side": state["pos"]["side"], "entry": real_entry,
-                        "stop_loss": sl_px, "take_profit": tp_px, "qty": abs(real_sz),
-                        "opened_t": cur_t
-                    })
-                except Exception as e:
-                    logger.error(f"LiveRun: Failed to place TP/SL on entry: {e}")
+                # Сохраняем новое состояние
+                state["pos"] = Position(
+                    side=current_side, entry=real_entry, stop_loss=sl_px, take_profit=tp_px,
+                    tp0=tp_px, tr1_done=False, tr2_done=False, tr_steps=0,
+                    qty=abs(real_sz), opened_t=cur_t, cluster_t=po.cluster_t if po else cur_t
+                ).to_dict()
+                self._set_orders(state, []) # Очищаем ордера
+                changed = True
+                
+                # Если мы нашли параметры, но на бирже нет SL/TP — выставляем их
+                if sl_px > 0 and tp_px > 0:
+                    # Проверяем, есть ли уже эти ордера на бирже
+                    has_sl = any(o.get("tpsl") == "sl" and str(o.get("coin")).upper() == pair.upper() for o in open_ords)
+                    has_tp = any(o.get("tpsl") == "tp" and str(o.get("coin")).upper() == pair.upper() for o in open_ords)
+                    
+                    if not has_sl or not has_tp:
+                        try:
+                            # Перед выставлением новых SL/TP отменяем все старые по этой монете
+                            await self.hl_client.cancel_all_orders(pair, open_ords)
+                            
+                            is_buy_close = (current_side == "SHORT")
+                            tp_type = {"trigger": {"isMarket": True, "triggerPx": tp_px, "tpsl": "tp"}}
+                            sl_type = {"trigger": {"isMarket": True, "triggerPx": sl_px, "tpsl": "sl"}}
+                            
+                            sz_decimals = await self.hl_info.get_sz_decimals(pair) or 0
+                            final_sz = round(abs(real_sz), sz_decimals)
+                            
+                            logger.info(f"LiveRun: Placing missing TP/SL for {pair}: TP={tp_px} SL={sl_px}")
+                            await self.hl_client.place_order(pair, is_buy_close, final_sz, tp_px, tp_type, reduce_only=True)
+                            await self.hl_client.place_order(pair, is_buy_close, final_sz, sl_px, sl_type, reduce_only=True)
+                        except Exception as e:
+                            logger.error(f"LiveRun: Failed to place missing TP/SL on sync: {e}")
+
+                events.append({
+                    "event": "position_opened", "pair": pair, "side": current_side, "entry": real_entry,
+                    "stop_loss": sl_px, "take_profit": tp_px, "qty": abs(real_sz), "opened_t": cur_t
+                })
 
         elif local_pos and abs(real_sz) <= 1e-9:
-            logger.info(f"LiveRun: Detected closed position on {pair}.")
+            # На бирже позиции нет, а в боте есть — закрываем в боте
+            logger.info(f"LiveRun: Exchange POS closed for {pair}. Syncing local state.")
             state.pop("pos", None)
             changed = True
             events.append({
                 "event": "position_closed", "side": local_pos.get("side"), "entry": local_pos.get("entry"),
-                "exit": cur_px if cur_px else local_pos.get("entry"), 
-                "stop_loss": local_pos.get("stop_loss"), "take_profit": local_pos.get("take_profit"),
-                "qty": local_pos.get("qty"), "pnl": 0.0, "reason": "Closed on exchange", "closed_t": cur_t
+                "exit": cur_px if cur_px else local_pos.get("entry"), "reason": "Sync: Closed on exchange", "closed_t": cur_t,
+                "qty": local_pos.get("qty"), "pnl": 0.0
             })
-
-        elif local_pos and abs(real_sz) > 1e-9:
-            # Трейлинг работает только по свечам (candle), поэтому пропускаем его при force sync
-            pass
 
         if changed:
             await self.store.set(user_id, pair, self.tf, state)
-
         return {"changed": changed, "events": events}
 
         return {"changed": changed, "events": events}
