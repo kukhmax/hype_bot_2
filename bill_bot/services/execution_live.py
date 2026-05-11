@@ -52,6 +52,22 @@ class ExecutionLiveRun:
         logger.info(f"LiveRun: Real balance (perps+spot) = {total:.2f}")
         return total
 
+    def round_price(self, price: float) -> float:
+        """Округление цены согласно правилам Hyperliquid (5 значимых цифр)"""
+        if not price or price <= 0:
+            return price
+        import math
+        try:
+            # 5 значимых цифр
+            precision = 5
+            order = math.floor(math.log10(abs(price)))
+            factor = 10 ** (precision - 1 - order)
+            rounded = round(price * factor) / factor
+            # Ограничиваем 6 знаками после запятой (лимит протокола)
+            return round(rounded, 6)
+        except Exception:
+            return round(price, 6)
+
     async def maybe_place_order(
         self,
         user_id: int,
@@ -218,16 +234,16 @@ class ExecutionLiveRun:
                     sz_decimals = await self.hl_info.get_sz_decimals(pair) or 0
                     final_sz = round(new_pos.qty, sz_decimals)
                     
-                    logger.info(f"LiveRun: Placing trailing TP for {pair}: {new_pos.take_profit} (sz={final_sz})")
+                    logger.info(f"LiveRun: Placing trailing TP for {pair}: {tp_px} (sz={final_sz})")
                     try:
-                        res_tp = await self.hl_client.place_order(pair, is_buy_close, final_sz, new_pos.take_profit, tp_type, reduce_only=True)
+                        res_tp = await self.hl_client.place_order(pair, is_buy_close, final_sz, tp_px, tp_type, reduce_only=True)
                         logger.info(f"LiveRun: Trailing TP response: {res_tp}")
                     except Exception as e:
                         logger.error(f"LiveRun: Failed to place trailing TP for {pair}: {e}")
 
-                    logger.info(f"LiveRun: Placing trailing SL for {pair}: {new_pos.stop_loss} (sz={final_sz})")
+                    logger.info(f"LiveRun: Placing trailing SL for {pair}: {sl_px} (sz={final_sz})")
                     try:
-                        res_sl = await self.hl_client.place_order(pair, is_buy_close, final_sz, new_pos.stop_loss, sl_type, reduce_only=True)
+                        res_sl = await self.hl_client.place_order(pair, is_buy_close, final_sz, sl_px, sl_type, reduce_only=True)
                         logger.info(f"LiveRun: Trailing SL response: {res_sl}")
                     except Exception as e:
                         logger.error(f"LiveRun: Failed to place trailing SL for {pair}: {e}")
