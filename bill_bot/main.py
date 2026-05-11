@@ -398,7 +398,7 @@ async def main():
           from bill_bot.services.hyperliquid_api import HyperliquidInfoClient
           hl = HyperliquidInfoClient()
           from bill_bot.services.execution_live import ExecutionLiveRun
-          exec_engine_dry = ExecutionDryRun(store=trade_state, tf=tf)
+          exec_engine_dry = ExecutionDryRun(trade_state, tf, virtual_equity=cfg.virtual_equity)
           exec_engine_live = ExecutionLiveRun(store=trade_state, tf=tf, hl_client=hl_exchange, hl_info=hl)
           all_live_engines[tf] = exec_engine_live
         
