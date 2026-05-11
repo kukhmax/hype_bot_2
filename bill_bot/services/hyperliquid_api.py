@@ -136,7 +136,15 @@ class HyperliquidExchangeClient:
         func = getattr(self.exchange, func_name, None)
         if func is None:
             raise AttributeError(f"Exchange object has no attribute '{func_name}'")
-        return await asyncio.to_thread(func, *args, **kwargs)
+        
+        res = await asyncio.to_thread(func, *args, **kwargs)
+        if isinstance(res, dict):
+            status = res.get("status")
+            if status != "ok":
+                logger.warning(f"HL API Warning ({func_name}): {res}")
+            else:
+                logger.info(f"HL API Response ({func_name}): {res}")
+        return res
 
     async def place_order(self, coin: str, is_buy: bool, sz: float, limit_px: float, order_type: dict, reduce_only: bool = False) -> dict:
         # Принудительно приводим к нужным типам, чтобы избежать ошибок форматирования в SDK

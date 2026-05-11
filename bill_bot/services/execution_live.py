@@ -208,13 +208,11 @@ class ExecutionLiveRun:
                 ).to_dict()
                 self._set_orders(state, []) # Очищаем ордера
                 changed = True
-                
                 # Если мы нашли параметры, но на бирже нет SL/TP — выставляем их
                 if sl_px > 0 and tp_px > 0:
-                    # Проверяем, есть ли уже эти ордера на бирже
                     has_sl = any(o.get("tpsl") == "sl" and str(o.get("coin")).upper() == pair.upper() for o in open_ords)
                     has_tp = any(o.get("tpsl") == "tp" and str(o.get("coin")).upper() == pair.upper() for o in open_ords)
-                    
+                    logger.info(f"LiveRun: {pair} check: has_sl={has_sl}, has_tp={has_tp}, sl_px={sl_px}, tp_px={tp_px}")
                     if not has_sl or not has_tp:
                         try:
                             # Перед выставлением новых SL/TP отменяем все старые по этой монете
