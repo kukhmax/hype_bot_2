@@ -207,7 +207,7 @@ class ExecutionLiveRun:
                     to_cancel = [o for o in open_ords if str(o.get("coin")).upper() == pair.upper()]
                     if to_cancel:
                         await self.hl_client.cancel_all_orders(pair, to_cancel)
-                        logger.info(f"LiveRun: Canceled ALL {len(to_cancel)} orders for {pair} during trailing update")
+                        logger.info(f"  ✅LiveRun: Canceled ALL {len(to_cancel)} orders for {pair} during trailing update")
                     
                     is_buy_close = (new_pos.side == "SHORT")
                     tp_type = {"trigger": {"isMarket": True, "triggerPx": round(new_pos.take_profit, 6), "tpsl": "tp"}}
