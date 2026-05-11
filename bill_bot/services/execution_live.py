@@ -203,11 +203,11 @@ class ExecutionLiveRun:
                 logger.info(f" ✅  LiveRun: Trailing update for {pair}: SL {pos.stop_loss}->{new_pos.stop_loss} TP {pos.take_profit}->{new_pos.take_profit}")
                 try:
                     open_ords = await self.hl_info.open_orders(self.hl_client.wallet)
-                    # Отменяем только TP/SL для текущей позиции
-                    to_cancel = [o for o in open_ords if str(o.get("coin")).upper() == pair.upper() and o.get("isPositionTpsl", False)]
+                    # По просьбе пользователя: при трейлинге отменяем ВООБЩЕ ВСЕ ордера по этой паре
+                    to_cancel = [o for o in open_ords if str(o.get("coin")).upper() == pair.upper()]
                     if to_cancel:
                         await self.hl_client.cancel_all_orders(pair, to_cancel)
-                        logger.info(f"LiveRun: Canceled {len(to_cancel)} TP/SL orders for trailing update")
+                        logger.info(f"LiveRun: Canceled ALL {len(to_cancel)} orders for {pair} during trailing update")
                     
                     is_buy_close = (new_pos.side == "SHORT")
                     tp_type = {"trigger": {"isMarket": True, "triggerPx": round(new_pos.take_profit, 6), "tpsl": "tp"}}
@@ -330,12 +330,11 @@ class ExecutionLiveRun:
                     logger.info(f"LiveRun: {pair} check: has_sl={has_sl}, has_tp={has_tp}, sl_px={sl_px}, tp_px={tp_px}")
                     if not has_sl or not has_tp:
                         try:
-                            # Перед выставлением новых SL/TP отменяем только СТАРЫЕ TP/SL по этой монете,
-                            # не трогая ордера на вход (Stop Entry).
-                            to_cancel = [o for o in open_ords if str(o.get("coin")).upper() == pair.upper() and o.get("isPositionTpsl", False)]
+                            # По просьбе пользователя: при открытии позиции/синхронизации отменяем ВООБЩЕ ВСЕ ордера по этой паре
+                            to_cancel = [o for o in open_ords if str(o.get("coin")).upper() == pair.upper()]
                             if to_cancel:
                                 await self.hl_client.cancel_all_orders(pair, to_cancel)
-                                logger.info(f"LiveRun: Canceled {len(to_cancel)} old TP/SL orders on sync")
+                                logger.info(f"LiveRun: Canceled ALL {len(to_cancel)} old orders on sync for {pair}")
                             
                             is_buy_close = (current_side == "SHORT")
                             tp_type = {"trigger": {"isMarket": True, "triggerPx": tp_px, "tpsl": "tp"}}
