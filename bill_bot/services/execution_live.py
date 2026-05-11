@@ -139,7 +139,7 @@ class ExecutionLiveRun:
 
         is_buy = cand.side == "LONG"
         # Округляем цену триггера
-        trigger_px = round(float(cand.entry_trigger), 6)
+        trigger_px = self.round_price(float(cand.entry_trigger))
         order_type = {"trigger": {"isMarket": True, "triggerPx": trigger_px, "tpsl": "sl"}}
         
         try:
@@ -210,8 +210,10 @@ class ExecutionLiveRun:
                         logger.info(f"  ✅LiveRun: Canceled ALL {len(to_cancel)} orders for {pair} during trailing update")
                     
                     is_buy_close = (new_pos.side == "SHORT")
-                    tp_type = {"trigger": {"isMarket": True, "triggerPx": round(new_pos.take_profit, 6), "tpsl": "tp"}}
-                    sl_type = {"trigger": {"isMarket": True, "triggerPx": round(new_pos.stop_loss, 6), "tpsl": "sl"}}
+                    tp_px = self.round_price(new_pos.take_profit)
+                    sl_px = self.round_price(new_pos.stop_loss)
+                    tp_type = {"trigger": {"isMarket": True, "triggerPx": tp_px, "tpsl": "tp"}}
+                    sl_type = {"trigger": {"isMarket": True, "triggerPx": sl_px, "tpsl": "sl"}}
                     
                     sz_decimals = await self.hl_info.get_sz_decimals(pair) or 0
                     final_sz = round(new_pos.qty, sz_decimals)
@@ -291,8 +293,8 @@ class ExecutionLiveRun:
                 # Ищем параметры SL/TP (сначала из локального ордера той же стороны, потом с биржи)
                 po = next((o for o in local_ords if o.side == current_side), None)
                 
-                sl_px = round(float(po.stop_loss), 6) if po else 0.0
-                tp_px = round(float(po.take_profit), 6) if po else 0.0
+                sl_px = self.round_price(float(po.stop_loss)) if po else 0.0
+                tp_px = self.round_price(float(po.take_profit)) if po else 0.0
                 
                 # Если мы только что обнаружили открытие позиции (нет local_pos), 
                 # пересчитываем Тейк-Профит от РЕАЛЬНОЙ точки входа, чтобы сохранить RR.
@@ -300,9 +302,9 @@ class ExecutionLiveRun:
                     rr = float(po.rr)
                     dist_sl = abs(real_entry - sl_px)
                     if current_side == "LONG":
-                        tp_px = round(real_entry + rr * dist_sl, 6)
+                        tp_px = self.round_price(real_entry + rr * dist_sl)
                     else:
-                        tp_px = round(real_entry - rr * dist_sl, 6)
+                        tp_px = self.round_price(real_entry - rr * dist_sl)
                     logger.info(f" ✅ LiveRun: Recalculated TP for new position {pair} based on REAL entry {real_entry}: TP={tp_px} (RR={rr})")
 
                 # Если локально нет цен, пробуем найти открытые триггерные ордера на бирже
@@ -310,7 +312,7 @@ class ExecutionLiveRun:
                 if sl_px == 0 or tp_px == 0:
                     for eo in open_ords:
                         if str(eo.get("coin")).upper() == pair.upper() and eo.get("isTrigger"):
-                            px = round(float(eo.get("triggerPx", 0)), 6)
+                            px = self.round_price(float(eo.get("triggerPx", 0)))
                             if eo.get("tpsl") == "tp": tp_px = px
                             if eo.get("tpsl") == "sl": sl_px = px
 
