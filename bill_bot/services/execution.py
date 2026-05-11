@@ -176,96 +176,75 @@ class ExecutionDryRun:
     @staticmethod
     def _apply_trailing(pos: Position, candle: Candle) -> Position:
         side = str(pos.side).upper()
-        dist = abs(float(pos.take_profit) - float(pos.entry))
-        if dist <= 0:
+        # Используем начальный тейк (tp0) для расчета базовой дистанции
+        entry = float(pos.entry)
+        tp0 = float(pos.tp0)
+        dist0 = abs(tp0 - entry)
+        if dist0 <= 0:
             return pos
-        max_steps_per_candle = 10
+        
+        cur = pos
+        h = float(candle.h)
+        l = float(candle.l)
 
         if side == "LONG":
-            h = float(candle.h)
-            cur = pos
-            if (not cur.tr1_done) and (h >= float(cur.entry) + 0.60 * dist):
+            # TR1: 60% до цели -> SL в безубыток
+            if (not cur.tr1_done) and (h >= entry + 0.60 * dist0):
                 cur = Position(
-                    side=cur.side,
-                    entry=cur.entry,
-                    stop_loss=max(float(cur.stop_loss), float(cur.entry)),
-                    take_profit=cur.take_profit,
-                    tp0=cur.tp0,
-                    tr1_done=True,
-                    tr2_done=cur.tr2_done,
-                    tr_steps=cur.tr_steps,
-                    qty=cur.qty,
-                    opened_t=cur.opened_t,
-                    cluster_t=cur.cluster_t,
+                    side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), entry),
+                    take_profit=cur.take_profit, tp0=cur.tp0, tr1_done=True, tr2_done=cur.tr2_done,
+                    tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr
                 )
-
-            steps = 0
-            while steps < max_steps_per_candle:
-                dist2 = abs(float(cur.take_profit) - float(cur.entry))
-                if dist2 <= 0:
+            
+            # TR2+: Активный трейлинг при достижении 85% от ТЕКУЩЕГО тейка
+            # Каждым шагом мы подтягиваем SL и отодвигаем TP
+            max_steps = 5
+            step = 0
+            while step < max_steps:
+                current_tp = float(cur.take_profit)
+                current_dist = abs(current_tp - entry)
+                if h < entry + 0.85 * current_dist:
                     break
-                if h < float(cur.entry) + 0.95 * dist2:
-                    break
-                new_sl = float(cur.entry) + 0.85 * dist2
-                new_tp = float(cur.entry) + cur.rr * dist2
+                
+                # Новый SL на 70% от текущей дистанции, новый TP отодвигаем еще на 50% от начальной дистанции
+                new_sl = entry + 0.70 * current_dist
+                new_tp = current_tp + 0.50 * dist0
+                
                 cur = Position(
-                    side=cur.side,
-                    entry=cur.entry,
-                    stop_loss=max(float(cur.stop_loss), new_sl),
-                    take_profit=max(float(cur.take_profit), new_tp),
-                    tp0=cur.tp0,
-                    tr1_done=True,
-                    tr2_done=True,
-                    tr_steps=int(cur.tr_steps) + 1,
-                    qty=cur.qty,
-                    opened_t=cur.opened_t,
-                    cluster_t=cur.cluster_t,
-                    rr=cur.rr
+                    side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), new_sl),
+                    take_profit=max(current_tp, new_tp), tp0=cur.tp0, tr1_done=True, tr2_done=True,
+                    tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr
                 )
-                steps += 1
-            return cur
-
-        l = float(candle.l)
-        cur = pos
-        if (not cur.tr1_done) and (l <= float(cur.entry) - 0.60 * dist):
-            cur = Position(
-                side=cur.side,
-                entry=cur.entry,
-                stop_loss=min(float(cur.stop_loss), float(cur.entry)),
-                take_profit=cur.take_profit,
-                tp0=cur.tp0,
-                tr1_done=True,
-                tr2_done=cur.tr2_done,
-                tr_steps=cur.tr_steps,
-                qty=cur.qty,
-                opened_t=cur.opened_t,
-                cluster_t=cur.cluster_t,
-            )
-
-        steps = 0
-        while steps < max_steps_per_candle:
-            dist2 = abs(float(cur.take_profit) - float(cur.entry))
-            if dist2 <= 0:
-                break
-            if l > float(cur.entry) - 0.95 * dist2:
-                break
-            new_sl = float(cur.entry) - 0.85 * dist2
-            new_tp = float(cur.entry) - cur.rr * dist2
-            cur = Position(
-                side=cur.side,
-                entry=cur.entry,
-                stop_loss=min(float(cur.stop_loss), new_sl),
-                take_profit=min(float(cur.take_profit), new_tp),
-                tp0=cur.tp0,
-                tr1_done=True,
-                tr2_done=True,
-                tr_steps=int(cur.tr_steps) + 1,
-                qty=cur.qty,
-                opened_t=cur.opened_t,
-                cluster_t=cur.cluster_t,
-                rr=cur.rr
-            )
-            steps += 1
+                step += 1
+                
+        else: # SHORT
+            # TR1: 60% до цели -> SL в безубыток
+            if (not cur.tr1_done) and (l <= entry - 0.60 * dist0):
+                cur = Position(
+                    side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), entry),
+                    take_profit=cur.take_profit, tp0=cur.tp0, tr1_done=True, tr2_done=cur.tr2_done,
+                    tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr
+                )
+            
+            # TR2+: Активный трейлинг
+            max_steps = 5
+            step = 0
+            while step < max_steps:
+                current_tp = float(cur.take_profit)
+                current_dist = abs(entry - current_tp)
+                if l > entry - 0.85 * current_dist:
+                    break
+                
+                new_sl = entry - 0.70 * current_dist
+                new_tp = current_tp - 0.50 * dist0
+                
+                cur = Position(
+                    side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), new_sl),
+                    take_profit=min(current_tp, new_tp), tp0=cur.tp0, tr1_done=True, tr2_done=True,
+                    tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr
+                )
+                step += 1
+                
         return cur
 
     @staticmethod

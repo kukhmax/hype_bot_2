@@ -188,7 +188,11 @@ class ExecutionLiveRun:
                 logger.info(f" ✅  LiveRun: Trailing update for {pair}: SL {pos.stop_loss}->{new_pos.stop_loss} TP {pos.take_profit}->{new_pos.take_profit}")
                 try:
                     open_ords = await self.hl_info.open_orders(self.hl_client.wallet)
-                    await self.hl_client.cancel_all_orders(pair, open_ords)
+                    # Отменяем только TP/SL для текущей позиции
+                    to_cancel = [o for o in open_ords if str(o.get("coin")).upper() == pair.upper() and o.get("isPositionTpsl", False)]
+                    if to_cancel:
+                        await self.hl_client.cancel_all_orders(pair, to_cancel)
+                        logger.info(f"LiveRun: Canceled {len(to_cancel)} TP/SL orders for trailing update")
                     
                     is_buy_close = (new_pos.side == "SHORT")
                     tp_type = {"trigger": {"isMarket": True, "triggerPx": round(new_pos.take_profit, 6), "tpsl": "tp"}}
@@ -197,8 +201,19 @@ class ExecutionLiveRun:
                     sz_decimals = await self.hl_info.get_sz_decimals(pair) or 0
                     final_sz = round(new_pos.qty, sz_decimals)
                     
-                    await self.hl_client.place_order(pair, is_buy_close, final_sz, new_pos.take_profit, tp_type, reduce_only=True)
-                    await self.hl_client.place_order(pair, is_buy_close, final_sz, new_pos.stop_loss, sl_type, reduce_only=True)
+                    logger.info(f"LiveRun: Placing trailing TP for {pair}: {new_pos.take_profit} (sz={final_sz})")
+                    try:
+                        res_tp = await self.hl_client.place_order(pair, is_buy_close, final_sz, new_pos.take_profit, tp_type, reduce_only=True)
+                        logger.info(f"LiveRun: Trailing TP response: {res_tp}")
+                    except Exception as e:
+                        logger.error(f"LiveRun: Failed to place trailing TP for {pair}: {e}")
+
+                    logger.info(f"LiveRun: Placing trailing SL for {pair}: {new_pos.stop_loss} (sz={final_sz})")
+                    try:
+                        res_sl = await self.hl_client.place_order(pair, is_buy_close, final_sz, new_pos.stop_loss, sl_type, reduce_only=True)
+                        logger.info(f"LiveRun: Trailing SL response: {res_sl}")
+                    except Exception as e:
+                        logger.error(f"LiveRun: Failed to place trailing SL for {pair}: {e}")
                     
                     state["pos"] = new_pos.to_dict()
                     await self.store.set(user_id, pair, self.tf, state)
@@ -214,7 +229,7 @@ class ExecutionLiveRun:
                     sync_res["events"].append(upd_evt)
                     sync_res["changed"] = True
                 except Exception as e:
-                    logger.error(f" ❌ LiveRun: Failed to update trailing for {pair}: {e}")
+                    logger.error(f" ❌ LiveRun: Trailing update critical failure for {pair}: {e}")
                     
         return sync_res
 
@@ -300,8 +315,12 @@ class ExecutionLiveRun:
                     logger.info(f"LiveRun: {pair} check: has_sl={has_sl}, has_tp={has_tp}, sl_px={sl_px}, tp_px={tp_px}")
                     if not has_sl or not has_tp:
                         try:
-                            # Перед выставлением новых SL/TP отменяем все старые по этой монете
-                            await self.hl_client.cancel_all_orders(pair, open_ords)
+                            # Перед выставлением новых SL/TP отменяем только СТАРЫЕ TP/SL по этой монете,
+                            # не трогая ордера на вход (Stop Entry).
+                            to_cancel = [o for o in open_ords if str(o.get("coin")).upper() == pair.upper() and o.get("isPositionTpsl", False)]
+                            if to_cancel:
+                                await self.hl_client.cancel_all_orders(pair, to_cancel)
+                                logger.info(f"LiveRun: Canceled {len(to_cancel)} old TP/SL orders on sync")
                             
                             is_buy_close = (current_side == "SHORT")
                             tp_type = {"trigger": {"isMarket": True, "triggerPx": tp_px, "tpsl": "tp"}}
@@ -310,11 +329,21 @@ class ExecutionLiveRun:
                             sz_decimals = await self.hl_info.get_sz_decimals(pair) or 0
                             final_sz = round(abs(real_sz), sz_decimals)
                             
-                            logger.info(f"LiveRun: Placing missing TP/SL for {pair}: TP={tp_px} SL={sl_px}")
-                            await self.hl_client.place_order(pair, is_buy_close, final_sz, tp_px, tp_type, reduce_only=True)
-                            await self.hl_client.place_order(pair, is_buy_close, final_sz, sl_px, sl_type, reduce_only=True)
+                            logger.info(f"LiveRun: Sync-placing TP for {pair}: {tp_px} (sz={final_sz})")
+                            try:
+                                res_tp = await self.hl_client.place_order(pair, is_buy_close, final_sz, tp_px, tp_type, reduce_only=True)
+                                logger.info(f"LiveRun: Sync TP response: {res_tp}")
+                            except Exception as e:
+                                logger.error(f"LiveRun: Failed to place sync TP for {pair}: {e}")
+
+                            logger.info(f"LiveRun: Sync-placing SL for {pair}: {sl_px} (sz={final_sz})")
+                            try:
+                                res_sl = await self.hl_client.place_order(pair, is_buy_close, final_sz, sl_px, sl_type, reduce_only=True)
+                                logger.info(f"LiveRun: Sync SL response: {res_sl}")
+                            except Exception as e:
+                                logger.error(f"LiveRun: Failed to place sync SL for {pair}: {e}")
                         except Exception as e:
-                            logger.error(f" ❌ LiveRun: Failed to place missing TP/SL on sync: {e}")
+                            logger.error(f" ❌ LiveRun: Sync TP/SL critical failure for {pair}: {e}")
 
                 events.append({
                     "event": "position_opened", "pair": pair, "side": current_side, "entry": real_entry,
