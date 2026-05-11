@@ -84,8 +84,8 @@ class ExecutionLiveRun:
         canceled_order = old_orders[0] if old_orders else None
         
         try:
-            # ВАЖНО: используем hl_client.open_orders(), который видит триггерные ордера (Stop Entry)
-            open_orders = await self.hl_client.open_orders()
+            # ВАЖНО: используем hl_info.open_orders(), который видит триггерные ордера (frontendOpenOrders)
+            open_orders = await self.hl_info.open_orders(self.hl_client.wallet)
             await self.hl_client.cancel_all_orders(pair, open_orders)
             logger.info(f"LiveRun: Canceled all exchange orders for {pair}")
         except Exception as e:
@@ -181,7 +181,7 @@ class ExecutionLiveRun:
                     is_buy_close = not (real_sz > 0) # Если real_sz > 0 (LONG), то закрываем продажей (is_buy=False)
                     
                     # Отменяем старые ордера (напр. Stop Entry) перед постановкой SL/TP
-                    cur_orders = await self.hl_client.open_orders()
+                    cur_orders = await self.hl_info.open_orders(self.hl_client.wallet)
                     await self.hl_client.cancel_all_orders(pair, cur_orders)
                     
                     await self.hl_client.place_order(pair, is_buy_close, abs(real_sz), tp_px, tp_type, reduce_only=True)

@@ -160,6 +160,10 @@ class HyperliquidExchangeClient:
         if cancels:
             await self._run("cancel", cancels)
 
+    async def market_close(self, coin: str) -> dict:
+        """Закрыть позицию по рынку (через SDK market_close)"""
+        return await self._run("market_close", str(coin))
+
     async def update_leverage(self, coin: str, leverage: int, cross_margin: bool = True) -> dict:
         return await self._run("update_leverage", leverage, coin, cross_margin)
 
