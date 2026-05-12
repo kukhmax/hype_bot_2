@@ -42,6 +42,18 @@ class RrFlow(StatesGroup):
     waiting_rr = State()
 
 
+class TpFlow(StatesGroup):
+    waiting_tp = State()
+    pair = State()
+    msg_id = State()
+
+
+class SlFlow(StatesGroup):
+    waiting_sl = State()
+    pair = State()
+    msg_id = State()
+
+
 def _main_menu() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     kb.button(text="📌 Пары", callback_data="menu:pairs")
@@ -52,7 +64,7 @@ def _main_menu() -> InlineKeyboardBuilder:
     kb.button(text="⏸ Стоп", callback_data="menu:stop")
     kb.button(text="📈 Позиции", callback_data="menu:positions")
     kb.button(text="💰 P&L", callback_data="menu:pnl")
-    kb.button(text="📉 График", callback_data="menu:chart")
+    kb.button(text="📉 График PnL", callback_data="menu:pnl_chart")
     kb.button(text="📊 Статус", callback_data="menu:status")
     kb.adjust(2)
     return kb
@@ -67,7 +79,8 @@ def _reply_main_menu(active: bool) -> ReplyKeyboardMarkup:
             [KeyboardButton(text="📊 Статус"), KeyboardButton(text="🕹 Режим")],
             [KeyboardButton(text=start_stop)],
             [KeyboardButton(text="📈 Позиции"), KeyboardButton(text="💰 P&L")],
-            [KeyboardButton(text="📉 График"), KeyboardButton(text="📜 Сделки")],
+            [KeyboardButton(text="📉 График"), KeyboardButton(text="📉 PnL График")],
+            [KeyboardButton(text="📜 Сделки")],
             [KeyboardButton(text="🗑 Удалить")],
         ],
         resize_keyboard=True,
@@ -361,13 +374,12 @@ async def run_telegram(
             except Exception:
                 pass
         base_eq = await _get_base_equity(uid)
-        balance = base_eq + float(total_r) + float(total_u)
 
         lines: list[str] = [
             f"📈 Позиции / ордера (TF {tf})",
-            f"💼 Баланс: {balance:.2f} USDC",
-            f"💰 Realized: {total_r:.2f} USDC",
-            f"📈 Unrealized: {total_u:.2f} USDC",
+            f"💼 Баланс: {base_eq:.2f} USDC",
+            f"💰 Realized: {total_r:+.2f} USDC",
+            f"📈 Unrealized: {total_u:+.2f} USDC",
             "",
         ]
 
@@ -638,18 +650,20 @@ async def run_telegram(
             except Exception:
                 pass
         base_eq = await _get_base_equity(uid)
-        balance = base_eq + float(total_r) + float(total_u)
         u_emoji = "🟩" if total_u >= 0 else "🟥"
         r_emoji = "🟩" if total_r >= 0 else "🟥"
-        b_emoji = "💰" if balance >= base_eq else "💸"
+        b_emoji = "💰" 
+        
         text = (
             f"💰 P&L (TF {tf})\n\n"
-            f"{b_emoji} Баланс: {balance:.2f} USDC\n"
+            f"{b_emoji} Баланс: {base_eq:.2f} USDC\n"
             f"{r_emoji} Realized: {total_r:+.2f} USDC\n"
-            f"{u_emoji} Unrealized: {total_u:+.2f} USDC\n"
-            f"🏦 База: {base_eq:.2f} USDC"
+            f"{u_emoji} Unrealized: {total_u:+.2f} USDC"
         )
-        sent = await message.answer(text, reply_markup=_msg_controls_menu().as_markup())
+        kb = _msg_controls_menu()
+        kb.button(text="📉 График PnL", callback_data="menu:pnl_chart")
+        kb.adjust(1)
+        sent = await message.answer(text, reply_markup=kb.as_markup())
         await _remember_last(uid, sent.message_id)
         return
 
@@ -682,18 +696,18 @@ async def run_telegram(
             except Exception:
                 pass
         base_eq = await _get_base_equity(uid)
-        balance = base_eq + float(total_r) + float(total_u)
+        # balance = base_eq + float(total_r) + float(total_u)
 
         lines: list[str] = [
             f"📜 Сделки (TF {tf})",
-            f"💼 Баланс: {balance:.2f} USDC",
-            f"💰 Realized: {total_r:.2f} USDC",
-            f"📈 Unrealized: {total_u:.2f} USDC",
+            f"💼 Баланс: {base_eq:.2f} USDC",
+            f"💰 Realized: {total_r:+.2f} USDC",
+            f"📈 Unrealized: {total_u:+.2f} USDC",
             "",
         ]
         any_rows = False
         for p in pairs:
-            trades = await trade_state.get_trades(uid, p, tf, limit=3)
+            trades = await trade_state.get_trades(uid, p, tf, limit=10)
             if not trades:
                 continue
             any_rows = True
@@ -904,6 +918,106 @@ async def run_telegram(
         text, kb = await _build_positions_view(uid)
         try: await cb.message.edit_text(text, reply_markup=kb.as_markup())
         except: pass
+
+    @dp.callback_query(F.data.startswith("pos_tp:"))
+    async def pos_tp_prompt(cb: CallbackQuery, state: FSMContext):
+        pair = cb.data.split(":", 1)[1].upper()
+        await state.update_data(pair=pair, msg_id=cb.message.message_id)
+        await state.set_state(TpFlow.waiting_tp)
+        await cb.answer()
+        await cb.message.answer(f"📈 Введите новый Take Profit для {pair}:")
+
+    @dp.message(TpFlow.waiting_tp)
+    async def pos_tp_input(message: Message, state: FSMContext):
+        data = await state.get_data()
+        pair = data["pair"]
+        uid = message.from_user.id
+        raw = message.text.replace(",", ".")
+        try:
+            val = float(raw)
+        except:
+            await message.answer("Ошибка: введите число.")
+            return
+        
+        await state.clear()
+        tf, _ = await user_ctx(uid)
+        if not hl_client:
+            await message.answer("Ошибка: HL Client не инициализирован.")
+            return
+
+        from bill_bot.services.execution_live import ExecutionLiveRun
+        eng = ExecutionLiveRun(trade_state, tf, hl_client, hl)
+        ok = await eng.update_tpsl(uid, pair, new_tp=val)
+        
+        if ok:
+            await message.answer(f"✅ TP для {pair} изменен на {val}")
+        else:
+            await message.answer(f"❌ Не удалось изменить TP для {pair}")
+
+    @dp.callback_query(F.data.startswith("pos_sl:"))
+    async def pos_sl_prompt(cb: CallbackQuery, state: FSMContext):
+        pair = cb.data.split(":", 1)[1].upper()
+        await state.update_data(pair=pair, msg_id=cb.message.message_id)
+        await state.set_state(SlFlow.waiting_sl)
+        await cb.answer()
+        await cb.message.answer(f"🛑 Введите новый Stop Loss для {pair}:")
+
+    @dp.message(SlFlow.waiting_sl)
+    async def pos_sl_input(message: Message, state: FSMContext):
+        data = await state.get_data()
+        pair = data["pair"]
+        uid = message.from_user.id
+        raw = message.text.replace(",", ".")
+        try:
+            val = float(raw)
+        except:
+            await message.answer("Ошибка: введите число.")
+            return
+        
+        await state.clear()
+        tf, _ = await user_ctx(uid)
+        if not hl_client:
+            await message.answer("Ошибка: HL Client не инициализирован.")
+            return
+
+        from bill_bot.services.execution_live import ExecutionLiveRun
+        eng = ExecutionLiveRun(trade_state, tf, hl_client, hl)
+        ok = await eng.update_tpsl(uid, pair, new_sl=val)
+        
+        if ok:
+            await message.answer(f"✅ SL для {pair} изменен на {val}")
+        else:
+            await message.answer(f"❌ Не удалось изменить SL for {pair}")
+
+    @dp.callback_query(F.data.startswith("ord_cancel:"))
+    async def ord_cancel_handler(cb: CallbackQuery):
+        uid = cb.from_user.id
+        tf, _ = await user_ctx(uid)
+        _, pair, side = cb.data.split(":", 2)
+        pair = pair.upper()
+        side = side.upper()
+        
+        if not hl_client:
+            st = await trade_state.get(uid, pair, tf)
+            orders = _extract_orders(st)
+            kept = [o for o in orders if o.side.upper() != side]
+            st.pop("ord", None)
+            if kept: st["ords"] = [o.to_dict() for o in kept]
+            else: st.pop("ords", None)
+            await trade_state.set(uid, pair, tf, st)
+            await cb.answer("Ордер отменён (DRY)")
+        else:
+            from bill_bot.services.execution_live import ExecutionLiveRun
+            eng = ExecutionLiveRun(trade_state, tf, hl_client, hl)
+            ok = await eng.cancel_order(uid, pair, side)
+            if ok: await cb.answer("Ордер отменён")
+            else: await cb.answer("Не удалось отменить")
+
+        try:
+            await cb.message.edit_caption(caption=cb.message.caption + "\n\n🆘 ОТМЕНЕН")
+        except:
+            try: await cb.message.edit_text(text=cb.message.text + "\n\n🆘 ОТМЕНЕН")
+            except: pass
 
     @dp.message(F.text == "📉 График")
     async def chart_menu_msg(message: Message, state: FSMContext):
@@ -1336,6 +1450,47 @@ async def run_telegram(
         except Exception:
             pass
         await cb.answer()
+
+    @dp.message(F.text == "📉 PnL График")
+    async def pnl_chart_msg(message: Message):
+        await pnl_chart_cb(None, user_id=message.from_user.id, message=message)
+
+    @dp.callback_query(F.data == "menu:pnl_chart")
+    async def pnl_chart_cb(cb: CallbackQuery | None, user_id: int | None = None, message: Message | None = None):
+        uid = user_id if user_id else cb.from_user.id
+        msg = message if message else cb.message
+        if cb: await cb.answer()
+        
+        tf, user_subs = await user_ctx(uid)
+        pairs = await user_subs.get_user_pairs(uid)
+        
+        all_trades = []
+        for p in pairs:
+            trades = await trade_state.get_trades(uid, p, tf, limit=1000)
+            all_trades.extend(trades)
+        
+        if not all_trades:
+            await msg.answer("Пока нет сделок для построения графика.")
+            return
+
+        from bill_bot.services.reporting import build_pnl_chart
+        base_eq = await _get_base_equity(uid)
+        png = build_pnl_chart(all_trades, base_eq)
+        
+        if not png:
+            await msg.answer("Не удалось построить график PnL.")
+            return
+
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🔄 Обновить", callback_data="menu:pnl_chart")
+        kb.button(text="🗑 Удалить", callback_data="msg:delete")
+        kb.adjust(1)
+
+        await msg.answer_photo(
+            BufferedInputFile(png, filename="pnl_chart.png"),
+            caption=f"📈 PnL Performance ({tf})",
+            reply_markup=kb.as_markup()
+        )
 
     logger.info("Telegram bot polling started")
     await dp.start_polling(bot)

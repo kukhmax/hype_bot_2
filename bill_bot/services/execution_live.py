@@ -303,7 +303,19 @@ class ExecutionLiveRun:
             elif abs(float(local_pos.get("qty", 0)) - abs(real_sz)) > 1e-6:
                 needs_update = True
 
-            if needs_update:
+            if not needs_update:
+                # Позиция уже есть локально, просто обновляем нереализованный PnL
+                unrealized = 0.0
+                if cur_px:
+                    if current_side == "LONG":
+                        unrealized = (cur_px - real_entry) * abs(real_sz)
+                    else:
+                        unrealized = (real_entry - cur_px) * abs(real_sz)
+                await self.store.set_pnl(user_id, pair, self.tf, {
+                    "unrealized": unrealized,
+                    "realized": float(state.get("realized", 0.0))
+                })
+            else:
                 logger.info(f"✅ LiveRun: Syncing POS for {pair}. Exchange side={current_side} sz={abs(real_sz)}")
                 
                 # Ищем параметры SL/TP (сначала из локального ордера той же стороны, потом с биржи)
@@ -377,9 +389,23 @@ class ExecutionLiveRun:
                         except Exception as e:
                             logger.error(f" ❌ LiveRun: Sync TP/SL critical failure for {pair}: {e}")
 
+                # Расчет нереализованного PnL
+                unrealized = 0.0
+                if cur_px:
+                    if current_side == "LONG":
+                        unrealized = (cur_px - real_entry) * abs(real_sz)
+                    else:
+                        unrealized = (real_entry - cur_px) * abs(real_sz)
+                
+                await self.store.set_pnl(user_id, pair, self.tf, {
+                    "unrealized": unrealized,
+                    "realized": float(state.get("realized", 0.0))
+                })
+
                 events.append({
                     "event": "position_opened", "pair": pair, "side": current_side, "entry": real_entry,
-                    "stop_loss": sl_px, "take_profit": tp_px, "qty": abs(real_sz), "opened_t": cur_t
+                    "stop_loss": sl_px, "take_profit": tp_px, "qty": abs(real_sz), "opened_t": cur_t,
+                    "unrealized": unrealized
                 })
 
         elif local_pos and abs(real_sz) <= 1e-9:
@@ -397,6 +423,23 @@ class ExecutionLiveRun:
             else:
                 pnl = (entry - exit_px) * qty
             
+            realized = float(state.get("realized", 0.0)) + float(pnl)
+            state["realized"] = realized
+            trade = {
+                "user_id": user_id,
+                "pair": pair,
+                "tf": self.tf,
+                "side": side,
+                "entry": entry,
+                "exit": exit_px,
+                "qty": qty,
+                "pnl": pnl,
+                "opened_t": local_pos.get("opened_t", cur_t),
+                "closed_t": cur_t,
+                "reason": "Sync: Closed on exchange",
+                "cluster_t": local_pos.get("cluster_t", cur_t),
+            }
+            state["last_trade"] = trade
             state.pop("pos", None)
             changed = True
             events.append({
@@ -410,14 +453,133 @@ class ExecutionLiveRun:
                 "reason": "Sync: Closed on exchange", 
                 "closed_t": cur_t,
                 "qty": qty, 
-                "pnl": pnl
+                "pnl": pnl,
+                "realized_total": realized
             })
+            await self.store.append_trade(user_id, pair, self.tf, trade)
+            await self.store.set_pnl(user_id, pair, self.tf, {"unrealized": 0.0, "realized": realized})
 
         if changed:
             await self.store.set(user_id, pair, self.tf, state)
         return {"changed": changed, "events": events}
 
-        return {"changed": changed, "events": events}
+    async def cancel_order(self, user_id: int, pair: str, side: str) -> bool:
+        """Отмена конкретного стоп-ордера на бирже и в локальном стейте"""
+        state = await self.store.get(user_id, pair, self.tf)
+        orders = self._get_orders(state)
+        side_u = side.upper()
+        
+        # 1. Отмена на бирже
+        try:
+            open_orders = await self.hl_info.open_orders(self.hl_client.wallet)
+            hl_side = "B" if side_u == "LONG" else "S"
+            to_cancel = [o for o in open_orders if str(o.get("coin")).upper() == pair.upper() and o.get("side") == hl_side and o.get("isTrigger") and not o.get("reduceOnly")]
+            if to_cancel:
+                await self.hl_client.cancel_all_orders(pair, to_cancel)
+                logger.info(f"LiveRun: Manually canceled {len(to_cancel)} {side_u} orders for {pair}")
+        except Exception as e:
+            logger.error(f"LiveRun: Failed to cancel orders on exchange for {pair}: {e}")
+            return False
+
+        # 2. Удаление из локального стейта
+        new_ords = [o for o in orders if o.side.upper() != side_u]
+        if len(new_ords) != len(orders):
+            self._set_orders(state, new_ords)
+            await self.store.set(user_id, pair, self.tf, state)
+            return True
+        return False
+
+    async def close_position(self, user_id: int, pair: str) -> bool:
+        """Рыночное закрытие позиции на бирже"""
+        try:
+            ustate = await self.hl_info.user_state(self.hl_client.wallet)
+            positions = ustate.get("assetPositions", [])
+            real_sz = 0.0
+            for p in positions:
+                pos_data = p.get("position", {})
+                if str(pos_data.get("coin", "")).upper() == pair.upper():
+                    real_sz = float(pos_data.get("szi", "0.0"))
+                    break
+            
+            if abs(real_sz) < 1e-9:
+                return False
+
+            # Закрываем рыночным ордером
+            is_buy_close = (real_sz < 0)
+            sz_decimals = await self.hl_info.get_sz_decimals(pair) or 0
+            final_sz = abs(round(real_sz, sz_decimals))
+            
+            # Получаем текущую цену для лимитного ордера (Hyperliquid требует цену даже для Market-like ордеров в некоторых случаях, или используем специальный тип)
+            px_data = await self.hl_info.all_mids()
+            cur_px = float(px_data.get(pair, 0))
+            if cur_px <= 0: return False
+            
+            # Для надежности используем цену с запасом (slippage)
+            slippage = 0.01 # 1%
+            limit_px = self.round_price(cur_px * (1 + slippage if is_buy_close else 1 - slippage))
+            
+            logger.info(f"LiveRun: Manually closing {pair} position: sz={final_sz} buy={is_buy_close}")
+            res = await self.hl_client.place_order(pair, is_buy_close, final_sz, limit_px, {"limit": {"tif": "Ioc"}}, reduce_only=True)
+            logger.info(f"LiveRun: Manual close response: {res}")
+            
+            # Отменяем все оставшиеся ордера (SL/TP)
+            open_ords = await self.hl_info.open_orders(self.hl_client.wallet)
+            to_cancel = [o for o in open_ords if str(o.get("coin")).upper() == pair.upper()]
+            if to_cancel:
+                await self.hl_client.cancel_all_orders(pair, to_cancel)
+
+            # Синхронизация стейта произойдет при следующем on_candle или вручную
+            return True
+        except Exception as e:
+            logger.error(f"LiveRun: Manual close failed for {pair}: {e}")
+            return False
+
+    async def update_tpsl(self, user_id: int, pair: str, new_tp: float | None = None, new_sl: float | None = None) -> bool:
+        """Обновление уровней TP/SL на бирже и в локальном стейте"""
+        state = await self.store.get(user_id, pair, self.tf)
+        pos_data = state.get("pos")
+        if not pos_data:
+            return False
+        
+        pos = Position.from_dict(pos_data)
+        tp = new_tp if new_tp is not None else pos.take_profit
+        sl = new_sl if new_sl is not None else pos.stop_loss
+        
+        try:
+            # 1. Отменяем старые SL/TP на бирже
+            open_ords = await self.hl_info.open_orders(self.hl_client.wallet)
+            to_cancel = [o for o in open_ords if str(o.get("coin")).upper() == pair.upper() and o.get("isTrigger") and o.get("reduceOnly")]
+            if to_cancel:
+                await self.hl_client.cancel_all_orders(pair, to_cancel)
+            
+            # 2. Выставляем новые
+            is_buy_close = (pos.side == "SHORT")
+            sz_decimals = await self.hl_info.get_sz_decimals(pair) or 0
+            final_sz = round(pos.qty, sz_decimals)
+            
+            tp_px = self.round_price(tp)
+            sl_px = self.round_price(sl)
+            
+            if tp > 0:
+                tp_type = {"trigger": {"isMarket": True, "triggerPx": tp_px, "tpsl": "tp"}}
+                await self.hl_client.place_order(pair, is_buy_close, final_sz, tp_px, tp_type, reduce_only=True)
+            
+            if sl > 0:
+                sl_type = {"trigger": {"isMarket": True, "triggerPx": sl_px, "tpsl": "sl"}}
+                await self.hl_client.place_order(pair, is_buy_close, final_sz, sl_px, sl_type, reduce_only=True)
+            
+            # 3. Обновляем локально
+            new_pos = Position(
+                side=pos.side, entry=pos.entry, stop_loss=sl, take_profit=tp,
+                tp0=pos.tp0, tr1_done=pos.tr1_done, tr2_done=pos.tr2_done,
+                tr_steps=pos.tr_steps, qty=pos.qty, opened_t=pos.opened_t, cluster_t=pos.cluster_t, rr=pos.rr
+            )
+            state["pos"] = new_pos.to_dict()
+            await self.store.set(user_id, pair, self.tf, state)
+            return True
+        except Exception as e:
+            logger.error(f"LiveRun: Failed to update TP/SL for {pair}: {e}")
+            return False
 
     def _apply_trailing(self, pos: Position, candle: Candle) -> Position:
         side = str(pos.side).upper()

@@ -58,24 +58,26 @@ async def main():
     def display_pair(coin: str) -> str:
         return f"{str(coin).upper().strip()}-USDC"
 
-    async def tg_send(user_id: int, text: str) -> None:
+    async def tg_send(user_id: int, text: str, kb: InlineKeyboardBuilder | None = None) -> None:
         if tg_bot is None:
             return
         try:
-            kb = InlineKeyboardBuilder()
-            kb.button(text="🗑 Удалить", callback_data="msg:delete")
-            kb.adjust(1)
+            if kb is None:
+                kb = InlineKeyboardBuilder()
+                kb.button(text="🗑 Удалить", callback_data="msg:delete")
+                kb.adjust(1)
             await tg_bot.send_message(chat_id=int(user_id), text=text, reply_markup=kb.as_markup())
         except Exception as e:
             logger.info(" ⛔️ Telegram send failed: user=%s err=%s", user_id, e)
 
-    async def tg_send_photo(user_id: int, png: bytes, caption: str) -> None:
+    async def tg_send_photo(user_id: int, png: bytes, caption: str, kb: InlineKeyboardBuilder | None = None) -> None:
         if tg_bot is None:
             return
         try:
-            kb = InlineKeyboardBuilder()
-            kb.button(text="🗑 Удалить", callback_data="msg:delete")
-            kb.adjust(1)
+            if kb is None:
+                kb = InlineKeyboardBuilder()
+                kb.button(text="🗑 Удалить", callback_data="msg:delete")
+                kb.adjust(1)
             await tg_bot.send_photo(
                 chat_id=int(user_id),
                 photo=BufferedInputFile(png, filename="signal.png"),
@@ -471,8 +473,15 @@ async def main():
                     f"🎯 Trigger {trigger:.4f} | 🛑 SL {sl:.4f} | ✅ TP {tp:.4f}\n"
                     f"📦 Qty {qty:.6f}"
                 )
-                if png: await tg_send_photo(uid, png, caption)
-                else: await tg_send(uid, caption)
+                
+                # Кнопки для ордера
+                kb = InlineKeyboardBuilder()
+                kb.button(text="❌ Отменить ордер", callback_data=f"ord_cancel:{pair}:{side}")
+                kb.button(text="🗑 Удалить", callback_data="msg:delete")
+                kb.adjust(1)
+
+                if png: await tg_send_photo(uid, png, caption, kb=kb)
+                else: await tg_send(uid, caption, kb=kb)
 
             elif etype == "position_opened":
                 entry = float(e.get("entry", 0.0))
@@ -492,8 +501,17 @@ async def main():
                     f"🎯 Entry {entry:.4f} | 🛑 SL {sl:.4f} | ✅ TP {tp:.4f}\n"
                     f"📦 Qty {qty:.6f}"
                 )
-                if opened_png: await tg_send_photo(uid, opened_png, opened_caption)
-                else: await tg_send(uid, opened_caption)
+                
+                # Кнопки для позиции
+                kb = InlineKeyboardBuilder()
+                kb.button(text="🔻 Закрыть", callback_data=f"pos_close:{pair}")
+                kb.button(text="🛑 SL", callback_data=f"pos_sl:{pair}")
+                kb.button(text="✅ TP", callback_data=f"pos_tp:{pair}")
+                kb.button(text="🗑 Удалить", callback_data="msg:delete")
+                kb.adjust(1, 2, 1)
+
+                if opened_png: await tg_send_photo(uid, opened_png, opened_caption, kb=kb)
+                else: await tg_send(uid, opened_caption, kb=kb)
 
             elif etype == "position_updated":
                 entry = float(e.get("entry", 0.0))
@@ -511,8 +529,17 @@ async def main():
                     f"🎯 Entry {entry:.4f} | 🛑 SL {sl:.4f} | ✅ TP {tp:.4f}\n"
                     f"📦 Qty {qty:.6f}"
                 )
-                if upd_png: await tg_send_photo(uid, upd_png, upd_caption)
-                else: await tg_send(uid, upd_caption)
+                
+                # Кнопки для обновления трейлинга
+                kb = InlineKeyboardBuilder()
+                kb.button(text="🔻 Закрыть", callback_data=f"pos_close:{pair}")
+                kb.button(text="🛑 SL", callback_data=f"pos_sl:{pair}")
+                kb.button(text="✅ TP", callback_data=f"pos_tp:{pair}")
+                kb.button(text="🗑 Удалить", callback_data="msg:delete")
+                kb.adjust(1, 2, 1)
+
+                if upd_png: await tg_send_photo(uid, upd_png, upd_caption, kb=kb)
+                else: await tg_send(uid, upd_caption, kb=kb)
 
             elif etype == "position_closed":
                 balance, total_r, total_u, base = await user_balance(subs_tf, uid, tf)
