@@ -601,9 +601,9 @@ class ExecutionLiveRun:
             steps = 0
             while steps < max_steps_per_candle:
                 dist2 = abs(float(cur.take_profit) - float(cur.entry))
-                if dist2 <= 0 or h < float(cur.entry) + 0.95 * dist2: break
-                new_sl = float(cur.entry) + 0.85 * dist2
-                new_tp = float(cur.entry) + 1.50 * dist2
+                if dist2 <= 0 or h < float(cur.entry) + 0.90 * dist2: break
+                new_sl = float(cur.entry) + 0.80 * dist2
+                new_tp = float(cur.entry) + 1.70 * dist2
                 cur = Position(
                     side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), new_sl),
                     take_profit=max(float(cur.take_profit), new_tp), tp0=cur.tp0, tr1_done=True, tr2_done=True,
@@ -624,9 +624,9 @@ class ExecutionLiveRun:
         steps = 0
         while steps < max_steps_per_candle:
             dist2 = abs(float(cur.take_profit) - float(cur.entry))
-            if dist2 <= 0 or l > float(cur.entry) - 0.95 * dist2: break
-            new_sl = float(cur.entry) - 0.85 * dist2
-            new_tp = float(cur.entry) - 1.50 * dist2
+            if dist2 <= 0 or l > float(cur.entry) - 0.90 * dist2: break
+            new_sl = float(cur.entry) - 0.8 * dist2
+            new_tp = float(cur.entry) - 1.70 * dist2
             cur = Position(
                 side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), new_sl),
                 take_profit=min(float(cur.take_profit), new_tp), tp0=cur.tp0, tr1_done=True, tr2_done=True,
