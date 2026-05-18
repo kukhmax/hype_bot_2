@@ -141,7 +141,7 @@ async def main():
                 total_r += float(pnl.get("realized", 0.0))
             except Exception:
                 pass
-        # Determine base equity: real balance in LIVE mode, virtual in DRY
+        # Determine base equity: real available balance (withdrawable) in LIVE mode, virtual in DRY
         base_eq = float(cfg.virtual_equity)
         ucfg = await subs_tf.get_user_cfg(user_id)
         mode = str(ucfg.get("trade_mode", "DRY")).upper()
@@ -149,7 +149,8 @@ async def main():
             real_total = 0.0
             try:
                 perps_st = await hl.user_state(cfg.hyperliquid_wallet_address)
-                real_total += float(perps_st.get("marginSummary", {}).get("accountValue", 0.0))
+                # withdrawable = реальный доступный баланс ("Available to Trade")
+                real_total += float(perps_st.get("withdrawable", 0.0))
             except Exception:
                 pass
             try:
@@ -161,7 +162,7 @@ async def main():
                 pass
             if real_total > 0:
                 base_eq = real_total
-        balance = base_eq + total_r + total_u
+        balance = base_eq
         return balance, total_r, total_u, base_eq
 
     def timeframe_ms(tf: str) -> int:
@@ -361,7 +362,7 @@ async def main():
           hl = HyperliquidInfoClient()
           from bill_bot.services.execution_live import ExecutionLiveRun
           exec_engine_dry = ExecutionDryRun(trade_state, tf, virtual_equity=cfg.virtual_equity)
-          exec_engine_live = ExecutionLiveRun(store=trade_state, tf=tf, hl_client=hl_exchange, hl_info=hl)
+          exec_engine_live = ExecutionLiveRun(store=trade_state, tf=tf, hl_client=hl_exchange, hl_info=hl, fee_rate=cfg.taker_fee_rate)
           all_live_engines[tf] = exec_engine_live
         
         subs_tf = SubscriptionStore(subs.r, tf=tf)
@@ -544,9 +545,20 @@ async def main():
             elif etype == "position_closed":
                 balance, total_r, total_u, base = await user_balance(subs_tf, uid, tf)
                 pnl = float(e.get("pnl", 0.0))
+                fee = float(e.get("fee", 0.0))
+                balance_after = float(e.get("balance_after", balance))
                 pnl_emoji = "🟩" if pnl >= 0 else "🟥"
                 reason_u = str(e.get("reason", "")).upper()
-                reason_txt = "✅ TP" if reason_u == "TP" else "🛑 SL" if reason_u == "SL" else "⚠️ SL/TP" if "SL_AND_TP" in reason_u else str(e.get("reason", ""))
+                if reason_u == "TP":
+                    reason_txt = "✅ TP"
+                elif reason_u == "SL":
+                    reason_txt = "🛑 SL"
+                elif "SL_AND_TP" in reason_u:
+                    reason_txt = "⚠️ SL/TP"
+                elif "SYNC" in reason_u:
+                    reason_txt = "🔄 Закрыто на бирже"
+                else:
+                    reason_txt = str(e.get("reason", ""))
                 entry = float(e.get("entry", 0.0))
                 exit_px = float(e.get("exit", 0.0))
                 sl = float(e.get("stop_loss", 0.0))
@@ -560,12 +572,21 @@ async def main():
                     PriceLevel(price=tp, label="TP", color="#22c55e", linestyle="-", linewidth=1.0),
                 ]
                 closed_png = await build_signal_chart(pair, tf, levels=levels_close)
-                closed_caption = (
-                    f"🏁 Закрыта {str(e.get('side', '')).upper()} {display_pair(pair)} ({tf})\n"
-                    f"🕒 {await fmt_close_ts_from_open(pair, tf, closed_t)} | {reason_txt}\n"
-                    f"🎯 Entry {entry:.4f} → Exit {exit_px:.4f} | {pnl_emoji} PnL {pnl:+.2f}\n"
-                    f"💼 Баланс {balance:.2f} | 💰 R {total_r:.2f} | 📈 U {total_u:.2f}"
-                )
+                
+                # Собираем сообщение с эмодзи
+                caption_lines = [
+                    f"🏁 Закрыта {str(e.get('side', '')).upper()} {display_pair(pair)} ({tf})",
+                    f"🕑 {await fmt_close_ts_from_open(pair, tf, closed_t)} | {reason_txt}",
+                    f"🎯 Entry {entry:.4f} → Exit {exit_px:.4f}",
+                    f"📦 Qty: {qty:.6f}",
+                    f"{pnl_emoji} Net PnL: {pnl:+.4f} USDC",
+                ]
+                if fee > 0.0001:
+                    caption_lines.append(f"💸 Fee: {fee:.4f} USDC")
+                caption_lines.append(f"💳 Доступно: {balance_after:.2f} USDC")
+                caption_lines.append(f"🟩 Realized: {total_r:.2f} USDC")
+                closed_caption = "\n".join(caption_lines)
+                
                 if closed_png: await tg_send_photo(uid, closed_png, closed_caption)
                 else: await tg_send(uid, closed_caption)
 

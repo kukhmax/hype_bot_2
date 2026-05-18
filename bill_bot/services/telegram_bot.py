@@ -269,18 +269,18 @@ async def run_telegram(
         return _fmt_ts_ms(open_t_ms)
 
     async def _get_base_equity(uid: int) -> float:
-        """Return real Hyperliquid balance (perps + spot USDC) in LIVE mode, or virtual_equity in DRY."""
+        """Return real available balance (withdrawable) in LIVE mode, or virtual_equity in DRY."""
         _, user_subs = await user_ctx(uid)
         ucfg = await user_subs.get_user_cfg(uid)
         mode = str(ucfg.get("trade_mode", "DRY")).upper()
         if mode == "LIVE" and cfg.hyperliquid_wallet_address:
             total_real = 0.0
             try:
-                # Perps account balance
+                # withdrawable = реальный доступный баланс ("Available to Trade" на бирже)
                 perps_st = await hl.user_state(cfg.hyperliquid_wallet_address)
-                perps_val = float(perps_st.get("marginSummary", {}).get("accountValue", 0.0))
-                total_real += perps_val
-                logger.info("_get_base_equity: perps accountValue=%.2f", perps_val)
+                withdrawable = float(perps_st.get("withdrawable", 0.0))
+                total_real += withdrawable
+                logger.info("_get_base_equity: perps withdrawable=%.2f", withdrawable)
             except Exception as e:
                 logger.warning("_get_base_equity: perps balance error: %s", e)
             try:
@@ -377,9 +377,9 @@ async def run_telegram(
 
         lines: list[str] = [
             f"📈 Позиции / ордера (TF {tf})",
-            f"💼 Баланс: {base_eq:.2f} USDC",
-            f"💰 Realized: {total_r:+.2f} USDC",
-            f"📈 Unrealized: {total_u:+.2f} USDC",
+            f"💳 Доступно: {base_eq:.2f} USDC",
+            f"🟩 Realized: {total_r:+.2f} USDC",
+            f"📊 Unrealized: {total_u:+.2f} USDC",
             "",
         ]
 
@@ -453,7 +453,6 @@ async def run_telegram(
             except Exception:
                 pass
         base_eq = await _get_base_equity(uid)
-        balance = base_eq + float(total_r) + float(total_u)
 
         active_txt = "✅ ВКЛ" if active else "⏸ ВЫКЛ"
         text = (
@@ -464,10 +463,9 @@ async def run_telegram(
             f"🕹 Режим: {mode}\n"
             f"⚙️ Риск: {risk:.2f}% | 💰 Маржа: {margin:.0f}%\n"
             f"📐 RR: {rr:.2f}\n\n"
-            f"💼 Баланс: {balance:.2f} USDC\n"
-            f"💰 Realized: {total_r:.2f} USDC\n"
-            f"📈 Unrealized: {total_u:.2f} USDC\n"
-            f"🏦 База: {base_eq:.2f} USDC"
+            f"💳 Доступно: {base_eq:.2f} USDC\n"
+            f"🟩 Realized: {total_r:+.2f} USDC\n"
+            f"📊 Unrealized: {total_u:+.2f} USDC"
         )
         sent = await message.answer(text, reply_markup=_reply_main_menu(active=active))
         await _remember_last(uid, sent.message_id)
@@ -652,11 +650,10 @@ async def run_telegram(
         base_eq = await _get_base_equity(uid)
         u_emoji = "🟩" if total_u >= 0 else "🟥"
         r_emoji = "🟩" if total_r >= 0 else "🟥"
-        b_emoji = "💰" 
         
         text = (
             f"💰 P&L (TF {tf})\n\n"
-            f"{b_emoji} Баланс: {base_eq:.2f} USDC\n"
+            f"💳 Доступно: {base_eq:.2f} USDC\n"
             f"{r_emoji} Realized: {total_r:+.2f} USDC\n"
             f"{u_emoji} Unrealized: {total_u:+.2f} USDC"
         )
@@ -700,9 +697,9 @@ async def run_telegram(
 
         lines: list[str] = [
             f"📜 Сделки (TF {tf})",
-            f"💼 Баланс: {base_eq:.2f} USDC",
-            f"💰 Realized: {total_r:+.2f} USDC",
-            f"📈 Unrealized: {total_u:+.2f} USDC",
+            f"💳 Доступно: {base_eq:.2f} USDC",
+            f"🟩 Realized: {total_r:+.2f} USDC",
+            f"📊 Unrealized: {total_u:+.2f} USDC",
             "",
         ]
         any_rows = False
@@ -875,7 +872,14 @@ async def run_telegram(
 
         candles = await candle_store.get_window(pair, tf)
         exit_px = float(candles[-1].c) if candles else pos.entry
-        pnl = _pnl_realized(pos.side, pos.entry, exit_px, pos.qty)
+        gross_pnl = _pnl_realized(pos.side, pos.entry, exit_px, pos.qty)
+        # Расчёт комиссии
+        fee = abs(pos.entry * pos.qty) * cfg.taker_fee_rate + abs(exit_px * pos.qty) * cfg.taker_fee_rate
+        pnl = gross_pnl - fee  # Net PnL
+        
+        # Получаем реальный баланс после закрытия
+        balance_after = await _get_base_equity(uid)
+        
         realized = float(st.get("realized", 0.0)) + float(pnl)
         st["realized"] = realized
         cur_t = int(time.time() * 1000)
@@ -888,6 +892,9 @@ async def run_telegram(
             "exit": exit_px,
             "qty": pos.qty,
             "pnl": pnl,
+            "gross_pnl": gross_pnl,
+            "fee": fee,
+            "balance_after": balance_after,
             "opened_t": pos.opened_t,
             "closed_t": cur_t,
             "reason": "MANUAL_CLOSE",
@@ -902,16 +909,23 @@ async def run_telegram(
         await cb.answer("Позиция закрыта")
         
         # Уведомление с графиком
+        pnl_emoji = "🟩" if pnl >= 0 else "🟥"
+        fee_txt = f"💸 Fee: {fee:.4f}" if fee > 0.0001 else ""
         levels = [
             PriceLevel(price=pos.entry, label="Entry", color="#0ea5e9", linestyle="-"),
             PriceLevel(price=exit_px, label="Exit", color="#f59e0b", linestyle="--"),
         ]
         png = await _build_signal_chart(pair, tf, levels=levels)
-        caption = (
-            f"🏁 Позиция {pos.side} {pair} ({tf}) закрыта вручную.\n"
-            f"🎯 Entry {pos.entry:.4f} → Exit {exit_px:.4f} | PnL {pnl:+.2f}\n"
-            f"🕒 {_fmt_ts_ms(int(time.time()*1000))}"
-        )
+        caption_lines = [
+            f"🏁 Позиция {pos.side} {pair} ({tf}) закрыта вручную",
+            f"🎯 Entry {pos.entry:.4f} → Exit {exit_px:.4f}",
+            f"{pnl_emoji} Net PnL: {pnl:+.4f} USDC",
+        ]
+        if fee > 0.0001:
+            caption_lines.append(f"💸 Fee: {fee:.4f}")
+        caption_lines.append(f"💳 Баланс: {balance_after:.2f} USDC")
+        caption_lines.append(f"🕑 {_fmt_ts_ms(int(time.time()*1000))}")
+        caption = "\n".join(caption_lines)
         if png: await cb.message.answer_photo(BufferedInputFile(png, filename="close.png"), caption=caption, reply_markup=_msg_controls_menu().as_markup())
         else: await cb.message.answer(caption, reply_markup=_msg_controls_menu().as_markup())
 
@@ -1382,13 +1396,11 @@ async def run_telegram(
             except Exception:
                 pass
         base_eq = await _get_base_equity(uid)
-        balance = base_eq + float(total_r) + float(total_u)
         u_emoji = "🟩" if total_u >= 0 else "🟥"
         r_emoji = "🟩" if total_r >= 0 else "🟥"
-        b_emoji = "💰" if balance >= base_eq else "💸"
         await cb.answer()
         await cb.message.edit_text(
-            f"💰 P&L (TF {tf})\n\n{b_emoji} Баланс: {balance:.2f} USDC\n{r_emoji} Realized: {total_r:+.2f} USDC\n{u_emoji} Unrealized: {total_u:+.2f} USDC\n🏦 База: {base_eq:.2f} USDC",
+            f"💰 P&L (TF {tf})\n\n💳 Доступно: {base_eq:.2f} USDC\n{r_emoji} Realized: {total_r:+.2f} USDC\n{u_emoji} Unrealized: {total_u:+.2f} USDC",
             reply_markup=_msg_controls_menu().as_markup(),
         )
         await _remember_last(uid, cb.message.message_id)

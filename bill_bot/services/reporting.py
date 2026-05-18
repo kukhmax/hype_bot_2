@@ -172,13 +172,12 @@ def build_trades_xlsx(trades: list[dict], tf: str, tf_ms: int, base_equity: floa
 
 
 def build_pnl_chart(trades: list[dict], base_equity: float) -> bytes:
-    """Генерация графика PnL из списка сделок"""
+    """Генерация графика реального баланса из списка сделок"""
     try:
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
         from datetime import datetime
     except ImportError:
-        logger.error("matplotlib not installed, cannot build pnl chart")
         return b""
 
     if not trades:
@@ -189,34 +188,47 @@ def build_pnl_chart(trades: list[dict], base_equity: float) -> bytes:
     
     first_t = int(sorted_trades[0].get("opened_t", sorted_trades[0].get("closed_t", 0)))
     times = [datetime.fromtimestamp(first_t / 1000.0)]
-    pnl_curve = [base_equity]
+    balance_curve = [base_equity]
     
-    current_pnl = base_equity
+    # Используем balance_after если доступен, иначе считаем кумулятивно
+    cumulative_pnl = 0.0
     for t in sorted_trades:
         dt = datetime.fromtimestamp(int(t.get("closed_t", 0)) / 1000.0)
-        current_pnl += float(t.get("pnl", 0.0))
+        pnl = float(t.get("pnl", 0.0))
+        cumulative_pnl += pnl
+        
+        # Если есть реальный баланс с биржи — используем его
+        balance_after = t.get("balance_after")
+        if balance_after is not None:
+            current_balance = float(balance_after)
+        else:
+            # Fallback: base_equity + cumulative pnl
+            current_balance = base_equity + cumulative_pnl
+        
         times.append(dt)
-        pnl_curve.append(current_pnl)
+        balance_curve.append(current_balance)
 
     # Если только одна точка (база), добавим текущее время
     if len(times) == 1:
         times.append(datetime.now())
-        pnl_curve.append(current_pnl)
+        balance_curve.append(balance_curve[0])
+
+    current_balance = balance_curve[-1]
 
     plt.figure(figsize=(10, 6))
     plt.style.use('dark_background')
     
     # Цвет линии: зеленый если в плюсе от базы, красный если в минусе
-    color = "#22c55e" if current_pnl >= base_equity else "#ef4444"
+    color = "#22c55e" if current_balance >= base_equity else "#ef4444"
     
-    plt.plot(times, pnl_curve, marker='o', linestyle='-', color=color, linewidth=2, markersize=4)
-    plt.fill_between(times, pnl_curve, base_equity, alpha=0.1, color=color)
+    plt.plot(times, balance_curve, marker='o', linestyle='-', color=color, linewidth=2, markersize=4)
+    plt.fill_between(times, balance_curve, base_equity, alpha=0.1, color=color)
     
-    plt.axhline(y=base_equity, color='white', linestyle='--', alpha=0.3, label='Base Equity')
+    plt.axhline(y=base_equity, color='white', linestyle='--', alpha=0.3, label='Start Balance')
     
-    plt.title(f"PnL Performance (Current: {current_pnl:.2f} USDC)", fontsize=14, pad=15)
+    plt.title(f"💳 Balance (Current: {current_balance:.2f} USDC)", fontsize=14, pad=15)
     plt.xlabel("Date", fontsize=10)
-    plt.ylabel("Equity (USDC)", fontsize=10)
+    plt.ylabel("Balance (USDC)", fontsize=10)
     
     plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%d/%m %H:%M'))
     plt.gcf().autofmt_xdate()
@@ -228,3 +240,4 @@ def build_pnl_chart(trades: list[dict], base_equity: float) -> bytes:
     plt.savefig(buf, format='png', dpi=120)
     plt.close()
     return buf.getvalue()
+

@@ -28,6 +28,8 @@ class Config:
     default_rr: float
     hyperliquid_wallet_address: str
     hyperliquid_private_key: str
+    taker_fee_rate: float
+    telegram_user_id: int
 
     @staticmethod
     def from_env() -> "Config":
@@ -74,6 +76,8 @@ class Config:
         
         hl_wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "")
         hl_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
+        taker_fee_rate = float(os.getenv("TAKER_FEE_RATE", "0.000456"))  # 0.0456% Hyperliquid taker fee
+        telegram_user_id = int(os.getenv("TELEGRAM_USER_ID", "0"))
 
         return Config(
             redis_host=host,
@@ -100,4 +104,6 @@ class Config:
             default_rr=default_rr,
             hyperliquid_wallet_address=hl_wallet,
             hyperliquid_private_key=hl_key,
+            taker_fee_rate=taker_fee_rate,
+            telegram_user_id=telegram_user_id,
         )

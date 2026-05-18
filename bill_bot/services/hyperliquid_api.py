@@ -94,6 +94,17 @@ class HyperliquidInfoClient:
                     raise ValueError("Unexpected spot_user_state response")
                 return data
 
+    async def all_mids(self) -> dict:
+        url = f"{self.base_url}/info"
+        payload = {"type": "allMids"}
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+                if not isinstance(data, dict):
+                    return {}
+                return data
+
     async def open_orders(self, user_address: str) -> list[dict]:
         url = f"{self.base_url}/info"
         payload = {

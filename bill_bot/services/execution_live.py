@@ -9,11 +9,12 @@ from bill_bot.services.hyperliquid_api import HyperliquidExchangeClient, Hyperli
 logger = logging.getLogger(__name__)
 
 class ExecutionLiveRun:
-    def __init__(self, store: RedisTradeState, tf: str, hl_client: HyperliquidExchangeClient, hl_info: HyperliquidInfoClient):
+    def __init__(self, store: RedisTradeState, tf: str, hl_client: HyperliquidExchangeClient, hl_info: HyperliquidInfoClient, fee_rate: float = 0.000456):
         self.store = store
         self.tf = tf
         self.hl_client = hl_client
         self.hl_info = hl_info
+        self.fee_rate = fee_rate  # Taker fee rate (0.0456% default)
 
     def _get_orders(self, state: dict) -> list[PendingOrder]:
         if "ords" in state and isinstance(state["ords"], list):
@@ -35,11 +36,19 @@ class ExecutionLiveRun:
             return
         state["ords"] = [o.to_dict() for o in orders]
 
+    def _calc_fee(self, entry_px: float, exit_px: float, qty: float) -> float:
+        """Рассчитывает суммарную комиссию за открытие и закрытие позиции"""
+        fee_open = abs(entry_px * qty) * self.fee_rate
+        fee_close = abs(exit_px * qty) * self.fee_rate
+        return fee_open + fee_close
+
     async def _get_real_balance(self) -> float:
+        """Возвращает доступный для торговли баланс (withdrawable) с биржи"""
         total = 0.0
         try:
             st = await self.hl_info.user_state(self.hl_client.wallet)
-            total += float(st.get("marginSummary", {}).get("accountValue", 0.0))
+            # withdrawable = реальный доступный баланс ("Available to Trade" на бирже)
+            total += float(st.get("withdrawable", 0.0))
         except Exception as e:
             logger.error(f"LiveRun: Failed to get perps balance: {e}")
         try:
@@ -49,7 +58,7 @@ class ExecutionLiveRun:
                     total += float(b.get("total", 0.0))
         except Exception as e:
             logger.error(f"LiveRun: Failed to get spot balance: {e}")
-        logger.info(f"LiveRun: Real balance (perps+spot) = {total:.2f}")
+        logger.info(f"LiveRun: Available balance (withdrawable+spot) = {total:.2f}")
         return total
 
     def round_price(self, price: float) -> float:
@@ -417,11 +426,17 @@ class ExecutionLiveRun:
             qty = float(local_pos.get("qty", 0.0))
             side = str(local_pos.get("side", "")).upper()
             
-            pnl = 0.0
+            # Расчёт PnL с учётом комиссий
+            gross_pnl = 0.0
             if side == "LONG":
-                pnl = (exit_px - entry) * qty
+                gross_pnl = (exit_px - entry) * qty
             else:
-                pnl = (entry - exit_px) * qty
+                gross_pnl = (entry - exit_px) * qty
+            fee = self._calc_fee(entry, exit_px, qty)
+            pnl = gross_pnl - fee  # Net PnL (за вычетом комиссий)
+            
+            # Получаем реальный баланс после закрытия
+            balance_after = await self._get_real_balance()
             
             realized = float(state.get("realized", 0.0)) + float(pnl)
             state["realized"] = realized
@@ -434,6 +449,9 @@ class ExecutionLiveRun:
                 "exit": exit_px,
                 "qty": qty,
                 "pnl": pnl,
+                "gross_pnl": gross_pnl,
+                "fee": fee,
+                "balance_after": balance_after,
                 "opened_t": local_pos.get("opened_t", cur_t),
                 "closed_t": cur_t,
                 "reason": "Sync: Closed on exchange",
@@ -454,6 +472,9 @@ class ExecutionLiveRun:
                 "closed_t": cur_t,
                 "qty": qty, 
                 "pnl": pnl,
+                "gross_pnl": gross_pnl,
+                "fee": fee,
+                "balance_after": balance_after,
                 "realized_total": realized
             })
             await self.store.append_trade(user_id, pair, self.tf, trade)
