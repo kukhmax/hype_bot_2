@@ -119,6 +119,134 @@ class HyperliquidInfoClient:
                     return []
                 return data
 
+    async def user_fills(self, user_address: str) -> list[dict]:
+        url = f"{self.base_url}/info"
+        payload = {
+            "type": "userFills",
+            "user": user_address
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+                if not isinstance(data, list):
+                    return []
+                return data
+
+    async def get_real_trade_details(
+        self,
+        user_address: str,
+        coin: str,
+        opened_t: int,
+        side: str,
+        default_entry: float,
+        default_exit: float,
+        default_qty: float,
+        taker_fee_rate: float = 0.000456
+    ) -> dict:
+        """
+        Получает реальные сделки (fills) пользователя и агрегирует их для расчета
+        точных цен, объема, комиссий и PnL.
+        """
+        coin_upper = coin.upper()
+        try:
+            fills = await self.user_fills(user_address)
+        except Exception as e:
+            logger.error(f"Error fetching user fills for {coin_upper}: {e}")
+            fills = []
+
+        # Фильтруем сделки по монете и времени (с запасом 1 минута до opened_t)
+        pair_fills = []
+        for f in fills:
+            f_coin = str(f.get("coin", "")).upper()
+            f_time = int(f.get("time", 0))
+            if f_coin == coin_upper and f_time >= (opened_t - 60000):
+                pair_fills.append(f)
+
+        # Сортируем по времени (сначала новые)
+        pair_fills.sort(key=lambda x: int(x.get("time", 0)), reverse=True)
+
+        side_upper = side.upper()
+        close_side_char = "S" if side_upper == "LONG" else "B"
+        open_side_char = "B" if side_upper == "LONG" else "S"
+
+        close_fills = []
+        open_fills = []
+
+        for f in pair_fills:
+            f_side = str(f.get("side", "")).upper()
+            if f_side == close_side_char:
+                close_fills.append(f)
+            elif f_side == open_side_char:
+                open_fills.append(f)
+
+        if not close_fills:
+            logger.warning(f"No close fills found for {coin_upper} since {opened_t}. Using fallbacks.")
+            return {
+                "entry": default_entry,
+                "exit": default_exit,
+                "qty": default_qty,
+                "fee": 0.0,
+                "pnl": 0.0,
+                "gross_pnl": 0.0,
+                "success": False
+            }
+
+        # Агрегируем сделки закрытия
+        total_close_value = 0.0
+        total_close_qty = 0.0
+        real_close_fee = 0.0
+        for f in close_fills:
+            px = float(f.get("px", 0.0))
+            sz = float(f.get("sz", 0.0))
+            fee = float(f.get("fee", 0.0))
+            total_close_value += px * sz
+            total_close_qty += sz
+            real_close_fee += fee
+
+        real_exit = total_close_value / total_close_qty if total_close_qty > 0 else default_exit
+        real_qty = total_close_qty if total_close_qty > 0 else default_qty
+
+        # Ищем соответствующие сделки открытия
+        real_open_fee = 0.0
+        total_open_value = 0.0
+        total_open_qty = 0.0
+
+        if open_fills:
+            for f in open_fills:
+                px = float(f.get("px", 0.0))
+                sz = float(f.get("sz", 0.0))
+                fee = float(f.get("fee", 0.0))
+                total_open_value += px * sz
+                total_open_qty += sz
+                real_open_fee += fee
+            real_entry = total_open_value / total_open_qty if total_open_qty > 0 else default_entry
+            logger.info(f"Matched {len(open_fills)} open fills and {len(close_fills)} close fills for {coin_upper}.")
+        else:
+            real_entry = default_entry
+            real_open_fee = abs(default_entry * real_qty) * taker_fee_rate
+            logger.info(f"Matched {len(close_fills)} close fills for {coin_upper}. Open fills not found, using fallback fee.")
+
+        total_fee = real_open_fee + real_close_fee
+
+        if side_upper == "LONG":
+            gross_pnl = (real_exit - real_entry) * real_qty
+        else:
+            gross_pnl = (real_entry - real_exit) * real_qty
+
+        net_pnl = gross_pnl - total_fee
+
+        return {
+            "entry": real_entry,
+            "exit": real_exit,
+            "qty": real_qty,
+            "fee": total_fee,
+            "pnl": net_pnl,
+            "gross_pnl": gross_pnl,
+            "success": True
+        }
+
+
 try:
     import eth_account
     from hyperliquid.exchange import Exchange

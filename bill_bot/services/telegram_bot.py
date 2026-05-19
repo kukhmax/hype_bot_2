@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 import logging
 import re
 import time
+import asyncio
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery
@@ -865,6 +866,8 @@ async def run_telegram(
                 # Затем закрываем по рынку
                 await hl_client.market_close(pair)
                 logger.info("tg:close_manual_hl_success pair=%s", pair)
+                # Ждем 1 секунду для обновления fills на бирже
+                await asyncio.sleep(1.0)
             except Exception as e:
                 logger.error("tg:close_manual_hl_fail pair=%s err=%s", pair, e)
                 await cb.answer(f"Ошибка API: {e}")
@@ -872,30 +875,54 @@ async def run_telegram(
 
         candles = await candle_store.get_window(pair, tf)
         exit_px = float(candles[-1].c) if candles else pos.entry
-        gross_pnl = _pnl_realized(pos.side, pos.entry, exit_px, pos.qty)
-        # Расчёт комиссии
-        fee = abs(pos.entry * pos.qty) * cfg.taker_fee_rate + abs(exit_px * pos.qty) * cfg.taker_fee_rate
-        pnl = gross_pnl - fee  # Net PnL
         
+        entry = pos.entry
+        qty = pos.qty
+        side = pos.side
+        opened_t = pos.opened_t
+        cur_t = int(time.time() * 1000)
+
+        if mode == "LIVE" and hl_client:
+            # Получаем реальные данные с биржи
+            real_details = await hl.get_real_trade_details(
+                user_address=hl_client.wallet,
+                coin=pair,
+                opened_t=opened_t,
+                side=side,
+                default_entry=entry,
+                default_exit=exit_px,
+                default_qty=qty,
+                taker_fee_rate=cfg.taker_fee_rate
+            )
+            entry = real_details["entry"]
+            exit_px = real_details["exit"]
+            qty = real_details["qty"]
+            fee = real_details["fee"]
+            pnl = real_details["pnl"]
+            gross_pnl = real_details["gross_pnl"]
+        else:
+            gross_pnl = _pnl_realized(side, entry, exit_px, qty)
+            fee = abs(entry * qty) * cfg.taker_fee_rate + abs(exit_px * qty) * cfg.taker_fee_rate
+            pnl = gross_pnl - fee  # Net PnL
+
         # Получаем реальный баланс после закрытия
         balance_after = await _get_base_equity(uid)
-        
+
         realized = float(st.get("realized", 0.0)) + float(pnl)
         st["realized"] = realized
-        cur_t = int(time.time() * 1000)
         trade = {
             "user_id": uid,
             "pair": pair,
             "tf": tf,
-            "side": pos.side,
-            "entry": pos.entry,
+            "side": side,
+            "entry": entry,
             "exit": exit_px,
-            "qty": pos.qty,
+            "qty": qty,
             "pnl": pnl,
             "gross_pnl": gross_pnl,
             "fee": fee,
             "balance_after": balance_after,
-            "opened_t": pos.opened_t,
+            "opened_t": opened_t,
             "closed_t": cur_t,
             "reason": "MANUAL_CLOSE",
             "cluster_t": pos.cluster_t,

@@ -425,15 +425,26 @@ class ExecutionLiveRun:
             exit_px = float(cur_px) if cur_px is not None else entry
             qty = float(local_pos.get("qty", 0.0))
             side = str(local_pos.get("side", "")).upper()
+            opened_t = int(local_pos.get("opened_t", cur_t))
             
-            # Расчёт PnL с учётом комиссий
-            gross_pnl = 0.0
-            if side == "LONG":
-                gross_pnl = (exit_px - entry) * qty
-            else:
-                gross_pnl = (entry - exit_px) * qty
-            fee = self._calc_fee(entry, exit_px, qty)
-            pnl = gross_pnl - fee  # Net PnL (за вычетом комиссий)
+            # Получаем реальные данные с биржи
+            real_details = await self.hl_info.get_real_trade_details(
+                user_address=self.hl_client.wallet,
+                coin=pair,
+                opened_t=opened_t,
+                side=side,
+                default_entry=entry,
+                default_exit=exit_px,
+                default_qty=qty,
+                taker_fee_rate=self.fee_rate
+            )
+            
+            entry = real_details["entry"]
+            exit_px = real_details["exit"]
+            qty = real_details["qty"]
+            fee = real_details["fee"]
+            pnl = real_details["pnl"]
+            gross_pnl = real_details["gross_pnl"]
             
             # Получаем реальный баланс после закрытия
             balance_after = await self._get_real_balance()
