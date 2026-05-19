@@ -5,16 +5,26 @@ from bill_bot.services.candle_store import Candle
 from bill_bot.services.strategy import SignalCandidate
 from bill_bot.services.execution import RedisTradeState, PendingOrder, Position
 from bill_bot.services.hyperliquid_api import HyperliquidExchangeClient, HyperliquidInfoClient
+from bill_bot.services.optimizer_agent import TradeOptimizerAgent
 
 logger = logging.getLogger(__name__)
 
 class ExecutionLiveRun:
-    def __init__(self, store: RedisTradeState, tf: str, hl_client: HyperliquidExchangeClient, hl_info: HyperliquidInfoClient, fee_rate: float = 0.000456):
+    def __init__(
+        self,
+        store: RedisTradeState,
+        tf: str,
+        hl_client: HyperliquidExchangeClient,
+        hl_info: HyperliquidInfoClient,
+        fee_rate: float = 0.000456,
+        optimizer: TradeOptimizerAgent | None = None
+    ):
         self.store = store
         self.tf = tf
         self.hl_client = hl_client
         self.hl_info = hl_info
         self.fee_rate = fee_rate  # Taker fee rate (0.0456% default)
+        self.optimizer = optimizer
 
     def _get_orders(self, state: dict) -> list[PendingOrder]:
         if "ords" in state and isinstance(state["ords"], list):
@@ -148,8 +158,32 @@ class ExecutionLiveRun:
             logger.warning("LiveRun: Real balance is 0 or failed to load")
             return {"changed": False}
 
+        # Вызов оптимизатора
+        setup_probability = 0.5
+        trailing_strategy = "TRENDING"
+        suggested_risk_pct = risk_pct
+
+        if self.optimizer and cand:
+            try:
+                opt_res = await self.optimizer.predict_probability(
+                    user_id=user_id,
+                    pair=pair,
+                    tf=self.tf,
+                    side=cand.side,
+                    default_risk_pct=risk_pct
+                )
+                setup_probability = opt_res["probability"]
+                trailing_strategy = opt_res["trailing_strategy"]
+                suggested_risk_pct = opt_res["suggested_risk_pct"]
+                logger.info(
+                    f" 🧠  OptimizerAgent: Setup scored {setup_probability:.2f} ({opt_res['source']}), "
+                    f"strategy={trailing_strategy}, risk={suggested_risk_pct:.2f}%"
+                )
+            except Exception as e:
+                logger.error(f"OptimizerAgent: Error predicting probability for {pair}: {e}")
+
         margin_amount = balance * (margin_pct / 100.0)
-        risk_amount = margin_amount * (risk_pct / 100.0)
+        risk_amount = margin_amount * (suggested_risk_pct / 100.0)
         dist = abs(cand.entry_trigger - cand.stop_loss)
         if dist <= 0:
             return {"changed": False}
@@ -185,7 +219,10 @@ class ExecutionLiveRun:
                 stop_loss=cand.stop_loss,
                 take_profit=cand.take_profit,
                 qty=sz,
-                rr=cand.rr
+                rr=cand.rr,
+                setup_probability=setup_probability,
+                trailing_strategy=trailing_strategy,
+                suggested_risk_pct=suggested_risk_pct
             )
             # Сохраняем, оставляя ордера другой стороны
             new_ords = [o for o in old_orders if o.side != po.side]
@@ -358,7 +395,10 @@ class ExecutionLiveRun:
                     side=current_side, entry=real_entry, stop_loss=sl_px, take_profit=tp_px,
                     tp0=tp_px, tr1_done=False, tr2_done=False, tr_steps=0,
                     qty=abs(real_sz), opened_t=cur_t, cluster_t=po.cluster_t if po else cur_t,
-                    rr=po.rr if po else 1.5
+                    rr=po.rr if po else 1.5,
+                    setup_probability=po.setup_probability if po else 0.5,
+                    trailing_strategy=po.trailing_strategy if po else "TRENDING",
+                    suggested_risk_pct=po.suggested_risk_pct if po else None
                 ).to_dict()
                 self._set_orders(state, []) # Очищаем ордера
                 changed = True
@@ -604,7 +644,9 @@ class ExecutionLiveRun:
             new_pos = Position(
                 side=pos.side, entry=pos.entry, stop_loss=sl, take_profit=tp,
                 tp0=pos.tp0, tr1_done=pos.tr1_done, tr2_done=pos.tr2_done,
-                tr_steps=pos.tr_steps, qty=pos.qty, opened_t=pos.opened_t, cluster_t=pos.cluster_t, rr=pos.rr
+                tr_steps=pos.tr_steps, qty=pos.qty, opened_t=pos.opened_t, cluster_t=pos.cluster_t, rr=pos.rr,
+                setup_probability=pos.setup_probability, trailing_strategy=pos.trailing_strategy,
+                suggested_risk_pct=pos.suggested_risk_pct
             )
             state["pos"] = new_pos.to_dict()
             await self.store.set(user_id, pair, self.tf, state)
@@ -614,55 +656,83 @@ class ExecutionLiveRun:
             return False
 
     def _apply_trailing(self, pos: Position, candle: Candle) -> Position:
+        strategy = str(pos.trailing_strategy).upper()
+        if strategy == "FIXED":
+            return pos
+
         side = str(pos.side).upper()
         dist = abs(float(pos.take_profit) - float(pos.entry))
         if dist <= 0:
             return pos
+
+        # Параметры стратегии трейлинга
+        if strategy == "SCALPING":
+            tr1_mult = 0.40
+            tr2_mult = 0.70
+            new_sl_mult = 0.60
+            new_tp_mult = 1.40
+        else:  # TRENDING (default)
+            tr1_mult = 0.70
+            tr2_mult = 0.90
+            new_sl_mult = 0.80
+            new_tp_mult = 1.80
+
         max_steps_per_candle = 10
 
         if side == "LONG":
             h = float(candle.h)
             cur = pos
-            if (not cur.tr1_done) and (h >= float(cur.entry) + 0.60 * dist):
+            if (not cur.tr1_done) and (h >= float(cur.entry) + tr1_mult * dist):
                 cur = Position(
                     side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), float(cur.entry)),
                     take_profit=cur.take_profit, tp0=cur.tp0, tr1_done=True, tr2_done=cur.tr2_done,
-                    tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t
+                    tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t,
+                    rr=cur.rr, setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
+                    suggested_risk_pct=cur.suggested_risk_pct
                 )
 
             steps = 0
             while steps < max_steps_per_candle:
                 dist2 = abs(float(cur.take_profit) - float(cur.entry))
-                if dist2 <= 0 or h < float(cur.entry) + 0.90 * dist2: break
-                new_sl = float(cur.entry) + 0.80 * dist2
-                new_tp = float(cur.entry) + 1.70 * dist2
+                if dist2 <= 0 or h < float(cur.entry) + tr2_mult * dist2:
+                    break
+                new_sl = float(cur.entry) + new_sl_mult * dist2
+                new_tp = float(cur.entry) + new_tp_mult * dist2
                 cur = Position(
                     side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), new_sl),
                     take_profit=max(float(cur.take_profit), new_tp), tp0=cur.tp0, tr1_done=True, tr2_done=True,
-                    tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t
+                    tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t,
+                    rr=cur.rr, setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
+                    suggested_risk_pct=cur.suggested_risk_pct
                 )
                 steps += 1
             return cur
 
+        # SHORT side
         l = float(candle.l)
         cur = pos
-        if (not cur.tr1_done) and (l <= float(cur.entry) - 0.60 * dist):
+        if (not cur.tr1_done) and (l <= float(cur.entry) - tr1_mult * dist):
             cur = Position(
                 side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), float(cur.entry)),
                 take_profit=cur.take_profit, tp0=cur.tp0, tr1_done=True, tr2_done=cur.tr2_done,
-                tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t
+                tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t,
+                rr=cur.rr, setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
+                suggested_risk_pct=cur.suggested_risk_pct
             )
 
         steps = 0
         while steps < max_steps_per_candle:
             dist2 = abs(float(cur.take_profit) - float(cur.entry))
-            if dist2 <= 0 or l > float(cur.entry) - 0.90 * dist2: break
-            new_sl = float(cur.entry) - 0.8 * dist2
-            new_tp = float(cur.entry) - 1.70 * dist2
+            if dist2 <= 0 or l > float(cur.entry) - tr2_mult * dist2:
+                break
+            new_sl = float(cur.entry) - new_sl_mult * dist2
+            new_tp = float(cur.entry) - new_tp_mult * dist2
             cur = Position(
                 side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), new_sl),
                 take_profit=min(float(cur.take_profit), new_tp), tp0=cur.tp0, tr1_done=True, tr2_done=True,
-                tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t
+                tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t,
+                rr=cur.rr, setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
+                suggested_risk_pct=cur.suggested_risk_pct
             )
             steps += 1
         return cur

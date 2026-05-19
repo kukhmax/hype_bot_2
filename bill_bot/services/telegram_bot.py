@@ -247,6 +247,14 @@ async def run_telegram(
     bot = Bot(token=cfg.telegram_token)
     dp = Dispatcher(storage=MemoryStorage())
     hl = HyperliquidInfoClient()
+    
+    from bill_bot.services.optimizer_agent import TradeOptimizerAgent
+    optimizer_agent = TradeOptimizerAgent(
+        trade_state=trade_state,
+        pairs=cfg.pairs_available,
+        timeframes=cfg.timeframes_available
+    )
+    
     last_msg_key = lambda uid: f"tg:last_bot_msg:{int(uid)}"
 
     async def _build_signal_chart(pair: str, tf: str, levels: list[PriceLevel]) -> bytes | None:
@@ -395,10 +403,16 @@ async def run_telegram(
                 side_u = pos.side.upper()
                 side_emoji = "🟢" if side_u == "LONG" else "🔴"
                 upnl_emoji = "🟩" if upnl >= 0 else "🟥"
+                
+                # Показываем метаданные оптимизатора
+                prob_val = getattr(pos, "setup_probability", 0.5)
+                strat_val = getattr(pos, "trailing_strategy", "TRENDING")
+                prob_text = f" | 🧠 Вероятность: {prob_val*100:.0f}% ({strat_val})"
+                
                 lines.append(
                     f"{side_emoji} [POS] {pair_txt} — {side_u}\n"
                     f"🎯 Entry {pos.entry:.4f} | 🛑 SL {pos.stop_loss:.4f} | ✅ TP {pos.take_profit:.4f}\n"
-                    f"📦 Qty {pos.qty:.6f} | {upnl_emoji} uPnL {upnl:+.2f}"
+                    f"📦 Qty {pos.qty:.6f} | {upnl_emoji} uPnL {upnl:+.2f}{prob_text}"
                 )
                 kb.button(text=f"🔻 Закрыть {pair_txt}", callback_data=f"pos_close:{p}")
             else:
@@ -407,10 +421,15 @@ async def run_telegram(
                     for o in orders:
                         side_u = o.side.upper()
                         side_emoji = "🟢" if side_u == "LONG" else "🔴"
+                        
+                        prob_val = getattr(o, "setup_probability", 0.5)
+                        strat_val = getattr(o, "trailing_strategy", "TRENDING")
+                        prob_text = f" | 🧠 Вероятность: {prob_val*100:.0f}% ({strat_val})"
+                        
                         lines.append(
                             f"🚩[ORD] {pair_txt} — {side_emoji} {side_u}\n"
                             f"🎯 Trigger {o.trigger:.4f} | 🛑 SL {o.stop_loss:.4f} | ✅ TP {o.take_profit:.4f}\n"
-                            f"📦 Qty {o.qty:.6f}"
+                            f"📦 Qty {o.qty:.6f}{prob_text}"
                         )
                         kb.button(text=f"❌ Отменить {side_u} {pair_txt}", callback_data=f"ord_cancel:{p}:{side_u}")
                 else:
@@ -1530,6 +1549,63 @@ async def run_telegram(
             caption=f"📈 PnL Performance ({tf})",
             reply_markup=kb.as_markup()
         )
+
+    @dp.message(F.text == "/optimizer")
+    @dp.message(F.text == "/opt")
+    async def optimizer_info_cmd(message: Message):
+        uid = message.from_user.id
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        
+        try:
+            stats = await optimizer_agent.analyze_history(uid)
+            glob = stats["global"]
+            total_trades = glob["total"]
+            
+            if total_trades == 0:
+                text = (
+                    "🧠 **Trade Optimizer Agent**\n\n"
+                    "История сделок пуста. Агент не может провести анализ.\n"
+                    "Пожалуйста, совершите несколько сделок, чтобы активировать оптимизатор."
+                )
+                await message.reply(text, parse_mode="Markdown")
+                return
+
+            text = (
+                "🧠 **Trade Optimizer Agent**\n\n"
+                "📊 **Глобальная статистика:**\n"
+                f"• Всего сделок: `{total_trades}`\n"
+                f"• Доля прибыльных (Win Rate): `{glob['win_rate']*100:.1f}%`\n"
+                f"• Общий PnL: `{glob['pnl']:+.4f} USDC`\n"
+                f"• Суммарные комиссии: `{glob['fee']:.4f} USDC`\n\n"
+                "📈 **Анализ по монетам:**\n"
+            )
+            
+            for pair, p_info in stats["by_pair"].items():
+                text += (
+                    f"• **{pair}** — Всего: `{p_info['total']}` | "
+                    f"WR: `{p_info['win_rate']*100:.1f}%` | "
+                    f"PnL: `{p_info['pnl']:+.2f}`\n"
+                )
+                
+            text += "\n🧩 **Рекомендации по сетапам:**\n"
+            for setup, s_info in stats["by_setup"].items():
+                coin, tf, side = setup.split(":")
+                rec_strategy = "TRENDING" if s_info["win_rate"] >= 0.60 else "SCALPING"
+                risk_mult = "1.3x" if s_info["win_rate"] >= 0.60 else ("1.0x" if s_info["win_rate"] >= 0.45 else "0.5x")
+                text += (
+                    f"• `{coin} {tf} {side}`: WR `{s_info['win_rate']*100:.0f}%` (из `{s_info['total']}`) "
+                    f"→ 🛠 `{rec_strategy}` (Риск: `{risk_mult}`)\n"
+                )
+                
+            text += (
+                "\nℹ️ _Агент автоматически корректирует размер входа и стратегию трейлинга "
+                "при открытии каждой новой сделки._"
+            )
+            
+            await message.reply(text, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"TelegramBot: Error in /optimizer cmd: {e}")
+            await message.reply("⚠️ Произошла ошибка при анализе сделок.")
 
     logger.info("Telegram bot polling started")
     await dp.start_polling(bot)

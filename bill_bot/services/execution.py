@@ -18,6 +18,9 @@ class PendingOrder:
     take_profit: float
     qty: float
     rr: float = 1.5
+    setup_probability: float = 0.5
+    trailing_strategy: str = "TRENDING"
+    suggested_risk_pct: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -28,6 +31,9 @@ class PendingOrder:
             "take_profit": self.take_profit,
             "qty": self.qty,
             "rr": self.rr,
+            "setup_probability": self.setup_probability,
+            "trailing_strategy": self.trailing_strategy,
+            "suggested_risk_pct": self.suggested_risk_pct,
         }
 
     @staticmethod
@@ -40,6 +46,9 @@ class PendingOrder:
             take_profit=float(d["take_profit"]),
             qty=float(d["qty"]),
             rr=float(d.get("rr", 1.5)),
+            setup_probability=float(d.get("setup_probability", 0.5)),
+            trailing_strategy=str(d.get("trailing_strategy", "TRENDING")),
+            suggested_risk_pct=float(d["suggested_risk_pct"]) if d.get("suggested_risk_pct") is not None else None,
         )
 
 
@@ -57,6 +66,9 @@ class Position:
     opened_t: int
     cluster_t: int
     rr: float = 1.5
+    setup_probability: float = 0.5
+    trailing_strategy: str = "TRENDING"
+    suggested_risk_pct: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -72,6 +84,9 @@ class Position:
             "opened_t": self.opened_t,
             "cluster_t": self.cluster_t,
             "rr": self.rr,
+            "setup_probability": self.setup_probability,
+            "trailing_strategy": self.trailing_strategy,
+            "suggested_risk_pct": self.suggested_risk_pct,
         }
 
     @staticmethod
@@ -90,6 +105,9 @@ class Position:
             opened_t=int(d["opened_t"]),
             cluster_t=int(d["cluster_t"]),
             rr=float(d.get("rr", 1.5)),
+            setup_probability=float(d.get("setup_probability", 0.5)),
+            trailing_strategy=str(d.get("trailing_strategy", "TRENDING")),
+            suggested_risk_pct=float(d["suggested_risk_pct"]) if d.get("suggested_risk_pct") is not None else None,
         )
 
 
@@ -175,6 +193,10 @@ class ExecutionDryRun:
 
     @staticmethod
     def _apply_trailing(pos: Position, candle: Candle) -> Position:
+        strategy = str(pos.trailing_strategy).upper()
+        if strategy == "FIXED":
+            return pos
+
         side = str(pos.side).upper()
         # Используем начальный тейк (tp0) для расчета базовой дистанции
         entry = float(pos.entry)
@@ -183,47 +205,63 @@ class ExecutionDryRun:
         if dist0 <= 0:
             return pos
         
+        # Параметры стратегии трейлинга
+        if strategy == "SCALPING":
+            tr1_mult = 0.40
+            tr2_mult = 0.70
+            new_sl_mult = 0.60
+            new_tp_add = 0.30
+        else:  # TRENDING (default)
+            tr1_mult = 0.70
+            tr2_mult = 0.90
+            new_sl_mult = 0.80
+            new_tp_add = 0.60
+
         cur = pos
         h = float(candle.h)
         l = float(candle.l)
 
         if side == "LONG":
-            # TR1: 60% до цели -> SL в безубыток
-            if (not cur.tr1_done) and (h >= entry + 0.60 * dist0):
+            # TR1: безубыток
+            if (not cur.tr1_done) and (h >= entry + tr1_mult * dist0):
                 cur = Position(
                     side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), entry),
                     take_profit=cur.take_profit, tp0=cur.tp0, tr1_done=True, tr2_done=cur.tr2_done,
-                    tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr
+                    tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr,
+                    setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
+                    suggested_risk_pct=cur.suggested_risk_pct
                 )
             
-            # TR2+: Активный трейлинг при достижении 85% от ТЕКУЩЕГО тейка
-            # Каждым шагом мы подтягиваем SL и отодвигаем TP
+            # TR2+: Активный трейлинг
             max_steps = 5
             step = 0
             while step < max_steps:
                 current_tp = float(cur.take_profit)
                 current_dist = abs(current_tp - entry)
-                if h < entry + 0.85 * current_dist:
+                if h < entry + tr2_mult * current_dist:
                     break
                 
-                # Новый SL на 70% от текущей дистанции, новый TP отодвигаем еще на 50% от начальной дистанции
-                new_sl = entry + 0.70 * current_dist
-                new_tp = current_tp + 0.50 * dist0
+                new_sl = entry + new_sl_mult * current_dist
+                new_tp = current_tp + new_tp_add * dist0
                 
                 cur = Position(
                     side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), new_sl),
                     take_profit=max(current_tp, new_tp), tp0=cur.tp0, tr1_done=True, tr2_done=True,
-                    tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr
+                    tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr,
+                    setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
+                    suggested_risk_pct=cur.suggested_risk_pct
                 )
                 step += 1
                 
         else: # SHORT
-            # TR1: 60% до цели -> SL в безубыток
-            if (not cur.tr1_done) and (l <= entry - 0.60 * dist0):
+            # TR1: безубыток
+            if (not cur.tr1_done) and (l <= entry - tr1_mult * dist0):
                 cur = Position(
                     side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), entry),
                     take_profit=cur.take_profit, tp0=cur.tp0, tr1_done=True, tr2_done=cur.tr2_done,
-                    tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr
+                    tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr,
+                    setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
+                    suggested_risk_pct=cur.suggested_risk_pct
                 )
             
             # TR2+: Активный трейлинг
@@ -232,16 +270,18 @@ class ExecutionDryRun:
             while step < max_steps:
                 current_tp = float(cur.take_profit)
                 current_dist = abs(entry - current_tp)
-                if l > entry - 0.85 * current_dist:
+                if l > entry - tr2_mult * current_dist:
                     break
                 
-                new_sl = entry - 0.70 * current_dist
-                new_tp = current_tp - 0.50 * dist0
+                new_sl = entry - new_sl_mult * current_dist
+                new_tp = current_tp - new_tp_add * dist0
                 
                 cur = Position(
                     side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), new_sl),
                     take_profit=min(current_tp, new_tp), tp0=cur.tp0, tr1_done=True, tr2_done=True,
-                    tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr
+                    tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr,
+                    setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
+                    suggested_risk_pct=cur.suggested_risk_pct
                 )
                 step += 1
                 

@@ -361,8 +361,20 @@ async def main():
           from bill_bot.services.hyperliquid_api import HyperliquidInfoClient
           hl = HyperliquidInfoClient()
           from bill_bot.services.execution_live import ExecutionLiveRun
-          exec_engine_dry = ExecutionDryRun(trade_state, tf, virtual_equity=cfg.virtual_equity)
-          exec_engine_live = ExecutionLiveRun(store=trade_state, tf=tf, hl_client=hl_exchange, hl_info=hl, fee_rate=cfg.taker_fee_rate)
+          from bill_bot.services.optimizer_agent import TradeOptimizerAgent
+          opt_agent = TradeOptimizerAgent(
+              trade_state=trade_state,
+              pairs=cfg.pairs_available,
+              timeframes=cfg.timeframes_available
+          )
+          exec_engine_live = ExecutionLiveRun(
+              store=trade_state,
+              tf=tf,
+              hl_client=hl_exchange,
+              hl_info=hl,
+              fee_rate=cfg.taker_fee_rate,
+              optimizer=opt_agent
+          )
           all_live_engines[tf] = exec_engine_live
         
         subs_tf = SubscriptionStore(subs.r, tf=tf)

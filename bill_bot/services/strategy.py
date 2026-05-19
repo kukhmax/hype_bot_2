@@ -21,6 +21,9 @@ class SignalCandidate:
     stop_loss: float
     take_profit: float
     rr: float
+    setup_probability: float = 0.5
+    trailing_strategy: str = "TRENDING"
+    suggested_risk_pct: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -33,6 +36,9 @@ class SignalCandidate:
             "stop_loss": self.stop_loss,
             "take_profit": self.take_profit,
             "rr": self.rr,
+            "setup_probability": self.setup_probability,
+            "trailing_strategy": self.trailing_strategy,
+            "suggested_risk_pct": self.suggested_risk_pct,
         }
 
 
