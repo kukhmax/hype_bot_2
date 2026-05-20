@@ -1,4 +1,6 @@
 import logging
+import json
+import urllib.request
 from typing import Tuple, Optional
 
 from bill_bot.services.candle_store import Candle
@@ -8,6 +10,42 @@ from bill_bot.services.hyperliquid_api import HyperliquidExchangeClient, Hyperli
 from bill_bot.services.optimizer_agent import TradeOptimizerAgent
 
 logger = logging.getLogger(__name__)
+
+# #region debug-point A:emit-helper
+def _dbg_emit(hypothesis_id: str, location: str, msg: str, data: dict | None = None, run_id: str = "pre-fix") -> None:
+    _p = ".dbg/order-cancel-reentry.env"
+    _u, _s = "http://127.0.0.1:7777/event", "order-cancel-reentry"
+    try:
+        with open(_p, "r", encoding="utf-8") as _f:
+            _c = _f.read()
+        for _line in _c.splitlines():
+            if _line.startswith("DEBUG_SERVER_URL="):
+                _u = _line.split("=", 1)[1] or _u
+            elif _line.startswith("DEBUG_SESSION_ID="):
+                _s = _line.split("=", 1)[1] or _s
+    except Exception:
+        pass
+    try:
+        urllib.request.urlopen(
+            urllib.request.Request(
+                _u,
+                data=json.dumps(
+                    {
+                        "sessionId": _s,
+                        "runId": run_id,
+                        "hypothesisId": hypothesis_id,
+                        "location": location,
+                        "msg": msg,
+                        "data": data or {},
+                    }
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            ),
+            timeout=0.35,
+        ).read()
+    except Exception:
+        pass
+# #endregion
 
 class ExecutionLiveRun:
     def __init__(
@@ -117,6 +155,17 @@ class ExecutionLiveRun:
 
         old_orders = self._get_orders(state)
         canceled_order = next((o for o in old_orders if o.side == cand.side), None)
+        # #region debug-point C:place-order-input
+        _dbg_emit("C", "execution_live.py:maybe_place_order", "[DEBUG] maybe_place_order input", {
+            "pair": pair,
+            "side": cand.side,
+            "entry_trigger": float(cand.entry_trigger),
+            "stop_loss": float(cand.stop_loss),
+            "take_profit": float(cand.take_profit),
+            "old_orders": [o.to_dict() for o in old_orders],
+            "has_local_pos": bool(state.get("pos")),
+        })
+        # #endregion
         
         try:
             # ВАЖНО: используем hl_info.open_orders(), который видит триггерные ордера (frontendOpenOrders)
@@ -229,6 +278,18 @@ class ExecutionLiveRun:
             # Сохраняем, оставляя ордера другой стороны
             new_ords = [o for o in old_orders if o.side != po.side]
             new_ords.append(po)
+            # #region debug-point A:local-order-save
+            _dbg_emit("A", "execution_live.py:maybe_place_order", "[DEBUG] saving pending order to state", {
+                "pair": pair,
+                "side": po.side,
+                "event_type": "order_replaced" if canceled_order else "order_placed",
+                "trigger": float(po.trigger),
+                "stop_loss": float(po.stop_loss),
+                "take_profit": float(po.take_profit),
+                "qty": float(po.qty),
+                "result_orders": [o.to_dict() for o in new_ords],
+            })
+            # #endregion
             self._set_orders(state, new_ords)
             await self.store.set(user_id, pair, self.tf, state)
             
@@ -375,6 +436,16 @@ class ExecutionLiveRun:
                 
                 # Ищем параметры SL/TP (сначала из локального ордера той же стороны, потом с биржи)
                 po = next((o for o in local_ords if o.side == current_side), None)
+                # #region debug-point B:sync-open-detect
+                _dbg_emit("B", "execution_live.py:sync_state", "[DEBUG] sync detected exchange position", {
+                    "pair": pair,
+                    "current_side": current_side,
+                    "real_sz": float(real_sz),
+                    "real_entry": float(real_entry),
+                    "local_orders": [o.to_dict() for o in local_ords],
+                    "matched_pending_order": po.to_dict() if po else None,
+                })
+                # #endregion
                 
                 sl_px = self.round_price(float(po.stop_loss)) if po else 0.0
                 tp_px = self.round_price(float(po.take_profit)) if po else 0.0
@@ -398,6 +469,25 @@ class ExecutionLiveRun:
                             px = self.round_price(float(eo.get("triggerPx", 0)))
                             if eo.get("tpsl") == "tp": tp_px = px
                             if eo.get("tpsl") == "sl": sl_px = px
+                # #region debug-point B:sync-tpsl-recovery
+                _dbg_emit("B", "execution_live.py:sync_state", "[DEBUG] sync recovered tpsl values", {
+                    "pair": pair,
+                    "side": current_side,
+                    "sl_px": float(sl_px),
+                    "tp_px": float(tp_px),
+                    "open_orders": [
+                        {
+                            "coin": o.get("coin"),
+                            "side": o.get("side"),
+                            "isTrigger": o.get("isTrigger"),
+                            "reduceOnly": o.get("reduceOnly"),
+                            "tpsl": o.get("tpsl"),
+                            "triggerPx": o.get("triggerPx"),
+                        }
+                        for o in open_ords if str(o.get("coin", "")).upper() == pair.upper()
+                    ],
+                })
+                # #endregion
 
                 # Сохраняем новое состояние
                 state["pos"] = Position(
@@ -434,6 +524,17 @@ class ExecutionLiveRun:
                             final_sz = round(abs(real_sz), sz_decimals)
                             
                             logger.info(f"LiveRun: Sync-placing TP for {pair}: {tp_px} (sz={final_sz})")
+                            # #region debug-point B:sync-place-tpsl
+                            _dbg_emit("B", "execution_live.py:sync_state", "[DEBUG] sync placing tpsl", {
+                                "pair": pair,
+                                "side": current_side,
+                                "final_sz": float(final_sz),
+                                "tp_px": float(tp_px),
+                                "sl_px": float(sl_px),
+                                "has_sl": bool(has_sl),
+                                "has_tp": bool(has_tp),
+                            })
+                            # #endregion
                             try:
                                 res_tp = await self.hl_client.place_order(pair, is_buy_close, final_sz, tp_px, tp_type, reduce_only=True)
                                 logger.info(f"LiveRun: Sync TP response: {res_tp}")
@@ -561,6 +662,13 @@ class ExecutionLiveRun:
         state = await self.store.get(user_id, pair, self.tf)
         orders = self._get_orders(state)
         side_u = side.upper()
+        # #region debug-point A:cancel-order-start
+        _dbg_emit("A", "execution_live.py:cancel_order", "[DEBUG] manual cancel requested", {
+            "pair": pair,
+            "side": side_u,
+            "local_orders_before": [o.to_dict() for o in orders],
+        })
+        # #endregion
         
         # 1. Отмена на бирже
         try:
@@ -578,6 +686,13 @@ class ExecutionLiveRun:
         new_ords = [o for o in orders if o.side.upper() != side_u]
         if len(new_ords) != len(orders):
             self._set_orders(state, new_ords)
+            # #region debug-point A:cancel-order-state-cleared
+            _dbg_emit("A", "execution_live.py:cancel_order", "[DEBUG] local orders after manual cancel", {
+                "pair": pair,
+                "side": side_u,
+                "local_orders_after": [o.to_dict() for o in new_ords],
+            })
+            # #endregion
             await self.store.set(user_id, pair, self.tf, state)
             return True
         return False

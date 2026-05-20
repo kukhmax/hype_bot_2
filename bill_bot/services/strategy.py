@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import urllib.request
 from dataclasses import dataclass
 
 import redis.asyncio as redis
@@ -8,6 +9,43 @@ import redis.asyncio as redis
 from bill_bot.services.candle_store import Candle
 from bill_bot.services.fractals import Fractal
 from bill_bot.services.indicators import alligator_ema, atr, is_alligator_tangled, is_sleep, spread_lines
+
+
+# #region debug-point D:emit-helper
+def _dbg_emit(hypothesis_id: str, location: str, msg: str, data: dict | None = None, run_id: str = "pre-fix") -> None:
+    _p = ".dbg/order-cancel-reentry.env"
+    _u, _s = "http://127.0.0.1:7777/event", "order-cancel-reentry"
+    try:
+        with open(_p, "r", encoding="utf-8") as _f:
+            _c = _f.read()
+        for _line in _c.splitlines():
+            if _line.startswith("DEBUG_SERVER_URL="):
+                _u = _line.split("=", 1)[1] or _u
+            elif _line.startswith("DEBUG_SESSION_ID="):
+                _s = _line.split("=", 1)[1] or _s
+    except Exception:
+        pass
+    try:
+        urllib.request.urlopen(
+            urllib.request.Request(
+                _u,
+                data=json.dumps(
+                    {
+                        "sessionId": _s,
+                        "runId": run_id,
+                        "hypothesisId": hypothesis_id,
+                        "location": location,
+                        "msg": msg,
+                        "data": data or {},
+                    }
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            ),
+            timeout=0.35,
+        ).read()
+    except Exception:
+        pass
+# #endregion
 
 
 @dataclass(frozen=True)
@@ -144,6 +182,16 @@ class StrategyEngine:
             "teeth_lips": self._latest_cross_index(alli["teeth"], alli["lips"], setup_anchor_idx),
             "jaw_lips": self._latest_cross_index(alli["jaw"], alli["lips"], setup_anchor_idx),
         }
+        # #region debug-point D:cross-check
+        _dbg_emit("D", "strategy.py:evaluate", "[DEBUG] alligator cross check before setup", {
+            "pair": pair,
+            "setup_anchor_t": int(setup_anchor_t),
+            "setup_anchor_idx": int(setup_anchor_idx),
+            "long_cluster_t": int(long_entry.t),
+            "short_cluster_t": int(short_entry.t),
+            "latest_crosses": latest_crosses,
+        })
+        # #endregion
         ctx["pre_setup_crosses"] = latest_crosses
         if any(v is None for v in latest_crosses.values()):
             ctx["reason"] = "no_pre_setup_cross"
@@ -155,6 +203,17 @@ class StrategyEngine:
 
         cluster_spread = abs(float(long_entry.price) - float(short_entry.price))
         cluster_spread_atr = cluster_spread / last_atr
+        # #region debug-point E:spread-check
+        _dbg_emit("E", "strategy.py:evaluate", "[DEBUG] cluster spread check", {
+            "pair": pair,
+            "long_cluster_price": float(long_entry.price),
+            "short_cluster_price": float(short_entry.price),
+            "cluster_spread": float(cluster_spread),
+            "atr": float(last_atr),
+            "cluster_spread_atr": float(cluster_spread_atr),
+            "cluster_spread_atr_max": float(self.cluster_spread_atr_max),
+        })
+        # #endregion
         ctx["cluster_spread"] = cluster_spread
         ctx["cluster_spread_atr"] = cluster_spread_atr
         if cluster_spread_atr > self.cluster_spread_atr_max:
