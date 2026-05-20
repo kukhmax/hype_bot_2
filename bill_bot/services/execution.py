@@ -21,6 +21,7 @@ class PendingOrder:
     setup_probability: float = 0.5
     trailing_strategy: str = "TRENDING"
     suggested_risk_pct: float | None = None
+    setup_features: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -34,6 +35,7 @@ class PendingOrder:
             "setup_probability": self.setup_probability,
             "trailing_strategy": self.trailing_strategy,
             "suggested_risk_pct": self.suggested_risk_pct,
+            "setup_features": self.setup_features,
         }
 
     @staticmethod
@@ -49,6 +51,7 @@ class PendingOrder:
             setup_probability=float(d.get("setup_probability", 0.5)),
             trailing_strategy=str(d.get("trailing_strategy", "TRENDING")),
             suggested_risk_pct=float(d["suggested_risk_pct"]) if d.get("suggested_risk_pct") is not None else None,
+            setup_features=d.get("setup_features") if isinstance(d.get("setup_features"), dict) else None,
         )
 
 
@@ -69,6 +72,8 @@ class Position:
     setup_probability: float = 0.5
     trailing_strategy: str = "TRENDING"
     suggested_risk_pct: float | None = None
+    take_profit_active: bool = True
+    setup_features: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -87,6 +92,8 @@ class Position:
             "setup_probability": self.setup_probability,
             "trailing_strategy": self.trailing_strategy,
             "suggested_risk_pct": self.suggested_risk_pct,
+            "take_profit_active": self.take_profit_active,
+            "setup_features": self.setup_features,
         }
 
     @staticmethod
@@ -108,6 +115,8 @@ class Position:
             setup_probability=float(d.get("setup_probability", 0.5)),
             trailing_strategy=str(d.get("trailing_strategy", "TRENDING")),
             suggested_risk_pct=float(d["suggested_risk_pct"]) if d.get("suggested_risk_pct") is not None else None,
+            take_profit_active=bool(d.get("take_profit_active", True)),
+            setup_features=d.get("setup_features") if isinstance(d.get("setup_features"), dict) else None,
         )
 
 
@@ -198,93 +207,98 @@ class ExecutionDryRun:
             return pos
 
         side = str(pos.side).upper()
-        # Используем начальный тейк (tp0) для расчета базовой дистанции
         entry = float(pos.entry)
-        tp0 = float(pos.tp0)
-        dist0 = abs(tp0 - entry)
-        if dist0 <= 0:
+        if float(pos.take_profit) == 0:
             return pos
-        
-        # Параметры стратегии трейлинга
-        if strategy == "SCALPING":
-            tr1_mult = 0.40
-            tr2_mult = 0.70
-            new_sl_mult = 0.60
-            new_tp_add = 0.30
-        else:  # TRENDING (default)
-            tr1_mult = 0.70
-            tr2_mult = 0.90
-            new_sl_mult = 0.80
-            new_tp_add = 0.60
+
+        def _dist(cur: Position) -> float:
+            return abs(float(cur.take_profit) - entry)
 
         cur = pos
         h = float(candle.h)
         l = float(candle.l)
 
         if side == "LONG":
-            # TR1: безубыток
-            if (not cur.tr1_done) and (h >= entry + tr1_mult * dist0):
+            dist = _dist(cur)
+            if dist <= 0:
+                return cur
+            if (not cur.tr1_done) and (h >= entry + 0.70 * dist):
                 cur = Position(
-                    side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), entry),
+                    side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), entry + 0.10 * dist),
                     take_profit=cur.take_profit, tp0=cur.tp0, tr1_done=True, tr2_done=cur.tr2_done,
                     tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr,
                     setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
-                    suggested_risk_pct=cur.suggested_risk_pct
+                suggested_risk_pct=cur.suggested_risk_pct, take_profit_active=cur.take_profit_active,
+                setup_features=cur.setup_features
                 )
-            
-            # TR2+: Активный трейлинг
-            max_steps = 5
+
+            dist = _dist(cur)
+            if (not cur.tr2_done) and dist > 0 and (h >= entry + 0.95 * dist):
+                cur = Position(
+                    side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), entry + 0.90 * dist),
+                    take_profit=entry + 1.50 * dist, tp0=cur.tp0, tr1_done=True, tr2_done=True,
+                    tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr,
+                    setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
+                    suggested_risk_pct=cur.suggested_risk_pct, take_profit_active=False,
+                    setup_features=cur.setup_features
+                )
+
+            max_steps = 10
             step = 0
             while step < max_steps:
-                current_tp = float(cur.take_profit)
-                current_dist = abs(current_tp - entry)
-                if h < entry + tr2_mult * current_dist:
+                dist = _dist(cur)
+                if dist <= 0 or h < entry + 0.90 * dist:
                     break
-                
-                new_sl = entry + new_sl_mult * current_dist
-                new_tp = current_tp + new_tp_add * dist0
-                
                 cur = Position(
-                    side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), new_sl),
-                    take_profit=max(current_tp, new_tp), tp0=cur.tp0, tr1_done=True, tr2_done=True,
+                    side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), entry + 0.80 * dist),
+                    take_profit=entry + 1.35 * dist, tp0=cur.tp0, tr1_done=True, tr2_done=True,
                     tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr,
                     setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
-                    suggested_risk_pct=cur.suggested_risk_pct
+                    suggested_risk_pct=cur.suggested_risk_pct, take_profit_active=False,
+                    setup_features=cur.setup_features
                 )
                 step += 1
-                
-        else: # SHORT
-            # TR1: безубыток
-            if (not cur.tr1_done) and (l <= entry - tr1_mult * dist0):
+        else:  # SHORT
+            dist = _dist(cur)
+            if dist <= 0:
+                return cur
+            if (not cur.tr1_done) and (l <= entry - 0.70 * dist):
                 cur = Position(
-                    side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), entry),
+                    side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), entry - 0.10 * dist),
                     take_profit=cur.take_profit, tp0=cur.tp0, tr1_done=True, tr2_done=cur.tr2_done,
                     tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr,
                     setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
-                    suggested_risk_pct=cur.suggested_risk_pct
+                    suggested_risk_pct=cur.suggested_risk_pct, take_profit_active=cur.take_profit_active,
+                    setup_features=cur.setup_features
                 )
-            
-            # TR2+: Активный трейлинг
-            max_steps = 5
+
+            dist = _dist(cur)
+            if (not cur.tr2_done) and dist > 0 and (l <= entry - 0.95 * dist):
+                cur = Position(
+                    side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), entry - 0.90 * dist),
+                    take_profit=entry - 1.50 * dist, tp0=cur.tp0, tr1_done=True, tr2_done=True,
+                    tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr,
+                    setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
+                    suggested_risk_pct=cur.suggested_risk_pct, take_profit_active=False,
+                    setup_features=cur.setup_features
+                )
+
+            max_steps = 10
             step = 0
             while step < max_steps:
-                current_tp = float(cur.take_profit)
-                current_dist = abs(entry - current_tp)
-                if l > entry - tr2_mult * current_dist:
+                dist = _dist(cur)
+                if dist <= 0 or l > entry - 0.90 * dist:
                     break
-                
-                new_sl = entry - new_sl_mult * current_dist
-                new_tp = current_tp - new_tp_add * dist0
-                
                 cur = Position(
-                    side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), new_sl),
-                    take_profit=min(current_tp, new_tp), tp0=cur.tp0, tr1_done=True, tr2_done=True,
+                    side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), entry - 0.80 * dist),
+                    take_profit=entry - 1.35 * dist, tp0=cur.tp0, tr1_done=True, tr2_done=True,
                     tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t, rr=cur.rr,
                     setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
-                    suggested_risk_pct=cur.suggested_risk_pct
+                    suggested_risk_pct=cur.suggested_risk_pct, take_profit_active=False,
+                    setup_features=cur.setup_features
                 )
                 step += 1
-                
+
         return cur
 
     @staticmethod
@@ -353,6 +367,7 @@ class ExecutionDryRun:
             stop_loss=cand.stop_loss,
             take_profit=cand.take_profit,
             qty=qty,
+            setup_features=cand.setup_features,
         )
         if existing_same:
             orders = [x for x in orders if str(x.side).upper() != str(cand.side).upper()]
@@ -407,6 +422,7 @@ class ExecutionDryRun:
                 opened_t=candle.t,
                 cluster_t=o.cluster_t,
                 rr=o.rr
+                , setup_features=o.setup_features
             )
 
         if pos_raw:
@@ -419,7 +435,9 @@ class ExecutionDryRun:
                 self._set_orders(state, [])
 
             hit_sl = candle.l <= pos.stop_loss if pos.side == "LONG" else candle.h >= pos.stop_loss
-            hit_tp = candle.h >= pos.take_profit if pos.side == "LONG" else candle.l <= pos.take_profit
+            hit_tp = False
+            if bool(pos.take_profit_active):
+                hit_tp = candle.h >= pos.take_profit if pos.side == "LONG" else candle.l <= pos.take_profit
 
             if hit_sl or hit_tp:
                 if hit_sl and hit_tp:
@@ -448,6 +466,10 @@ class ExecutionDryRun:
                     "closed_t": candle.t,
                     "reason": exit_reason,
                     "cluster_t": pos.cluster_t,
+                    "setup_probability": pos.setup_probability,
+                    "trailing_strategy": pos.trailing_strategy,
+                    "setup_features": pos.setup_features,
+                    "trailing_steps": pos.tr_steps,
                 }
                 state["last_trade"] = trade
                 state.pop("pos", None)

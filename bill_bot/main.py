@@ -335,6 +335,7 @@ async def main():
                     pair=cand.pair, tf=cand.tf, side=cand.side, cluster_t=cand.cluster_t,
                     cluster_price=cand.cluster_price, entry_trigger=cand.entry_trigger,
                     stop_loss=cand.stop_loss, take_profit=tp_u, rr=rr,
+                    setup_features={**(cand.setup_features or {}), "rr": rr},
                 )
 
                 state = await trade_state.get(uid, pair, tf)
@@ -531,6 +532,9 @@ async def main():
                 sl = float(e.get("stop_loss", 0.0))
                 tp = float(e.get("take_profit", 0.0))
                 qty = float(e.get("qty", 0.0))
+                upnl = float(e.get("pnl", 0.0))
+                tp_active = bool(e.get("take_profit_active", False))
+                pnl_emoji = "🟩" if upnl >= 0 else "🟥"
                 levels_upd = [
                     PriceLevel(price=entry, label="Entry", color="#0ea5e9", linestyle="-", linewidth=1.2),
                     PriceLevel(price=sl, label="SL", color="#ef4444", linestyle="-", linewidth=1.0),
@@ -539,8 +543,8 @@ async def main():
                 upd_png = await build_signal_chart(pair, tf, levels=levels_upd)
                 upd_caption = (
                     f"⚙️ Трейлинг {str(e.get('side', '')).upper()} {display_pair(pair)} ({tf})\n"
-                    f"🎯 Entry {entry:.4f} | 🛑 SL {sl:.4f} | ✅ TP {tp:.4f}\n"
-                    f"📦 Qty {qty:.6f}"
+                    f"🎯 Entry {entry:.4f} | 🛑 SL {sl:.4f} | {'✅ TP' if tp_active else '📐 TP(virt)'} {tp:.4f}\n"
+                    f"📦 Qty {qty:.6f} | {pnl_emoji} uPnL {upnl:+.4f}"
                 )
                 
                 # Кнопки для обновления трейлинга
@@ -559,6 +563,7 @@ async def main():
                 pnl = float(e.get("pnl", 0.0))
                 fee = float(e.get("fee", 0.0))
                 balance_after = float(e.get("balance_after", balance))
+                pnl_confirmed = bool(e.get("pnl_confirmed", False))
                 pnl_emoji = "🟩" if pnl >= 0 else "🟥"
                 reason_u = str(e.get("reason", "")).upper()
                 if reason_u == "TP":
@@ -588,13 +593,17 @@ async def main():
                 # Собираем сообщение с эмодзи
                 caption_lines = [
                     f"🏁 Закрыта {str(e.get('side', '')).upper()} {display_pair(pair)} ({tf})",
-                    f"🕑 {await fmt_close_ts_from_open(pair, tf, closed_t)} | {reason_txt}",
-                    f"🎯 Entry {entry:.4f} → Exit {exit_px:.4f}",
-                    f"📦 Qty: {qty:.6f}",
+                    f"🕑 Дата: {await fmt_close_ts_from_open(pair, tf, closed_t)}",
+                    f"🧾 Способ: {reason_txt}",
+                    f"🎯 Цена входа: {entry:.4f}",
+                    f"🏁 Цена выхода: {exit_px:.4f}",
+                    f"📦 Количество: {qty:.6f}",
                     f"{pnl_emoji} Net PnL: {pnl:+.4f} USDC",
                 ]
                 if fee > 0.0001:
                     caption_lines.append(f"💸 Fee: {fee:.4f} USDC")
+                if not pnl_confirmed:
+                    caption_lines.append("ℹ️ PnL рассчитан по fallback, fills биржи еще не подтверждены")
                 caption_lines.append(f"💳 Доступно: {balance_after:.2f} USDC")
                 caption_lines.append(f"🟩 Realized: {total_r:.2f} USDC")
                 closed_caption = "\n".join(caption_lines)

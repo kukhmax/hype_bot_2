@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import statistics
 
+from bill_bot.services.candle_store import Candle
+
 
 def ema(values: list[float], length: int) -> list[float]:
     if length <= 0:
@@ -25,6 +27,32 @@ def alligator_ema(closes: list[float]) -> dict[str, list[float]]:
         "teeth": ema(closes, 8),
         "lips": ema(closes, 5),
     }
+
+
+def atr(candles: list[Candle], period: int = 14) -> list[float]:
+    if period <= 0:
+        raise ValueError("ATR period must be positive")
+    if not candles:
+        return []
+
+    true_ranges: list[float] = []
+    prev_close: float | None = None
+    for c in candles:
+        high = float(c.h)
+        low = float(c.l)
+        if prev_close is None:
+            tr = high - low
+        else:
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        true_ranges.append(float(tr))
+        prev_close = float(c.c)
+
+    out: list[float] = []
+    for i in range(len(true_ranges)):
+        start = max(0, i - period + 1)
+        chunk = true_ranges[start : i + 1]
+        out.append(sum(chunk) / len(chunk))
+    return out
 
 
 def spread_lines(jaw: list[float], teeth: list[float], lips: list[float]) -> list[float]:

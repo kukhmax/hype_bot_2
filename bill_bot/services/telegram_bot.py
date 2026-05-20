@@ -403,6 +403,7 @@ async def run_telegram(
                 side_u = pos.side.upper()
                 side_emoji = "🟢" if side_u == "LONG" else "🔴"
                 upnl_emoji = "🟩" if upnl >= 0 else "🟥"
+                tp_label = "✅ TP" if bool(getattr(pos, "take_profit_active", True)) else "📐 TP(virt)"
                 
                 # Показываем метаданные оптимизатора
                 prob_val = getattr(pos, "setup_probability", 0.5)
@@ -411,7 +412,7 @@ async def run_telegram(
                 
                 lines.append(
                     f"{side_emoji} [POS] {pair_txt} — {side_u}\n"
-                    f"🎯 Entry {pos.entry:.4f} | 🛑 SL {pos.stop_loss:.4f} | ✅ TP {pos.take_profit:.4f}\n"
+                    f"🎯 Entry {pos.entry:.4f} | 🛑 SL {pos.stop_loss:.4f} | {tp_label} {pos.take_profit:.4f}\n"
                     f"📦 Qty {pos.qty:.6f} | {upnl_emoji} uPnL {upnl:+.2f}{prob_text}"
                 )
                 kb.button(text=f"🔻 Закрыть {pair_txt}", callback_data=f"pos_close:{p}")
@@ -919,10 +920,14 @@ async def run_telegram(
             fee = real_details["fee"]
             pnl = real_details["pnl"]
             gross_pnl = real_details["gross_pnl"]
+            pnl_source = real_details.get("source", "unknown")
+            pnl_confirmed = bool(real_details.get("success", False))
         else:
             gross_pnl = _pnl_realized(side, entry, exit_px, qty)
             fee = abs(entry * qty) * cfg.taker_fee_rate + abs(exit_px * qty) * cfg.taker_fee_rate
             pnl = gross_pnl - fee  # Net PnL
+            pnl_source = "local_estimate"
+            pnl_confirmed = False
 
         # Получаем реальный баланс после закрытия
         balance_after = await _get_base_equity(uid)
@@ -940,6 +945,8 @@ async def run_telegram(
             "pnl": pnl,
             "gross_pnl": gross_pnl,
             "fee": fee,
+            "pnl_source": pnl_source,
+            "pnl_confirmed": pnl_confirmed,
             "balance_after": balance_after,
             "opened_t": opened_t,
             "closed_t": cur_t,
@@ -956,7 +963,6 @@ async def run_telegram(
         
         # Уведомление с графиком
         pnl_emoji = "🟩" if pnl >= 0 else "🟥"
-        fee_txt = f"💸 Fee: {fee:.4f}" if fee > 0.0001 else ""
         levels = [
             PriceLevel(price=pos.entry, label="Entry", color="#0ea5e9", linestyle="-"),
             PriceLevel(price=exit_px, label="Exit", color="#f59e0b", linestyle="--"),
@@ -964,13 +970,18 @@ async def run_telegram(
         png = await _build_signal_chart(pair, tf, levels=levels)
         caption_lines = [
             f"🏁 Позиция {pos.side} {pair} ({tf}) закрыта вручную",
-            f"🎯 Entry {pos.entry:.4f} → Exit {exit_px:.4f}",
+            f"🕑 Дата: {_fmt_ts_ms(int(time.time()*1000))}",
+            "🧾 Способ: ручное закрытие",
+            f"🎯 Цена входа: {entry:.4f}",
+            f"🏁 Цена выхода: {exit_px:.4f}",
+            f"📦 Количество: {qty:.6f}",
             f"{pnl_emoji} Net PnL: {pnl:+.4f} USDC",
         ]
         if fee > 0.0001:
             caption_lines.append(f"💸 Fee: {fee:.4f}")
+        if not pnl_confirmed:
+            caption_lines.append("ℹ️ PnL рассчитан по fallback, fills биржи еще не подтверждены")
         caption_lines.append(f"💳 Баланс: {balance_after:.2f} USDC")
-        caption_lines.append(f"🕑 {_fmt_ts_ms(int(time.time()*1000))}")
         caption = "\n".join(caption_lines)
         if png: await cb.message.answer_photo(BufferedInputFile(png, filename="close.png"), caption=caption, reply_markup=_msg_controls_menu().as_markup())
         else: await cb.message.answer(caption, reply_markup=_msg_controls_menu().as_markup())
@@ -1586,6 +1597,15 @@ async def run_telegram(
                     f"WR: `{p_info['win_rate']*100:.1f}%` | "
                     f"PnL: `{p_info['pnl']:+.2f}`\n"
                 )
+
+            if stats.get("by_spread_bucket"):
+                text += "\n📏 **ATR-бакеты сетапов:**\n"
+                for bucket, b_info in stats["by_spread_bucket"].items():
+                    text += (
+                        f"• **{bucket}** — Всего: `{b_info['total']}` | "
+                        f"WR: `{b_info['win_rate']*100:.1f}%` | "
+                        f"PnL: `{b_info['pnl']:+.2f}`\n"
+                    )
                 
             text += "\n🧩 **Рекомендации по сетапам:**\n"
             for setup, s_info in stats["by_setup"].items():

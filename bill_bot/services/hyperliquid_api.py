@@ -1,3 +1,4 @@
+import asyncio
 import time
 import aiohttp
 import logging
@@ -142,109 +143,141 @@ class HyperliquidInfoClient:
         default_entry: float,
         default_exit: float,
         default_qty: float,
-        taker_fee_rate: float = 0.000456
+        taker_fee_rate: float = 0.000456,
+        retries: int = 4,
+        retry_delay_sec: float = 0.75,
     ) -> dict:
         """
         Получает реальные сделки (fills) пользователя и агрегирует их для расчета
         точных цен, объема, комиссий и PnL.
         """
         coin_upper = coin.upper()
-        try:
-            fills = await self.user_fills(user_address)
-        except Exception as e:
-            logger.error(f"Error fetching user fills for {coin_upper}: {e}")
-            fills = []
-
-        # Фильтруем сделки по монете и времени (с запасом 1 минута до opened_t)
-        pair_fills = []
-        for f in fills:
-            f_coin = str(f.get("coin", "")).upper()
-            f_time = int(f.get("time", 0))
-            if f_coin == coin_upper and f_time >= (opened_t - 60000):
-                pair_fills.append(f)
-
-        # Сортируем по времени (сначала новые)
-        pair_fills.sort(key=lambda x: int(x.get("time", 0)), reverse=True)
-
         side_upper = side.upper()
         close_side_char = "S" if side_upper == "LONG" else "B"
         open_side_char = "B" if side_upper == "LONG" else "S"
+        retries = max(0, int(retries))
 
-        close_fills = []
-        open_fills = []
+        def _calc_gross(entry_px: float, exit_px: float, qty: float) -> float:
+            if side_upper == "LONG":
+                return (exit_px - entry_px) * qty
+            return (entry_px - exit_px) * qty
 
-        for f in pair_fills:
-            f_side = str(f.get("side", "")).upper()
-            if f_side == close_side_char:
-                close_fills.append(f)
-            elif f_side == open_side_char:
-                open_fills.append(f)
-
-        if not close_fills:
-            logger.warning(f"No close fills found for {coin_upper} since {opened_t}. Using fallbacks.")
+        def _build_fallback(source: str) -> dict:
+            est_qty = float(default_qty)
+            est_entry = float(default_entry)
+            est_exit = float(default_exit)
+            est_fee = abs(est_entry * est_qty) * taker_fee_rate + abs(est_exit * est_qty) * taker_fee_rate
+            est_gross = _calc_gross(est_entry, est_exit, est_qty)
             return {
-                "entry": default_entry,
-                "exit": default_exit,
-                "qty": default_qty,
-                "fee": 0.0,
-                "pnl": 0.0,
-                "gross_pnl": 0.0,
-                "success": False
+                "entry": est_entry,
+                "exit": est_exit,
+                "qty": est_qty,
+                "fee": est_fee,
+                "pnl": est_gross - est_fee,
+                "gross_pnl": est_gross,
+                "success": False,
+                "source": source,
             }
 
-        # Агрегируем сделки закрытия
-        total_close_value = 0.0
-        total_close_qty = 0.0
-        real_close_fee = 0.0
-        for f in close_fills:
-            px = float(f.get("px", 0.0))
-            sz = float(f.get("sz", 0.0))
-            fee = float(f.get("fee", 0.0))
-            total_close_value += px * sz
-            total_close_qty += sz
-            real_close_fee += fee
+        for attempt in range(retries + 1):
+            try:
+                fills = await self.user_fills(user_address)
+            except Exception as e:
+                logger.error(f"Error fetching user fills for {coin_upper}: {e}")
+                fills = []
 
-        real_exit = total_close_value / total_close_qty if total_close_qty > 0 else default_exit
-        real_qty = total_close_qty if total_close_qty > 0 else default_qty
+            # Фильтруем сделки по монете и времени (с запасом 1 минута до opened_t)
+            pair_fills = []
+            for f in fills:
+                f_coin = str(f.get("coin", "")).upper()
+                f_time = int(f.get("time", 0))
+                if f_coin == coin_upper and f_time >= (opened_t - 60000):
+                    pair_fills.append(f)
 
-        # Ищем соответствующие сделки открытия
-        real_open_fee = 0.0
-        total_open_value = 0.0
-        total_open_qty = 0.0
+            # Сортируем по времени (сначала новые)
+            pair_fills.sort(key=lambda x: int(x.get("time", 0)), reverse=True)
 
-        if open_fills:
-            for f in open_fills:
-                px = float(f.get("px", 0.0))
-                sz = float(f.get("sz", 0.0))
-                fee = float(f.get("fee", 0.0))
-                total_open_value += px * sz
-                total_open_qty += sz
-                real_open_fee += fee
-            real_entry = total_open_value / total_open_qty if total_open_qty > 0 else default_entry
-            logger.info(f"Matched {len(open_fills)} open fills and {len(close_fills)} close fills for {coin_upper}.")
-        else:
-            real_entry = default_entry
-            real_open_fee = abs(default_entry * real_qty) * taker_fee_rate
-            logger.info(f"Matched {len(close_fills)} close fills for {coin_upper}. Open fills not found, using fallback fee.")
+            close_fills = []
+            open_fills = []
+            for f in pair_fills:
+                f_side = str(f.get("side", "")).upper()
+                if f_side == close_side_char:
+                    close_fills.append(f)
+                elif f_side == open_side_char:
+                    open_fills.append(f)
 
-        total_fee = real_open_fee + real_close_fee
+            if close_fills:
+                total_close_value = 0.0
+                total_close_qty = 0.0
+                real_close_fee = 0.0
+                for f in close_fills:
+                    px = float(f.get("px", 0.0))
+                    sz = float(f.get("sz", 0.0))
+                    fee = float(f.get("fee", 0.0))
+                    total_close_value += px * sz
+                    total_close_qty += sz
+                    real_close_fee += fee
 
-        if side_upper == "LONG":
-            gross_pnl = (real_exit - real_entry) * real_qty
-        else:
-            gross_pnl = (real_entry - real_exit) * real_qty
+                real_exit = total_close_value / total_close_qty if total_close_qty > 0 else float(default_exit)
+                real_qty = total_close_qty if total_close_qty > 0 else float(default_qty)
 
-        net_pnl = gross_pnl - total_fee
+                real_open_fee = 0.0
+                total_open_value = 0.0
+                total_open_qty = 0.0
+                if open_fills:
+                    for f in open_fills:
+                        px = float(f.get("px", 0.0))
+                        sz = float(f.get("sz", 0.0))
+                        fee = float(f.get("fee", 0.0))
+                        total_open_value += px * sz
+                        total_open_qty += sz
+                        real_open_fee += fee
+                    real_entry = total_open_value / total_open_qty if total_open_qty > 0 else float(default_entry)
+                    logger.info(
+                        "Matched %s open fills and %s close fills for %s.",
+                        len(open_fills),
+                        len(close_fills),
+                        coin_upper,
+                    )
+                else:
+                    real_entry = float(default_entry)
+                    real_open_fee = abs(real_entry * real_qty) * taker_fee_rate
+                    logger.info(
+                        "Matched %s close fills for %s. Open fills not found, using fallback entry fee.",
+                        len(close_fills),
+                        coin_upper,
+                    )
 
-        return {
-            "entry": real_entry,
-            "exit": real_exit,
-            "qty": real_qty,
-            "fee": total_fee,
-            "pnl": net_pnl,
-            "gross_pnl": gross_pnl,
-            "success": True
-        }
+                total_fee = real_open_fee + real_close_fee
+                gross_pnl = _calc_gross(real_entry, real_exit, real_qty)
+                return {
+                    "entry": real_entry,
+                    "exit": real_exit,
+                    "qty": real_qty,
+                    "fee": total_fee,
+                    "pnl": gross_pnl - total_fee,
+                    "gross_pnl": gross_pnl,
+                    "success": True,
+                    "source": "exchange_fills",
+                }
+
+            if attempt < retries:
+                logger.info(
+                    "No close fills found for %s yet (attempt %s/%s). Retrying in %.2fs.",
+                    coin_upper,
+                    attempt + 1,
+                    retries + 1,
+                    retry_delay_sec,
+                )
+                await asyncio.sleep(float(retry_delay_sec))
+
+        logger.warning(
+            "No close fills found for %s since %s after %s attempts. Using estimated fallback.",
+            coin_upper,
+            opened_t,
+            retries + 1,
+        )
+        return _build_fallback("estimated_fallback")
 
 
 try:

@@ -170,7 +170,8 @@ class ExecutionLiveRun:
                     pair=pair,
                     tf=self.tf,
                     side=cand.side,
-                    default_risk_pct=risk_pct
+                    default_risk_pct=risk_pct,
+                    features=cand.setup_features,
                 )
                 setup_probability = opt_res["probability"]
                 trailing_strategy = opt_res["trailing_strategy"]
@@ -222,7 +223,8 @@ class ExecutionLiveRun:
                 rr=cand.rr,
                 setup_probability=setup_probability,
                 trailing_strategy=trailing_strategy,
-                suggested_risk_pct=suggested_risk_pct
+                suggested_risk_pct=suggested_risk_pct,
+                setup_features=cand.setup_features,
             )
             # Сохраняем, оставляя ордера другой стороны
             new_ords = [o for o in old_orders if o.side != po.side]
@@ -272,20 +274,23 @@ class ExecutionLiveRun:
                         logger.info(f"  ✅LiveRun: Canceled ALL {len(to_cancel)} orders for {pair} during trailing update")
                     
                     is_buy_close = (new_pos.side == "SHORT")
-                    tp_px = self.round_price(new_pos.take_profit)
                     sl_px = self.round_price(new_pos.stop_loss)
-                    tp_type = {"trigger": {"isMarket": True, "triggerPx": tp_px, "tpsl": "tp"}}
                     sl_type = {"trigger": {"isMarket": True, "triggerPx": sl_px, "tpsl": "sl"}}
                     
                     sz_decimals = await self.hl_info.get_sz_decimals(pair) or 0
                     final_sz = round(new_pos.qty, sz_decimals)
                     
-                    logger.info(f"LiveRun: Placing trailing TP for {pair}: {tp_px} (sz={final_sz})")
-                    try:
-                        res_tp = await self.hl_client.place_order(pair, is_buy_close, final_sz, tp_px, tp_type, reduce_only=True)
-                        logger.info(f"LiveRun: Trailing TP response: {res_tp}")
-                    except Exception as e:
-                        logger.error(f"LiveRun: Failed to place trailing TP for {pair}: {e}")
+                    if bool(new_pos.take_profit_active) and float(new_pos.take_profit) > 0:
+                        tp_px = self.round_price(new_pos.take_profit)
+                        tp_type = {"trigger": {"isMarket": True, "triggerPx": tp_px, "tpsl": "tp"}}
+                        logger.info(f"LiveRun: Placing trailing TP for {pair}: {tp_px} (sz={final_sz})")
+                        try:
+                            res_tp = await self.hl_client.place_order(pair, is_buy_close, final_sz, tp_px, tp_type, reduce_only=True)
+                            logger.info(f"LiveRun: Trailing TP response: {res_tp}")
+                        except Exception as e:
+                            logger.error(f"LiveRun: Failed to place trailing TP for {pair}: {e}")
+                    else:
+                        logger.info(f"LiveRun: Virtual TP only for {pair}: {new_pos.take_profit} (exchange TP not placed)")
 
                     logger.info(f"LiveRun: Placing trailing SL for {pair}: {sl_px} (sz={final_sz})")
                     try:
@@ -302,7 +307,11 @@ class ExecutionLiveRun:
                         "event": "position_updated",
                         "pair": pair, "side": new_pos.side, "entry": new_pos.entry,
                         "stop_loss": new_pos.stop_loss, "take_profit": new_pos.take_profit,
-                        "qty": new_pos.qty
+                        "qty": new_pos.qty,
+                        "take_profit_active": bool(new_pos.take_profit_active),
+                        "pnl": ((float(candle.c) - float(new_pos.entry)) * float(new_pos.qty))
+                        if str(new_pos.side).upper() == "LONG"
+                        else ((float(new_pos.entry) - float(candle.c)) * float(new_pos.qty))
                     }
                     if "events" not in sync_res: sync_res["events"] = []
                     sync_res["events"].append(upd_evt)
@@ -398,7 +407,9 @@ class ExecutionLiveRun:
                     rr=po.rr if po else 1.5,
                     setup_probability=po.setup_probability if po else 0.5,
                     trailing_strategy=po.trailing_strategy if po else "TRENDING",
-                    suggested_risk_pct=po.suggested_risk_pct if po else None
+                    suggested_risk_pct=po.suggested_risk_pct if po else None,
+                    take_profit_active=bool(tp_px > 0),
+                    setup_features=po.setup_features if po else None,
                 ).to_dict()
                 self._set_orders(state, []) # Очищаем ордера
                 changed = True
@@ -485,6 +496,8 @@ class ExecutionLiveRun:
             fee = real_details["fee"]
             pnl = real_details["pnl"]
             gross_pnl = real_details["gross_pnl"]
+            pnl_source = real_details.get("source", "unknown")
+            pnl_confirmed = bool(real_details.get("success", False))
             
             # Получаем реальный баланс после закрытия
             balance_after = await self._get_real_balance()
@@ -502,11 +515,17 @@ class ExecutionLiveRun:
                 "pnl": pnl,
                 "gross_pnl": gross_pnl,
                 "fee": fee,
+                "pnl_source": pnl_source,
+                "pnl_confirmed": pnl_confirmed,
                 "balance_after": balance_after,
                 "opened_t": local_pos.get("opened_t", cur_t),
                 "closed_t": cur_t,
                 "reason": "Sync: Closed on exchange",
                 "cluster_t": local_pos.get("cluster_t", cur_t),
+                "setup_probability": local_pos.get("setup_probability", 0.5),
+                "trailing_strategy": local_pos.get("trailing_strategy", "TRENDING"),
+                "setup_features": local_pos.get("setup_features"),
+                "trailing_steps": local_pos.get("tr_steps", 0),
             }
             state["last_trade"] = trade
             state.pop("pos", None)
@@ -525,6 +544,8 @@ class ExecutionLiveRun:
                 "pnl": pnl,
                 "gross_pnl": gross_pnl,
                 "fee": fee,
+                "pnl_source": pnl_source,
+                "pnl_confirmed": pnl_confirmed,
                 "balance_after": balance_after,
                 "realized_total": realized
             })
@@ -646,7 +667,9 @@ class ExecutionLiveRun:
                 tp0=pos.tp0, tr1_done=pos.tr1_done, tr2_done=pos.tr2_done,
                 tr_steps=pos.tr_steps, qty=pos.qty, opened_t=pos.opened_t, cluster_t=pos.cluster_t, rr=pos.rr,
                 setup_probability=pos.setup_probability, trailing_strategy=pos.trailing_strategy,
-                suggested_risk_pct=pos.suggested_risk_pct
+                suggested_risk_pct=pos.suggested_risk_pct,
+                take_profit_active=(tp > 0 if new_tp is not None else pos.take_profit_active),
+                setup_features=pos.setup_features,
             )
             state["pos"] = new_pos.to_dict()
             await self.store.set(user_id, pair, self.tf, state)
@@ -661,49 +684,52 @@ class ExecutionLiveRun:
             return pos
 
         side = str(pos.side).upper()
-        dist = abs(float(pos.take_profit) - float(pos.entry))
-        if dist <= 0:
+        entry = float(pos.entry)
+        if float(pos.take_profit) == 0:
             return pos
 
-        # Параметры стратегии трейлинга
-        if strategy == "SCALPING":
-            tr1_mult = 0.40
-            tr2_mult = 0.70
-            new_sl_mult = 0.60
-            new_tp_mult = 1.40
-        else:  # TRENDING (default)
-            tr1_mult = 0.70
-            tr2_mult = 0.90
-            new_sl_mult = 0.80
-            new_tp_mult = 1.80
-
-        max_steps_per_candle = 10
+        def _dist(cur: Position) -> float:
+            return abs(float(cur.take_profit) - entry)
 
         if side == "LONG":
             h = float(candle.h)
             cur = pos
-            if (not cur.tr1_done) and (h >= float(cur.entry) + tr1_mult * dist):
+            dist = _dist(cur)
+            if dist <= 0:
+                return cur
+            if (not cur.tr1_done) and (h >= entry + 0.70 * dist):
                 cur = Position(
-                    side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), float(cur.entry)),
+                    side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), entry + 0.10 * dist),
                     take_profit=cur.take_profit, tp0=cur.tp0, tr1_done=True, tr2_done=cur.tr2_done,
                     tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t,
                     rr=cur.rr, setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
-                    suggested_risk_pct=cur.suggested_risk_pct
+                    suggested_risk_pct=cur.suggested_risk_pct, take_profit_active=cur.take_profit_active,
+                    setup_features=cur.setup_features
+                )
+
+            dist = _dist(cur)
+            if (not cur.tr2_done) and dist > 0 and (h >= entry + 0.95 * dist):
+                cur = Position(
+                    side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), entry + 0.90 * dist),
+                    take_profit=entry + 1.50 * dist, tp0=cur.tp0, tr1_done=True, tr2_done=True,
+                    tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t,
+                    rr=cur.rr, setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
+                    suggested_risk_pct=cur.suggested_risk_pct, take_profit_active=False,
+                    setup_features=cur.setup_features
                 )
 
             steps = 0
-            while steps < max_steps_per_candle:
-                dist2 = abs(float(cur.take_profit) - float(cur.entry))
-                if dist2 <= 0 or h < float(cur.entry) + tr2_mult * dist2:
+            while steps < 10:
+                dist2 = _dist(cur)
+                if dist2 <= 0 or h < entry + 0.90 * dist2:
                     break
-                new_sl = float(cur.entry) + new_sl_mult * dist2
-                new_tp = float(cur.entry) + new_tp_mult * dist2
                 cur = Position(
-                    side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), new_sl),
-                    take_profit=max(float(cur.take_profit), new_tp), tp0=cur.tp0, tr1_done=True, tr2_done=True,
+                    side=cur.side, entry=cur.entry, stop_loss=max(float(cur.stop_loss), entry + 0.80 * dist2),
+                    take_profit=entry + 1.35 * dist2, tp0=cur.tp0, tr1_done=True, tr2_done=True,
                     tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t,
                     rr=cur.rr, setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
-                    suggested_risk_pct=cur.suggested_risk_pct
+                    suggested_risk_pct=cur.suggested_risk_pct, take_profit_active=False,
+                    setup_features=cur.setup_features
                 )
                 steps += 1
             return cur
@@ -711,28 +737,42 @@ class ExecutionLiveRun:
         # SHORT side
         l = float(candle.l)
         cur = pos
-        if (not cur.tr1_done) and (l <= float(cur.entry) - tr1_mult * dist):
+        dist = _dist(cur)
+        if dist <= 0:
+            return cur
+        if (not cur.tr1_done) and (l <= entry - 0.70 * dist):
             cur = Position(
-                side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), float(cur.entry)),
+                side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), entry - 0.10 * dist),
                 take_profit=cur.take_profit, tp0=cur.tp0, tr1_done=True, tr2_done=cur.tr2_done,
                 tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t,
                 rr=cur.rr, setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
-                suggested_risk_pct=cur.suggested_risk_pct
+                suggested_risk_pct=cur.suggested_risk_pct, take_profit_active=cur.take_profit_active,
+                setup_features=cur.setup_features
+            )
+
+        dist = _dist(cur)
+        if (not cur.tr2_done) and dist > 0 and (l <= entry - 0.95 * dist):
+            cur = Position(
+                side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), entry - 0.90 * dist),
+                take_profit=entry - 1.50 * dist, tp0=cur.tp0, tr1_done=True, tr2_done=True,
+                tr_steps=cur.tr_steps, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t,
+                rr=cur.rr, setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
+                suggested_risk_pct=cur.suggested_risk_pct, take_profit_active=False,
+                setup_features=cur.setup_features
             )
 
         steps = 0
-        while steps < max_steps_per_candle:
-            dist2 = abs(float(cur.take_profit) - float(cur.entry))
-            if dist2 <= 0 or l > float(cur.entry) - tr2_mult * dist2:
+        while steps < 10:
+            dist2 = _dist(cur)
+            if dist2 <= 0 or l > entry - 0.90 * dist2:
                 break
-            new_sl = float(cur.entry) - new_sl_mult * dist2
-            new_tp = float(cur.entry) - new_tp_mult * dist2
             cur = Position(
-                side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), new_sl),
-                take_profit=min(float(cur.take_profit), new_tp), tp0=cur.tp0, tr1_done=True, tr2_done=True,
+                side=cur.side, entry=cur.entry, stop_loss=min(float(cur.stop_loss), entry - 0.80 * dist2),
+                take_profit=entry - 1.35 * dist2, tp0=cur.tp0, tr1_done=True, tr2_done=True,
                 tr_steps=int(cur.tr_steps) + 1, qty=cur.qty, opened_t=cur.opened_t, cluster_t=cur.cluster_t,
                 rr=cur.rr, setup_probability=cur.setup_probability, trailing_strategy=cur.trailing_strategy,
-                suggested_risk_pct=cur.suggested_risk_pct
+                suggested_risk_pct=cur.suggested_risk_pct, take_profit_active=False,
+                setup_features=cur.setup_features
             )
             steps += 1
         return cur
